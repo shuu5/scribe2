@@ -9,6 +9,8 @@
 //! 古さの印の file（`lifecycle.stale`）の読み書きもこの file の 1 本が持つ: 種類は閉じた 3 つ（[`Kind`]）・種類ごとに 1 つで後の
 //! 印が置き換え・`lifecycle.stale.lock` を死んだ所有者だけ外す取り方で短く取り・一時 file からの rename で置き換える。
 //!
+//! 台帳の印の隣に journal の長さの読み（[`read_journal_len`]）を持つ（先読みの口の store の鍵・設計 ledger-form.md §20）。
+//!
 //! 全部の書き直しの入力の読み（契約表・SRS・main の commit の trailer・event log の便と断りと結び）も末尾の区間に置く。
 
 use super::json_tree::{self, Tree};
@@ -96,10 +98,37 @@ pub struct Marks {
 pub fn read_ledger(repo: &Path) -> Option<Ledger> {
     let dir = repo.join(LEDGER_DIR);
     match store_of(&dir.join("metadata.json")) {
-        Store::Embedded(database) => noms_of(&dir.join("embeddeddolt").join(database).join(".dolt").join("noms").join("manifest")),
+        Store::Embedded(database) => noms_of(&noms_dir(&dir, &database).join("manifest")),
         Store::Other => files_of(&dir.join(ISSUES_FILE)),
         Store::Broken => None,
     }
+}
+
+/// embedded の store の noms の dir（manifest と journal の file の置き場）。
+fn noms_dir(ledger: &Path, database: &str) -> PathBuf {
+    ledger.join("embeddeddolt").join(database).join(".dolt").join("noms")
+}
+
+/// journal（manifest の組のうち名が全部 `v` の file）の byte 長の和を読む（[`read_ledger`] の隣・設計 ledger-form.md §20 約束 1）。
+/// embedded の store でない・manifest を読めない・journal の組か file が無い周は `None`。子 process を撃たない。
+pub fn read_journal_len(repo: &Path) -> Option<u64> {
+    let dir = repo.join(LEDGER_DIR);
+    let Store::Embedded(database) = store_of(&dir.join("metadata.json")) else { return None };
+    let noms = noms_dir(&dir, &database);
+    let text = fs::read_to_string(noms.join("manifest")).ok()?;
+    let fields: Vec<&str> = text.trim_end_matches('\n').split(':').collect();
+    let specs = fields.get(5..)?;
+    if !specs.len().is_multiple_of(2) {
+        return None;
+    }
+    let mut total: Option<u64> = None;
+    for pair in specs.chunks(2) {
+        let name = pair.first()?;
+        if is_journal(name) {
+            total = Some(total.unwrap_or(0).checked_add(fs::metadata(noms.join(name)).ok()?.len())?);
+        }
+    }
+    total
 }
 
 /// `metadata.json` が示す store。

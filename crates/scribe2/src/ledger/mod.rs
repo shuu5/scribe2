@@ -15,6 +15,10 @@
 //! 部品（question・memo・epic と閉じた contract・case-lifecycle.md §7・行 a1）と FR93 の条件の 1 関数は子 module [`phase`] に置く
 //! （純関数・I/O も時計も持たない）。裁定と見送りの閉じの misfit 3 語（行 a2）は子 module [`phase_ruling`] に置く（純関数）。
 //! main の側の部品（commit・row・requirement）と着地の commit の misfit 3 語（行 b1）は子 module [`phase_main`] に置く（純関数）。
+//!
+//! 先読みの口（`ledger prefetch`・設計 ledger-form.md §20 行 p）はこの file の末尾の区間に置く: store の内容の鍵（[`store_key`]）と
+//! 台帳の形の写し（[`write_copy`]・[`read_copy`]）と、鍵を読みの前後で測って写しを state dir へ置く口。写しは
+//! [`crate::seat::ledger::read_ledger`] の出力からしか作らない（2 本目の読み手を足さない・FR51）。
 
 pub mod citation;
 pub mod close_reason;
@@ -29,17 +33,24 @@ pub mod promotion;
 pub mod question;
 pub mod trigger;
 
-use crate::cli_outcome::{Outcome, RC_REFUSED};
+use crate::cli_args::{self, Allowed};
+use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::fleet::json_lite::quote;
 use crate::fleet::json_tree::{self, Tree};
+use crate::fleet::lifecycle_mark::{self, Ledger as Mark};
+use crate::hook::vessel::digest::fnv1a_64;
+use crate::hook::vessel::{repo_root, state_dir};
 use crate::invocation::Invocation;
 use crate::polarity::{OnFailure, Polarity, Timing};
-use crate::seat::ledger::LedgerError;
-use std::path::Path;
+use crate::rules::manifest::Manifest;
+use crate::seat::ledger::{Issue, LedgerError};
+use std::path::{Path, PathBuf};
 
 /// `ledger` に続く引数を捌く（verb は `memo` の 1 つ）。
 pub fn dispatch(args: &[String]) -> Outcome {
     match args.first().map(String::as_str) {
         Some("memo") => memo::dispatch(args.get(1..).unwrap_or_default()),
+        Some("prefetch") => prefetch(args.get(1..).unwrap_or_default()),
         _ => Outcome::failed(RC_REFUSED, vec![memo::usage()]),
     }
 }
@@ -181,6 +192,162 @@ fn bead_of(node: &Tree) -> Option<Bead> {
             .map(str::to_owned),
         notes: text_of("notes").unwrap_or_default(),
     })
+}
+
+/// 写しの形の版（鍵の頭の欄・形を替える便が上げる）。
+const COPY_FORM: &str = "ledger-copy-1";
+
+/// 写しの file 名の接頭辞（名は接頭辞と root の path の digest）。
+const COPY_PREFIX: &str = "ledger-copy-";
+
+/// 鍵の欄の数（版・root の path・印の root・gen・chunks・journal の長さ）。
+const KEY_FIELDS: usize = 6;
+
+/// 写しが運ぶ辺の種別（親は parent-child の最初の 1 本）。
+const PARENT_CHILD: &str = "parent-child";
+
+/// store の内容の鍵（設計 ledger-form.md §20 約束 1）: hook と同じ読みで解いた `root` の台帳の印が noms の形で、journal の長さを読める周だけ
+/// 在る。files の形・印を読めない・journal が無い周は `None`（写しを読まず書かない）。1 行で、欄はタブで区切る。
+pub fn store_key(root: &Path) -> Option<String> {
+    let Mark::Noms { root: store_root, generation, chunks } = lifecycle_mark::read_ledger(root)? else {
+        return None;
+    };
+    let journal = lifecycle_mark::read_journal_len(root)?;
+    let key = format!("{COPY_FORM}\t{}\t{store_root}\t{generation}\t{chunks}\t{journal}", root.to_str()?);
+    (key.split('\t').count() == KEY_FIELDS && !key.contains('\n')).then_some(key)
+}
+
+/// `root` の写しの path（`state_dir` の直下・root ごとに 1 つ）。
+pub fn copy_path(state_dir: &Path, root: &Path) -> PathBuf {
+    state_dir.join(format!("{COPY_PREFIX}{}", fnv1a_64(root.as_os_str().as_encoded_bytes())))
+}
+
+/// 写しの 2 行目（bd の list と同じ key の名の 4 欄・辺は parent-child だけを辺の順のまま・空白を持たない）。
+fn copy_body(issues: &[Issue]) -> String {
+    let one = |issue: &Issue| {
+        let edges: Vec<String> = issue
+            .deps
+            .iter()
+            .filter(|dep| dep.kind == PARENT_CHILD)
+            .map(|dep| format!("{{\"depends_on_id\":{},\"type\":{}}}", quote(&dep.on), quote(PARENT_CHILD)))
+            .collect();
+        format!(
+            "{{\"id\":{},\"status\":{},\"issue_type\":{},\"dependencies\":[{}]}}",
+            quote(&issue.id),
+            quote(&issue.status),
+            quote(&issue.kind),
+            edges.join(",")
+        )
+    };
+    format!("[{}]", issues.iter().map(one).collect::<Vec<_>>().join(","))
+}
+
+/// 写しを置く（1 行目が `key`・2 行目が [`copy_body`]・同じ dir の一時 file からの rename で置き換える・fsync はしない）。
+pub fn write_copy(state_dir: &Path, root: &Path, key: &str, issues: &[Issue]) -> std::io::Result<()> {
+    let tmp = state_dir.join(format!(".{COPY_PREFIX}{}.tmp", std::process::id()));
+    let written = std::fs::write(&tmp, format!("{key}\n{}\n", copy_body(issues)));
+    let renamed = written.and_then(|()| std::fs::rename(&tmp, copy_path(state_dir, root)));
+    if renamed.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    renamed
+}
+
+/// 写しを読む。1 行目が今の鍵 `key` と字で等しい周だけ 2 行目を [`crate::seat::ledger::issues_of`] で読む。鍵が違う・2 行目が崩れた・
+/// 1 行だけ・file が無い周は `None`（写しが無い扱い）。
+pub fn read_copy(state_dir: &Path, root: &Path, key: &str) -> Option<Vec<Issue>> {
+    let text = std::fs::read_to_string(copy_path(state_dir, root)).ok()?;
+    let (head, rest) = text.split_once('\n')?;
+    let body = rest.strip_suffix('\n').unwrap_or(rest);
+    if head != key || body.contains('\n') {
+        return None;
+    }
+    crate::seat::ledger::issues_of(body)
+}
+
+/// 先読みの口の使い方（引数の誤りの周にだけ出る）。
+fn prefetch_usage() -> String {
+    "usage: ledger prefetch --repo R [--state-dir S] [--bd B] [--rules F]".to_owned()
+}
+
+/// 先読みの口が受ける flag。
+const ALLOWED_PREFETCH: &[cli_args::Allowed] = &[Allowed::value("--repo"), Allowed::value("--state-dir"), Allowed::value("--bd"), Allowed::value("--rules")];
+
+/// 先読みを断る閉じた 7 語（判じる順）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reason {
+    NoStateDir,
+    NoRule,
+    NoMark,
+    LedgerUnreadable,
+    LedgerTimeout,
+    Moved,
+    Unwritable,
+}
+
+impl Reason {
+    /// stderr の 1 行の語。
+    fn word(self) -> &'static str {
+        match self {
+            Self::NoStateDir => "no-state-dir",
+            Self::NoRule => "no-rule",
+            Self::NoMark => "no-mark",
+            Self::LedgerUnreadable => "ledger-unreadable",
+            Self::LedgerTimeout => "ledger-timeout",
+            Self::Moved => "moved",
+            Self::Unwritable => "unwritable",
+        }
+    }
+
+    /// rc（台帳か state dir が壊れている 2 語が 2・ほかは 1）。
+    fn rc(self) -> u8 {
+        match self {
+            Self::LedgerUnreadable | Self::Unwritable => RC_BROKEN,
+            _ => RC_REFUSED,
+        }
+    }
+}
+
+/// 先読みの口の flag の値（`--repo` は root へ解いた後）。
+struct Fetch<'a> {
+    root: &'a Path,
+    state_dir: Option<&'a str>,
+    bd: Option<&'a str>,
+    rules: Option<&'a str>,
+}
+
+/// `ledger prefetch --repo R [--state-dir S] [--bd B] [--rules F]`（設計 ledger-form.md §20 約束 3・4）。
+fn prefetch(args: &[String]) -> Outcome {
+    let usage = || Outcome::failed(RC_REFUSED, vec![prefetch_usage()]);
+    let Ok(parsed) = cli_args::parse(args, ALLOWED_PREFETCH) else { return usage() };
+    let Ok(repo) = parsed.need("--repo") else { return usage() };
+    let Some(root) = repo_root(Path::new(repo)).filter(|_| parsed.positionals().is_empty()) else { return usage() };
+    let fetch = Fetch { root: &root, state_dir: parsed.value("--state-dir"), bd: parsed.value("--bd"), rules: parsed.value("--rules") };
+    match fetch_copy(&fetch) {
+        Ok(count) => Outcome::ok_line(format!("ledger-prefetch: beads={count}")),
+        Err(reason) => Outcome::failed_line(reason.rc(), format!("ledger-prefetch: refused reason={}", reason.word())),
+    }
+}
+
+/// 鍵を測る → 待ち上限で台帳を 1 回読む → 鍵を測り直す → 等しければ写しを置く（置いた件数を返す）。
+fn fetch_copy(fetch: &Fetch) -> Result<usize, Reason> {
+    let dir = match fetch.state_dir {
+        Some(found) => PathBuf::from(found),
+        None => state_dir(fetch.root).ok_or(Reason::NoStateDir)?,
+    };
+    let manifest = fetch.rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))).map_err(|_| Reason::NoRule)?;
+    let timeout = crate::seat::ledger::timeout_of(&manifest).ok_or(Reason::NoRule)?;
+    let before = store_key(fetch.root).ok_or(Reason::NoMark)?;
+    let bd = fetch.bd.filter(|found| !found.trim().is_empty()).unwrap_or(DEFAULT_BD);
+    let issues = crate::seat::ledger::read_ledger(bd, fetch.root, timeout).map_err(|error| match error {
+        LedgerError::Unreadable => Reason::LedgerUnreadable,
+        LedgerError::Timeout => Reason::LedgerTimeout,
+    })?;
+    if store_key(fetch.root).as_deref() != Some(before.as_str()) {
+        return Err(Reason::Moved);
+    }
+    write_copy(&dir, fetch.root, &before, &issues).map_err(|_| Reason::Unwritable)?;
+    Ok(issues.len())
 }
 
 #[cfg(test)]
@@ -416,5 +583,128 @@ mod tests {
         assert_eq!(out.unmeasured.len(), 2, "表と要件の 2 面を測れないと名指す");
         let empty = derive(&Input { rows: Some(&[]), requirements: Some(&[]), ..input });
         assert!(empty.parts.is_empty() && empty.unmeasured.is_empty(), "読めて空なら 0 件で unmeasured は空");
+    }
+
+    // ─── 先読みの口の鍵と写し（設計 ledger-form.md §20 行 p・接頭辞 `ledger_prefetch_`） ───
+
+    /// 書く（親 dir も作る）。
+    fn put(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().expect("親 dir が在る")).expect("dir を作れる");
+        std::fs::write(path, text).expect("書ける");
+    }
+
+    /// journal の名（全部 `v`）。
+    fn journal_name() -> String {
+        "v".repeat(32)
+    }
+
+    /// 実物の形の store（metadata.json・頭の欄 5 つと table の組 1 つと journal の組 1 つの manifest・journal の file）を `repo` の `.beads` に置く。
+    fn real_store(repo: &Path, shape: Shape, journal: &str) {
+        let (root, collected, table, chunks) = shape;
+        let noms = repo.join(".beads/embeddeddolt/beads/.dolt/noms");
+        put(&repo.join(".beads/metadata.json"), r#"{"dolt_mode":"embedded","dolt_database":"beads"}"#);
+        let manifest = format!("5:__DOLT__:{}:{root}:{collected}:{}:{table}:{}:{chunks}\n", "l".repeat(32), "a".repeat(32), journal_name());
+        put(&noms.join("manifest"), &manifest);
+        put(&noms.join(journal_name()), journal);
+    }
+
+    /// store の形（root・gc の世代・table の組の chunk 数・journal の組の chunk 数）。
+    type Shape = (&'static str, &'static str, u64, u64);
+
+    /// 元の store の形。
+    const BASE: Shape = ("0123456789abcdef0123456789abcdef", "00000000000000000000000000000000", 10, 7);
+
+    /// 鍵の欄の数。
+    const FIELDS: usize = 6;
+
+    /// 実物の形の store の鍵が在り、manifest の root だけ・gc の世代だけ・table の組の chunk 数だけを替えた store と journal に byte を足すだけの store の
+    /// 4 つで元と違う欄が替えた 1 欄だけで、同じ store を別の root の path に置くと違う。鍵の 1 行は 6 欄で頭が形の版。journal の file を消した store・
+    /// metadata.json の無い（files の形の）`.beads`・metadata.json が JSON でない `.beads` は鍵が無い。
+    #[test]
+    fn ledger_prefetch_key_moves_only_on_the_field_that_changed() {
+        use crate::pipe::fixture::scratch;
+        let fields = |key: &str| key.split('\t').map(str::to_owned).collect::<Vec<_>>();
+        let base = scratch("prefetch-key-base");
+        real_store(&base, BASE, "journal");
+        let key = super::store_key(&base).expect("実物の形の store に鍵が在る");
+        let key_fields = fields(&key);
+        assert_eq!(key_fields.len(), FIELDS, "鍵の 1 行はタブで割ると 6 欄: {key}");
+        assert_eq!(key_fields.first().map(String::as_str), Some("ledger-copy-1"), "頭の欄は形の版");
+        assert_eq!(key_fields.get(1).map(String::as_str), base.to_str(), "次の欄は root の path");
+        let differing = |repo: &Path| {
+            let found = fields(&super::store_key(repo).expect("鍵が在る"));
+            found.iter().zip(&key_fields).enumerate().filter(|(_, (new, old))| new != old).map(|(at, _)| at).collect::<Vec<_>>()
+        };
+        // 4 つの替えは元と同じ root の path に置く（同じ dir へ書き直して測り、元の形へ戻す）。
+        let rewrite = |shape: Shape, journal: &str| {
+            real_store(&base, shape, journal);
+            let found = differing(&base);
+            real_store(&base, BASE, "journal");
+            found
+        };
+        let (root, collected, table, chunks) = BASE;
+        assert_eq!(rewrite(("fedcba9876543210fedcba9876543210", collected, table, chunks), "journal"), [2], "root だけ");
+        assert_eq!(rewrite((root, "11111111111111111111111111111111", table, chunks), "journal"), [3], "gc の世代だけ（gen の欄）");
+        assert_eq!(rewrite((root, collected, table + 1, chunks), "journal"), [4], "table の組の chunk 数だけ（chunks の欄）");
+        assert_eq!(rewrite(BASE, "journal+appended"), [5], "journal に byte を足すだけ（長さの欄）");
+        let elsewhere = scratch("prefetch-key-elsewhere");
+        real_store(&elsewhere, BASE, "journal");
+        assert_eq!(differing(&elsewhere), [1], "同じ store を別の root の path に置くと path の欄だけが違う");
+        let gone = scratch("prefetch-key-no-journal");
+        real_store(&gone, BASE, "journal");
+        std::fs::remove_file(gone.join(".beads/embeddeddolt/beads/.dolt/noms").join(journal_name())).expect("journal を消せる");
+        assert_eq!(super::store_key(&gone), None, "journal の file が無い");
+        let files = scratch("prefetch-key-files");
+        put(&files.join(".beads/issues.jsonl"), "{}\n");
+        assert_eq!(super::store_key(&files), None, "metadata.json の無い files の形");
+        let broken = scratch("prefetch-key-broken");
+        real_store(&broken, BASE, "journal");
+        put(&broken.join(".beads/metadata.json"), "{");
+        assert_eq!(super::store_key(&broken), None, "metadata.json が JSON でない");
+    }
+
+    /// bd の JSON の字（親 2 つの bead の辺の順は x → y・blocks の辺と label と notes を持つ）。
+    const TWO_PARENTS: &str = r#"[{"id":"s2-a","status":"open","issue_type":"task","labels":["intake:memo"],"notes":"n","dependencies":[{"issue_id":"s2-a","depends_on_id":"x","type":"parent-child"},{"issue_id":"s2-a","depends_on_id":"w","type":"blocks"},{"issue_id":"s2-a","depends_on_id":"y","type":"parent-child"}]},{"id":"s2-b","status":"closed"}]"#;
+
+    /// 往復: id・status・型と parent-child の辺が辺の順のまま戻り、blocks の辺と label と notes は戻らない。2 行目は空白を持たない。
+    #[test]
+    fn ledger_prefetch_copy_round_trips_the_four_fields_only() {
+        let (state, root) = (crate::pipe::fixture::scratch("prefetch-copy-state"), crate::pipe::fixture::scratch("prefetch-copy-root"));
+        let issues = crate::seat::ledger::issues_of(TWO_PARENTS).expect("fixture の JSON を読める");
+        super::write_copy(&state, &root, "the-key", &issues).expect("写しを置ける");
+        let text = std::fs::read_to_string(super::copy_path(&state, &root)).expect("写しを読める");
+        let want = r#"[{"id":"s2-a","status":"open","issue_type":"task","dependencies":[{"depends_on_id":"x","type":"parent-child"},{"depends_on_id":"y","type":"parent-child"}]},{"id":"s2-b","status":"closed","issue_type":"","dependencies":[]}]"#;
+        assert_eq!(text, format!("the-key\n{want}\n"), "1 行目が鍵・2 行目が 4 欄の compact な配列");
+        let back = super::read_copy(&state, &root, "the-key").expect("同じ鍵で読める");
+        let first = back.first().expect("1 件目");
+        assert_eq!((first.id.as_str(), first.status.as_str(), first.kind.as_str()), ("s2-a", "open", "task"), "id・status・型");
+        let edges: Vec<(&str, &str)> = first.deps.iter().map(|dep| (dep.on.as_str(), dep.kind.as_str())).collect();
+        assert_eq!(edges, [("x", "parent-child"), ("y", "parent-child")], "辺の順のまま・blocks は戻らない");
+        assert!(first.labels.is_empty() && first.notes.is_empty(), "label と notes は戻らない");
+        assert_eq!(back.len(), 2, "件数");
+    }
+
+    /// 鍵の欄を 1 つずつ違えた写し・2 行目の崩れ・1 行だけ・無い file は写しが無い扱い（欄を違えない写しは読める）。
+    #[test]
+    fn ledger_prefetch_copy_is_absent_unless_the_key_equals_and_the_body_reads() {
+        let (state, root) = (crate::pipe::fixture::scratch("prefetch-absent-state"), crate::pipe::fixture::scratch("prefetch-absent-root"));
+        let key = ["ledger-copy-1", root.to_str().expect("path"), "r", "g", "5", "9"].join("\t");
+        let issues = crate::seat::ledger::issues_of(TWO_PARENTS).expect("fixture の JSON を読める");
+        assert!(super::read_copy(&state, &root, &key).is_none(), "無い file");
+        super::write_copy(&state, &root, &key, &issues).expect("写しを置ける");
+        assert!(super::read_copy(&state, &root, &key).is_some(), "対照: 欄を違えない写しは読める");
+        for at in 0..FIELDS {
+            let changed: Vec<String> =
+                key.split('\t').enumerate().map(|(index, field)| if index == at { format!("{field}x") } else { field.to_owned() }).collect();
+            super::write_copy(&state, &root, &changed.join("\t"), &issues).expect("写しを置ける");
+            assert!(super::read_copy(&state, &root, &key).is_none(), "{at} 番目の欄が違う写しは無い扱い");
+        }
+        let path = super::copy_path(&state, &root);
+        put(&path, &format!("{key}\n{{broken\n"));
+        assert!(super::read_copy(&state, &root, &key).is_none(), "2 行目の崩れ");
+        put(&path, &format!("{key}\n"));
+        assert!(super::read_copy(&state, &root, &key).is_none(), "鍵の後が空");
+        put(&path, &key);
+        assert!(super::read_copy(&state, &root, &key).is_none(), "1 行だけ");
     }
 }

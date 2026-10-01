@@ -1,5 +1,5 @@
 // flip-check: moved s2-07l.679
-//! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_` / `hook_choice_question_` / `hook_answer_mouth_`・設計 docs/design/carry-prep.md §9 行 g）。
+//! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_` / `hook_choice_question_` / `hook_answer_mouth_` / `ledger_prefetch_`・設計 docs/design/carry-prep.md §9 行 g）。
 
 use super::*;
 
@@ -2000,6 +2000,280 @@ fn hook_graph_guard_reads_only_for_the_six_writes_in_a_ledger_repo() {
     assert_graph_pass(&bare, "bdw update E.1 --parent \"\"");
     assert!(graph_reads(&bare).is_empty(), ".beads の無い repo は読まない");
     clean(&[&place.repo, &place.state, &bare.repo, &bare.state]);
+}
+
+// ─────────────── 先読みの口（`s2-07l.738.41.1`・設計 ledger-form.md §20 行 p・接頭辞 `ledger_prefetch_`） ───────────────
+//
+// toy repo の root に実物の形の store（metadata.json・manifest・journal）を置き、`ledger prefetch` に偽の client（argv と cwd を 1 行に
+// 記録する）を `--bd` で渡して撃つ。偽の client と記録は置き場（state dir）と別の dir に置く＝置き場の file の数が写しだけで動く。
+
+/// 先読みの置き場（toy repo・置き場・偽の client の dir・偽の client の path・client の記録）。
+struct PrefetchPlace {
+    repo: TmpDir,
+    state: TmpDir,
+    tool: TmpDir,
+    bd: String,
+    log: PathBuf,
+}
+
+/// 偽の client の終わり方。
+#[derive(Clone, Copy)]
+enum Client {
+    /// 台帳を返す。
+    Reads,
+    /// rc 1。
+    Fails,
+    /// 眠ってから台帳を返す（秒）。
+    Sleeps(u64),
+    /// 読むたびに manifest の root を替えて台帳を返す。
+    Moves,
+}
+
+/// 実物の形の store の manifest（root は 32 桁・table の組と journal の組を 1 つずつ）。
+fn prefetch_manifest(root: &str) -> String {
+    format!("5:__DOLT__:{}:{root}:{}:{}:10:{}:7\n", "l".repeat(32), "0".repeat(32), "a".repeat(32), "v".repeat(32))
+}
+
+/// toy repo の `.beads` に実物の形の store を置く。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn prefetch_store(repo: &Path) {
+    let noms = repo.join(".beads").join("embeddeddolt").join("beads").join(".dolt").join("noms");
+    fs::create_dir_all(&noms).expect("noms の dir を作れる");
+    fs::write(repo.join(".beads").join("metadata.json"), "{\"dolt_mode\":\"embedded\",\"dolt_database\":\"beads\"}").expect("metadata.json を書ける");
+    fs::write(noms.join("manifest"), prefetch_manifest(&"1".repeat(32))).expect("manifest を書ける");
+    fs::write(noms.join("v".repeat(32)), "journal").expect("journal を書ける");
+}
+
+/// 置き場を作る（`store` が偽なら `.beads` は在るが store は無い）。台帳は 3 本（根の epic E・その子 E.1・親の無い O）。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn prefetch_place(client: Client, store: bool) -> PrefetchPlace {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = git_repo();
+    let (state, tool) = (linked(&repo), tmp());
+    if store {
+        prefetch_store(&repo);
+    } else {
+        fs::create_dir_all(repo.join(".beads")).expect(".beads を作れる");
+    }
+    let json = tool.join("ledger.json");
+    let beads = [graph_bead("E", "open", "epic", ""), graph_bead("E.1", "open", "task", "E"), graph_bead("O", "open", "task", "")];
+    fs::write(&json, format!("[{}]", beads.join(","))).expect("台帳の fixture を書ける");
+    let log = tool.join("bd.log");
+    let manifest = repo.join(".beads/embeddeddolt/beads/.dolt/noms/manifest");
+    let moves = format!(
+        "n=$(wc -l < '{log}' | tr -d ' ')\nprintf '5:__DOLT__:%s:%032d:%s:%s:10:%s:7\\n' '{l}' \"$n\" '{z}' '{a}' '{v}' > '{manifest}'\n",
+        log = log.display(),
+        manifest = manifest.display(),
+        l = "l".repeat(32),
+        z = "0".repeat(32),
+        a = "a".repeat(32),
+        v = "v".repeat(32),
+    );
+    let cat = format!("cat '{}'", json.display());
+    let tail = match client {
+        Client::Reads => cat,
+        Client::Fails => "exit 1".to_owned(),
+        Client::Sleeps(secs) => format!("sleep {secs}\n{cat}"),
+        Client::Moves => format!("{moves}{cat}"),
+    };
+    let bd = tool.join("bd");
+    fs::write(&bd, format!("#!/bin/sh\nprintf '%s\\t%s\\n' \"$*\" \"$(pwd -P)\" >> '{}'\n{tail}\n", log.display())).expect("偽の bd を書ける");
+    fs::set_permissions(&bd, fs::Permissions::from_mode(0o755)).expect("偽の bd を実行可能にできる");
+    PrefetchPlace { repo, state, tool, bd: bd.display().to_string(), log }
+}
+
+/// `ledger prefetch` を撃つ。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn prefetch(args: &[&str]) -> Output {
+    Command::new(bin()).args(["ledger", "prefetch"]).args(args).output().expect("binary を起動できる")
+}
+
+/// 置き場・偽の client を渡して `--repo` を `repo` にして撃つ（`extra` は後ろへ足す flag）。
+fn prefetch_in(place: &PrefetchPlace, repo: &Path, extra: &[&str]) -> Output {
+    let (repo, state) = (repo.display().to_string(), place.state.display().to_string());
+    let mut args = vec!["--repo", &repo, "--state-dir", &state, "--bd", &place.bd];
+    args.extend_from_slice(extra);
+    prefetch(&args)
+}
+
+/// 置き場の代わりに `state` を `--state-dir` に渡して撃つ（`--repo` は置き場の toy repo）。
+fn prefetch_into(place: &PrefetchPlace, state: &Path) -> Output {
+    let (repo, state) = (place.repo.display().to_string(), state.display().to_string());
+    prefetch(&["--repo", &repo, "--state-dir", &state, "--bd", &place.bd])
+}
+
+/// dir の直下の entry の数。
+fn prefetch_entries(dir: &Path) -> usize {
+    fs::read_dir(dir).map_or(0, Iterator::count)
+}
+
+/// 偽の client の記録の行。
+fn prefetch_log(place: &PrefetchPlace) -> Vec<String> {
+    fs::read_to_string(&place.log).map(|text| text.lines().map(str::to_owned).collect()).unwrap_or_default()
+}
+
+/// 埋め込みの manifest の写しの `id` の行の値を `to` に替えた rules を `dir` に書き、その path を返す。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn prefetch_rules(dir: &Path, (id, kind, from, to): (&str, &str, u64, u64)) -> String {
+    let row = |value: u64| format!("id = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\n");
+    let text = QUESTION_EMBEDDED.replace(&row(from), &row(to));
+    assert_ne!(text, QUESTION_EMBEDDED, "写しは {id} の値を替えた（字面が manifest と揃っている）");
+    let path = dir.join(format!("rules-{id}.toml"));
+    fs::write(&path, text).expect("rules の写しを書ける");
+    path.display().to_string()
+}
+
+/// 断りの 1 つを assert する（rc・stdout 0 byte・stderr が 1 行と字で等しい）。
+fn assert_prefetch_refused(out: &Output, (word, rc): (&str, u8), case: &str) {
+    assert_eq!(out.status.code(), Some(i32::from(rc)), "{case}: rc: {}", stderr_text(out));
+    assert!(out.stdout.is_empty(), "{case}: stdout 0 byte");
+    assert_eq!(stderr_text(out), format!("ledger-prefetch: refused reason={word}\n"), "{case}: 語が完全一致の 1 行");
+}
+
+/// (3) store を置いた toy repo で撃つと rc 0・`beads=3` の 1 行・stderr 0 byte・client は門と同じ argv の 1 回で cwd は root・置き場の file が 1 つ
+/// 増え、撃ち直しても root の下の dir を渡しても増えない。別の root の toy repo から同じ置き場へ撃つと 1 つ増える。写しの 1 行目は 6 欄の鍵。
+#[test]
+fn ledger_prefetch_writes_one_copy_per_root_and_reads_the_ledger_once() {
+    let place = prefetch_place(Client::Reads, true);
+    let before = prefetch_entries(&place.state);
+    let out = prefetch(&["--repo", &place.repo.display().to_string(), "--state-dir", &place.state.display().to_string(), "--bd", &place.bd]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {}", stderr_text(&out));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "ledger-prefetch: beads=3\n", "stdout の 1 行");
+    assert!(out.stderr.is_empty(), "stderr 0 byte: {}", stderr_text(&out));
+    assert_eq!(prefetch_log(&place), [format!("--readonly list --all --limit 0 --json\t{}", place.repo.display())], "門と同じ argv の 1 回・cwd は root");
+    assert_eq!(prefetch_entries(&place.state), before + 1, "置き場の file が 1 つ増える");
+    let copy = fs::read_to_string(vessel::ledger::copy_path(&place.state, &place.repo)).expect("写しが在る");
+    let lines: Vec<&str> = copy.lines().collect();
+    assert_eq!(lines.len(), 2, "写しは 2 行: {copy}");
+    assert_eq!(lines.first().map_or(0, |key| key.split('\t').count()), 6, "1 行目は 6 欄の鍵: {copy}");
+    assert!(lines.get(1).is_some_and(|body| body.starts_with("[{\"id\":\"E\",") && !body.contains(' ')), "2 行目は空白を持たない配列: {copy}");
+}
+
+/// (3) 同じ root の撃ち直しも root の下の dir を渡した周も同じ名を置き換えて増えず、別の root の toy repo から同じ置き場へ撃つと file がもう 1 つ増える。
+#[test]
+fn ledger_prefetch_names_the_copy_by_the_root() {
+    let place = prefetch_place(Client::Reads, true);
+    let before = prefetch_entries(&place.state);
+    for (repo, case) in [(place.repo.to_path_buf(), "最初"), (place.repo.to_path_buf(), "撃ち直し"), (place.repo.join("src"), "root の下の dir")] {
+        let out = prefetch_in(&place, &repo, &[]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{case}: {}", stderr_text(&out));
+        assert_eq!(prefetch_entries(&place.state), before + 1, "{case}: 置き場の file は 1 つ（同じ root の同じ名）");
+    }
+    assert_eq!(prefetch_log(&place).len(), 3, "撃つたびに client は 1 回");
+    let other = prefetch_place(Client::Reads, true);
+    let (other_repo, state) = (other.repo.display().to_string(), place.state.display().to_string());
+    let out = prefetch(&["--repo", &other_repo, "--state-dir", &state, "--bd", &other.bd]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "別の root: {}", stderr_text(&out));
+    assert_eq!(prefetch_entries(&place.state), before + 2, "別の root の toy repo から同じ置き場へ撃つと file がもう 1 つ増える");
+}
+
+/// (3) `--rules` で `hook.budget_ms` だけを 100 にした写しと 1 秒眠る client でも rc 0（待ち上限は `seat.ledger_timeout_s`）。
+#[test]
+fn ledger_prefetch_waits_by_the_ledger_timeout_row_not_the_hook_budget() {
+    let place = prefetch_place(Client::Sleeps(1), true);
+    let rules = prefetch_rules(&place.tool, ("hook.budget_ms", "HookBudgetMs", 2000, 100));
+    let out = prefetch_in(&place, &place.repo, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {}", stderr_text(&out));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "ledger-prefetch: beads=3\n", "写しを置いた");
+    assert!(vessel::ledger::copy_path(&place.state, &place.repo).is_file(), "写しが在る");
+    clean(&[&place.repo, &place.state, &place.tool]);
+}
+
+/// (4) 7 つの断りを別々の置き場で撃つ: どれも stdout 0 byte・stderr が語つきの 1 行と字で等しく、rc は ledger-unreadable と unwritable が 2・ほかが 1
+/// で、置き場の file の数が変わらない。
+#[test]
+fn ledger_prefetch_refuses_with_one_closed_word_per_place() {
+    // no-state-dir: 結びの無い repo（`--state-dir` を渡さない）。
+    let place = prefetch_place(Client::Reads, true);
+    let loose = git_repo();
+    prefetch_store(&loose);
+    let before = prefetch_entries(&loose);
+    assert_prefetch_refused(&prefetch(&["--repo", &loose.display().to_string(), "--bd", &place.bd]), ("no-state-dir", 1), "結びの無い repo");
+    assert_eq!(prefetch_entries(&loose), before, "no-state-dir: repo の file の数が変わらない");
+    // no-rule: 行の無い rules と無い path の rules。
+    let rowless = place.tool.join("rowless.toml");
+    fs::write(&rowless, "schema = 1\n").unwrap_or_else(|error| panic!("rules を書ける: {error}"));
+    let missing = place.tool.join("nope.toml");
+    for (rules, case) in [(&rowless, "行の無い rules"), (&missing, "無い path の rules")] {
+        refuse_in(&place, &["--rules", &rules.display().to_string()], ("no-rule", 1), case);
+    }
+    // no-mark: store の無い `.beads`（client を起こさない）。
+    let bare = prefetch_place(Client::Reads, false);
+    refuse_in(&bare, &[], ("no-mark", 1), "store の無い .beads");
+    assert!(prefetch_log(&bare).is_empty(), "no-mark は client を起こさない");
+    // ledger-unreadable: rc 1 の client。
+    refuse_in(&prefetch_place(Client::Fails, true), &[], ("ledger-unreadable", 2), "rc 1 の client");
+    // ledger-timeout: 待ち上限を 1 秒にした rules と 3 秒眠る client。
+    let slow = prefetch_place(Client::Sleeps(3), true);
+    let rules = prefetch_rules(&slow.tool, ("seat.ledger_timeout_s", "LedgerTimeoutS", 60, 1));
+    refuse_in(&slow, &["--rules", &rules], ("ledger-timeout", 1), "眠る client");
+    // moved: 読むたびに manifest の root を替える client。
+    refuse_in(&prefetch_place(Client::Moves, true), &[], ("moved", 1), "読みの間に動いた store");
+    // unwritable: `--state-dir` に通常の file（その file を置いた dir の file の数が変わらない）。
+    let (hold, readable) = (tmp(), prefetch_place(Client::Reads, true));
+    let sink = hold.join("not-a-dir");
+    fs::write(&sink, "file").unwrap_or_else(|error| panic!("file を書ける: {error}"));
+    let before = prefetch_entries(&hold);
+    let out = prefetch_into(&readable, &sink);
+    assert_prefetch_refused(&out, ("unwritable", 2), "state dir が通常の file");
+    assert_eq!(prefetch_entries(&hold), before, "unwritable: file の数が変わらない");
+}
+
+/// 置き場の file の数を測って撃ち、断りと数の不変を assert する。
+fn refuse_in(place: &PrefetchPlace, extra: &[&str], want: (&str, u8), case: &str) {
+    let before = prefetch_entries(&place.state);
+    assert_prefetch_refused(&prefetch_in(place, &place.repo, extra), want, case);
+    assert_eq!(prefetch_entries(&place.state), before, "{case}: 置き場の file の数が変わらない");
+}
+
+/// (4) 引数の誤り（`--repo` の無い形・知らない flag・値の無い flag・余分な位置引数）と git の repo でない dir は usage の 1 行で rc 1。
+#[test]
+fn ledger_prefetch_usage_is_one_line_for_wrong_arguments_and_a_non_repo() {
+    let (place, plain) = (prefetch_place(Client::Reads, true), tmp());
+    let (repo, state) = (place.repo.display().to_string(), place.state.display().to_string());
+    let cases: [(&[&str], &str); 6] = [
+        (&[], "引数が無い"),
+        (&["--state-dir", &state], "--repo の無い形"),
+        (&["--repo", &repo, "--nope", "x"], "知らない flag"),
+        (&["--repo", &repo, "--state-dir"], "値の無い flag"),
+        (&["--repo", &repo, "extra"], "余分な位置引数"),
+        (&["--repo", &plain.display().to_string()], "git の repo でない dir"),
+    ];
+    for (args, case) in cases {
+        let out = prefetch(args);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{case}: rc 1: {}", stderr_text(&out));
+        assert!(out.stdout.is_empty(), "{case}: stdout 0 byte");
+        let text = stderr_text(&out);
+        assert!(text.lines().count() == 1 && text.starts_with("usage:") && text.contains("ledger prefetch"), "{case}: usage の 1 行: {text}");
+    }
+    assert!(prefetch_log(&place).is_empty(), "引数の誤りは client を起こさない");
+}
+
+/// (4) 隣り合う 2 語に同時に当たる 4 つの置き場で、先の語が出る（no-mark の周は client を起こさない）。
+#[test]
+fn ledger_prefetch_judges_the_words_in_order() {
+    // no-state-dir と no-rule: 結びの無い repo と行の無い rules。
+    let place = prefetch_place(Client::Reads, true);
+    let rowless = place.tool.join("rowless.toml");
+    fs::write(&rowless, "schema = 1\n").unwrap_or_else(|error| panic!("rules を書ける: {error}"));
+    let loose = git_repo();
+    prefetch_store(&loose);
+    let out = prefetch(&["--repo", &loose.display().to_string(), "--bd", &place.bd, "--rules", &rowless.display().to_string()]);
+    assert_prefetch_refused(&out, ("no-state-dir", 1), "結びが無く行の無い rules");
+    // no-rule と no-mark: 行の無い rules と store の無い `.beads`。
+    let bare = prefetch_place(Client::Reads, false);
+    let out = prefetch_in(&bare, &bare.repo, &["--rules", &rowless.display().to_string()]);
+    assert_prefetch_refused(&out, ("no-rule", 1), "行の無い rules と store の無い .beads");
+    // no-mark と ledger-unreadable: store の無い `.beads` と rc 1 の client（client を起こさない）。
+    let failing = prefetch_place(Client::Fails, false);
+    assert_prefetch_refused(&prefetch_in(&failing, &failing.repo, &[]), ("no-mark", 1), "store の無い .beads と rc 1 の client");
+    assert!(prefetch_log(&failing).is_empty(), "no-mark の周は client を起こさない");
+    // moved と unwritable: 読むたびに root を替える client と通常の file の state dir。
+    let (moving, hold) = (prefetch_place(Client::Moves, true), tmp());
+    let sink = hold.join("not-a-dir");
+    fs::write(&sink, "file").unwrap_or_else(|error| panic!("file を書ける: {error}"));
+    let out = prefetch_into(&moving, &sink);
+    assert_prefetch_refused(&out, ("moved", 1), "動く store と通常の file の state dir");
 }
 
 // ─────────────── 走っている便の行の門（`s2-07l.698`・設計 vessel-hook.md §15 行 i・接頭辞 `hook_live_row_`） ───────────────
