@@ -26,6 +26,7 @@ use super::verify::{main_red, main_unmeasured, measure_main, verify_train_main, 
 use super::{broken, refused, retire_worktree, verdicts_path, Land, Landing, MainCheck, Terminal, MAIN_REF, RUN_TRAILER};
 use crate::cli_outcome::{Outcome, RC_OK};
 use crate::fleet::json_lite::{self, Value};
+use crate::fleet::lifecycle::{self, Place};
 use crate::fleet::store::{self, append_line};
 use crate::fleet::{ci_now, cli::now_utc, CiRun, Completion, EventKind, Stage, SCHEMA};
 use crate::name::{BUILD_COMMIT, NAME};
@@ -151,6 +152,11 @@ const SOURCE_TRAILER: &str = "Source";
 /// 発端の trailer の key（`<Name>-Source: `・merge の門が引く 1 本＝門は NAME から key を組み直さない・§21 形 7）。
 pub(crate) fn source_key() -> String {
     trailer_key(SOURCE_TRAILER)
+}
+
+/// 契約の trailer の key（`<Name>-Contract: `・値は設計 pointer の字・局面の出力が main の commit から契約を読む 1 本）。
+pub(crate) fn contract_key() -> String {
+    trailer_key(CONTRACT_TRAILER)
 }
 
 /// trailer の key（**器の名から導く**・C2.2＝名を 2 か所に焼かない）。
@@ -403,6 +409,12 @@ pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, ancho
         Landing::Fresh(_) | Landing::AlreadyLanded(_) => PushTip::Tip,
     };
     let terminal = terminal(entry, new, tip);
+    // **局面の出力の書き直し（契機 (d)）は終端が close した周（rc 0）に**（設計 case-lifecycle.md §12 約束 8）: 呼び手の rc と stdout は変えず、
+    // `Written`・`Unchanged`・`Coalesced` の外の語だけ stderr の 1 行にする。
+    if let (RC_OK, Ok(rules)) = (terminal.rc(), crate::rules::read(entry.rules, Some(entry.state_dir))) {
+        let place = Place { state_dir: entry.state_dir, repo: entry.repo, manifest: &rules, bd: entry.bd, policy: entry.policy };
+        err.extend(lifecycle::after_close(&place));
+    }
     let skipped = match turned.skipped_dead.len() {
         0 => String::new(),
         count => format!(" skipped-dead={count}"),

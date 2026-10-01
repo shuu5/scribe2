@@ -244,6 +244,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
     if contact {
         if let Some(queue) = queue_of(args, &manifest, driving.as_ref(), drove.as_deref()) {
             let turn = queue::fire(&queue.borrow());
+            outcome.err.extend(lifecycle_err(&turn));
             // **終端の周だけ席の pane へ知らせる**（設計 dispatcher.md §19）: 落ちた便の 1 行と、列が idle の 1 行。
             // 送れたかは stdout の `notify=` の行で残し、rc は変えない（通知は副作用）。列の行より前に置く
             // （自走の周の最後の行は列の 1 行のまま）。同じ字面を stderr にも写す（列が起こした運転手の周も launch.log に残る・§29 形 4）。
@@ -477,19 +478,28 @@ fn subcommand(
 /// 材料（置き場・repo）を解けない周は 1 周を撃たず、`dispatch=unmeasured reason=args` を足す
 /// （**測れないを「起こす便 0」に読み替えない**・C10）。
 fn with_turn(args: &[String], manifest: &Manifest, mut outcome: Outcome) -> Outcome {
-    outcome.out.extend(turn_lines(args, manifest));
+    let (out, err) = turn_lines(args, manifest);
+    outcome.out.extend(out);
+    outcome.err.extend(err);
     outcome
 }
 
-/// 列の 1 周の行（引数から材料を解いて [`queue::fire`] を撃つ＝**起こす側**）。最後の行は列の 1 行で、終端の周の軸を
+/// 局面の出力の全部の書き直し（契機 (a)）の返りのうち `Written`・`Unchanged`・`Coalesced` の外の語を stderr の 1 行にする
+/// （呼び手の rc と stdout の字は変えない・設計 case-lifecycle.md §12 約束 8）。
+fn lifecycle_err(turn: &queue::Turn) -> Vec<String> {
+    turn.lifecycle.map(|word| format!("lifecycle={word}")).into_iter().collect()
+}
+
+/// 列の 1 周の行（引数から材料を解いて [`queue::fire`] を撃つ＝**起こす側**）と stderr の行。stdout の最後の行は列の 1 行で、終端の周の軸を
 /// 評価した周だけその前に `vessel=` の 1 行が立つ（設計 consumer-sync.md §15 形 3）。
-fn turn_lines(args: &[String], manifest: &Manifest) -> Vec<String> {
+fn turn_lines(args: &[String], manifest: &Manifest) -> (Vec<String>, Vec<String>) {
     match queue_of(args, manifest, None, None) {
         Some(queue) => {
             let turn = queue::fire(&queue.borrow());
-            queue::vessel_line(&turn).into_iter().chain(std::iter::once(queue::line(&turn))).collect()
+            let out = queue::vessel_line(&turn).into_iter().chain(std::iter::once(queue::line(&turn))).collect();
+            (out, lifecycle_err(&turn))
         }
-        None => vec![format!("dispatch=unmeasured reason={ARGS_UNMEASURED}")],
+        None => (vec![format!("dispatch=unmeasured reason={ARGS_UNMEASURED}")], Vec::new()),
     }
 }
 
@@ -529,7 +539,10 @@ fn queued(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
             _ => Outcome::failed(RC_REFUSED, vec![queue::usage()]),
         },
         // **手動の 1 周**（権能なしの口・設計 §5）: subcommand の無い周（flag だけ・引数なし）は列を 1 周撃つ。
-        _ => Outcome::ok(turn_lines(args, manifest)),
+        _ => {
+            let (out, err) = turn_lines(args, manifest);
+            Outcome { out, err, rc: RC_OK }
+        }
     }
 }
 

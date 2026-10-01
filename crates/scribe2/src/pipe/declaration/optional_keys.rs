@@ -186,6 +186,21 @@ pub fn close_check(repo: &Path) -> CloseCheck {
     check_of(head_declaration(repo))
 }
 
+/// 名指した sha の tree の宣言から close の理由の門への加わりを解く（`git show <sha>:.vessel.toml` を [`close_check`] と同じ写しに掛ける・
+/// 作業ツリーと HEAD は読まない）。宣言 file が無い sha・git を撃てない周は `Exempt`、宣言が在って不備は `Unreadable`。
+pub fn close_check_at_sha(repo: &Path, sha: &str) -> CloseCheck {
+    let spec = format!("{sha}:{}", super::DECL_FILE);
+    check_of(super::super::git_bytes(repo, &["show", &spec]).map(|bytes| Declared::parse(&String::from_utf8_lossy(&bytes))))
+}
+
+/// 名指した sha の tree の宣言が名指す要件面の repo 相対 path（宣言 `requirements`・宣言が無い sha・不備・key の無い宣言は
+/// [`DEFAULT_REQUIREMENTS`]＝不備は [`close_check_at_sha`] の `Unreadable` が別に名指す）。
+pub fn requirements_at_sha(repo: &Path, sha: &str) -> String {
+    let spec = format!("{sha}:{}", super::DECL_FILE);
+    let declared = super::super::git_bytes(repo, &["show", &spec]).and_then(|bytes| Declared::parse(&String::from_utf8_lossy(&bytes)).ok());
+    declared.and_then(|found| found.requirements).unwrap_or_else(|| DEFAULT_REQUIREMENTS.to_owned())
+}
+
 /// HEAD の読みの結果（無い / 不備 / 値）から閉じた 3 値への写し。
 fn check_of(read: Option<Result<Declared, Vec<DeclError>>>) -> CloseCheck {
     match read {
@@ -340,7 +355,7 @@ pub fn terminal_facts(repo: &Path) -> Result<TerminalFacts, Vec<DeclError>> {
 #[cfg(test)]
 mod tests {
     use super::super::Declared;
-    use super::{check_of, close_check, floor_check_at, route_of, ruling_keys_at, CloseCheck, QuestionRoute, RulingKeys};
+    use super::{check_of, close_check, close_check_at_sha, floor_check_at, route_of, ruling_keys_at, CloseCheck, QuestionRoute, RulingKeys};
 
     /// 必須 key だけの宣言の本文（3 行）の後ろに `extra` を足す。
     fn with(extra: &str) -> String {
@@ -502,6 +517,50 @@ mod tests {
         commit_declaration(&repo, None);
         assert_eq!(ruling_keys_at(&repo, "HEAD"), keys(false, &[]), "宣言 file の無い tree は false と空");
         assert_eq!(ruling_keys_at(std::path::Path::new("/nonexistent-ruling-keys-dir"), "HEAD"), keys(false, &[]), "git を撃てない dir");
+    }
+
+    /// sha の tree の宣言の close-check を読む（設計 case-lifecycle.md §12 約束 3）: 1 つ目が false・2 つ目が true の 2 commit で sha ごとに
+    /// `Exempt` と `Joins`、HEAD を 1 つ目へ戻しても 2 つ目の sha の読みは `Joins`（HEAD の宣言を読む実装は `Exempt` になる）。
+    #[test]
+    fn close_check_at_sha_reads_the_named_commit_not_head() {
+        let repo = crate::pipe::fixture::scratch("close-check-at-sha");
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.name", "t"], &["config", "user.email", "t@example.invalid"], &["config", "commit.gpgsign", "false"]] {
+            assert!(crate::pipe::git_ok(&repo, args), "{args:?}");
+        }
+        let mut shas = Vec::new();
+        for declaration in [with("close-check = false\n"), with("close-check = true\n")] {
+            commit_declaration(&repo, Some(&declaration));
+            let head = crate::pipe::git_bytes(&repo, &["rev-parse", "HEAD"]).map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned());
+            shas.push(head.unwrap_or_default());
+        }
+        let [first, second] = [shas[0].as_str(), shas[1].as_str()];
+        assert_eq!(close_check_at_sha(&repo, first), CloseCheck::Exempt, "1 つ目は false");
+        assert_eq!(close_check_at_sha(&repo, second), CloseCheck::Joins, "2 つ目は true");
+        assert!(crate::pipe::git_ok(&repo, &["reset", "-q", "--hard", first]), "HEAD を 1 つ目へ戻す");
+        assert_eq!(close_check(&repo), CloseCheck::Exempt, "HEAD の読みは 1 つ目の宣言");
+        assert_eq!(close_check_at_sha(&repo, second), CloseCheck::Joins, "HEAD を戻しても 2 つ目の sha の読みは true");
+        assert!(std::fs::write(repo.join(super::super::DECL_FILE), with("close-check = true\n")).is_ok());
+        assert_eq!(close_check_at_sha(&repo, first), CloseCheck::Exempt, "作業ツリーの宣言は読まない");
+    }
+
+    /// 宣言 file の無い sha は `Exempt`・型の違う宣言の sha は `Unreadable`・存在しない sha と git を撃てない dir は `Exempt`。
+    #[test]
+    fn close_check_at_sha_maps_absent_and_broken_declarations() {
+        let repo = crate::pipe::fixture::scratch("close-check-at-sha-shapes");
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.name", "t"], &["config", "user.email", "t@example.invalid"], &["config", "commit.gpgsign", "false"]] {
+            assert!(crate::pipe::git_ok(&repo, args), "{args:?}");
+        }
+        assert!(std::fs::write(repo.join("other.txt"), "x").is_ok());
+        assert!(crate::pipe::git_ok(&repo, &["add", "-A"]) && crate::pipe::git_ok(&repo, &["commit", "-q", "-m", "no declaration"]));
+        let head = |repo: &std::path::Path| crate::pipe::git_bytes(repo, &["rev-parse", "HEAD"]).map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned()).unwrap_or_default();
+        let bare = head(&repo);
+        commit_declaration(&repo, Some(&with("close-check = \"true\"\n")));
+        let broken = head(&repo);
+        commit_declaration(&repo, Some(&with("close-check = true\n")));
+        assert_eq!(close_check_at_sha(&repo, &bare), CloseCheck::Exempt, "宣言 file の無い sha");
+        assert_eq!(close_check_at_sha(&repo, &broken), CloseCheck::Unreadable, "型の違う宣言の sha");
+        assert_eq!(close_check_at_sha(&repo, &"0".repeat(40)), CloseCheck::Exempt, "存在しない sha");
+        assert_eq!(close_check_at_sha(std::path::Path::new("/nonexistent-close-check-sha-dir"), &bare), CloseCheck::Exempt, "git を撃てない dir");
     }
 
     /// 一覧は key の無い宣言で無し・文字列の一覧はそのまま（順も保つ）・空の一覧 `[]` は書けて空。

@@ -856,6 +856,122 @@ enabled = true
 ruling = "user 2026-09-30T07:18Z"
 ruled_at = "2026-09-30"
 
+# 局面の出力（設計 case-lifecycle.md §12・ADR-0088）。終わりの局面の閉じた部品を載せる窓（時間）と、手番が seat の局面が滞ったと
+# みなす年齢の閾値（時間・語ごとに 1 行・行の無い seat の語は閾値なしで owned.unset に数える）。読めない周は局面の出力を書かない。
+# 行の裁定 id の字は base の行 floor.timeout_s と同じ裁定の項 lifecycle（新設の行が base の行の裁定を使い回さない）。
+
+[[rule]]
+id = "lifecycle.closed_window_h"
+kind = "LifecycleClosedWindowH"
+value = 72
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.utterance-open"
+kind = "LifecycleAgeH"
+value = 2
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.run-landed-open"
+kind = "LifecycleAgeH"
+value = 2
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.contract-refused"
+kind = "LifecycleAgeH"
+value = 4
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.run-review-failed"
+kind = "LifecycleAgeH"
+value = 4
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.run-gate-failed"
+kind = "LifecycleAgeH"
+value = 4
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.run-stopped"
+kind = "LifecycleAgeH"
+value = 4
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.run-failed"
+kind = "LifecycleAgeH"
+value = 4
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.ruling-unreflected"
+kind = "LifecycleAgeH"
+value = 24
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.memo-actionable"
+kind = "LifecycleAgeH"
+value = 24
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.contract-queued"
+kind = "LifecycleAgeH"
+value = 24
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.row-unbeaded"
+kind = "LifecycleAgeH"
+value = 24
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.misfit"
+kind = "LifecycleAgeH"
+value = 24
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "lifecycle.age_h.epic-closable"
+kind = "LifecycleAgeH"
+value = 72
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 lifecycle"
+ruled_at = "2026-09-30"
+
 # 口座の宣言（設計 fleet-usage.md §2・account-lifecycle.md §2・ADR-0026 §2.1）は host の manifest（state dir
 # の host.toml）にだけ置く。この file に口座の表は置かない（文法は残る・足す変更は A1 の対話面で聞く・本 repo
 # は PUBLIC・SRS CON2）。器は credential の置き場を走査せず、宣言だけを真実として読む（C3）。

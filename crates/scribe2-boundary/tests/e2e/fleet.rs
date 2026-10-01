@@ -3145,3 +3145,448 @@ fn measured_accounts(fx: &UsageFixture) -> Vec<String> {
         })
         .collect()
 }
+
+// ───── 局面の出力（設計 docs/design/case-lifecycle.md §12・接頭辞 `fleet_lifecycle_`） ─────
+
+/// 偽の台帳 client（list は `ledger` の JSON を `list-rc` の rc で返し、close は argv を `close-log` へ足して `close-rc` の rc で返る）。
+fn life_bd_body(dir: &Path) -> String {
+    format!(
+        "d='{}'\nif [ \"$1\" = close ]; then\n  echo \"$*\" >> \"$d/close-log\"\n  exit \"$(cat \"$d/close-rc\")\"\nfi\ncat \"$d/ledger\"\nexit \"$(cat \"$d/list-rc\")\"\n",
+        dir.display()
+    )
+}
+
+/// 開いた task（設計 pointer を持たない）。
+const LIFE_TASK: &str = "{\"id\":\"toy-c1\",\"status\":\"open\",\"priority\":2,\"labels\":[],\"acceptance_criteria\":\"\",\"dependencies\":[]}";
+
+/// 局面の出力の歯が 1 本ごとに持つ置き場（`pipe` の toy repo に台帳の files の形と origin/main の ref を足す）。
+struct Life {
+    repo: PathBuf,
+    state: PathBuf,
+    dir: PathBuf,
+    bd: String,
+    design: String,
+}
+
+impl Life {
+    /// 台帳は `toy-c1`（開いた task）を `toy-c2`（契約の行を指す開いた契約）が blocks で待つ形（依存待ちの契約が出力に出る）。
+    #[expect(
+        clippy::expect_used,
+        reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+    )]
+    fn new() -> Self {
+        let (repo, state) = super::pipe::repo_with_state();
+        let design = super::pipe::write_contract(&repo, &[], &[]);
+        let pointer = super::pipe::design_pointer();
+        let waiting = format!(
+            "{{\"id\":\"toy-c2\",\"status\":\"open\",\"priority\":2,\"labels\":[],\"acceptance_criteria\":\"design = {pointer}\",\"dependencies\":[{{\"issue_id\":\"toy-c2\",\"depends_on_id\":\"toy-c1\",\"type\":\"blocks\"}}]}}"
+        );
+        let dir = state.join("life");
+        fs::create_dir_all(&dir).expect("置き場を作れる");
+        let bd = state.join("life-bd.sh");
+        fs::write(&bd, format!("#!/bin/sh\n{}", life_bd_body(&dir))).expect("偽 bd を書ける");
+        fs::set_permissions(&bd, std::os::unix::fs::PermissionsExt::from_mode(0o755)).expect("実行権を付ける");
+        let life = Self { repo, state, dir, bd: bd.display().to_string(), design };
+        life.put("ledger", &format!("[{LIFE_TASK},{waiting}]\n"));
+        life.put("close-rc", "0\n");
+        life.put("list-rc", "0\n");
+        fs::create_dir_all(life.repo.join(".beads")).expect(".beads を作れる");
+        fs::write(life.repo.join(".beads/config.yaml"), "issue-prefix: toy\n").expect("config を書ける");
+        fs::write(life.repo.join(".beads/issues.jsonl"), "[]\n").expect("台帳の file を書ける");
+        let exclude = life.repo.join(".git/info/exclude");
+        let body = fs::read_to_string(&exclude).unwrap_or_default();
+        fs::write(&exclude, format!("{body}.beads/\n")).expect("exclude を書ける");
+        let main = super::pipe::git(&life.repo, &["rev-parse", "refs/heads/main"]);
+        super::pipe::git(&life.repo, &["update-ref", "refs/remotes/origin/main", &main]);
+        life
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+    )]
+    fn put(&self, name: &str, text: &str) {
+        fs::write(self.dir.join(name), text).expect("file を書ける");
+    }
+
+    fn json_path(&self) -> PathBuf {
+        self.state.join("fleet").join("lifecycle.json")
+    }
+
+    /// 出力の `generated_at`（file が無いか読めない周は `None`）。
+    fn generated(&self) -> Option<String> {
+        let text = fs::read_to_string(self.json_path()).ok()?;
+        parse(&text).ok()?.get("generated_at")?.as_str().map(str::to_owned)
+    }
+
+    /// `generated_at` を遠い過去へ戻す（次の書き直しが rename したかを `generated_at` の進みで測る）。
+    #[expect(
+        clippy::expect_used,
+        reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+    )]
+    fn retime(&self) {
+        let now = self.generated().expect("出力が在る");
+        let text = fs::read_to_string(self.json_path()).expect("出力を読める");
+        fs::write(self.json_path(), text.replace(&now, LIFE_OLD)).expect("出力を書き戻せる");
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+    )]
+    fn fleet(&self, args: &[&str]) -> Output {
+        Command::new(bin())
+            .arg("fleet")
+            .arg("lifecycle")
+            .args(args)
+            .args(["--state-dir", &self.state.display().to_string()])
+            .output()
+            .expect("binary を起動できる")
+    }
+
+    /// `fleet lifecycle write`（`extra` は `--wait-ms` などを足す）。
+    fn write(&self, extra: &[&str]) -> Output {
+        let mut args = vec!["write", "--repo", self.repo.to_str().unwrap_or_default(), "--bd", self.bd.as_str()];
+        args.extend(extra);
+        self.fleet(&args)
+    }
+
+    fn pipe_args<'a>(&'a self, head: &[&'a str], tail: &[&'a str]) -> Vec<&'a str> {
+        let mut args = head.to_vec();
+        args.extend(["--state-dir", self.state.to_str().unwrap_or_default(), "--repo", self.repo.to_str().unwrap_or_default(), "--bd", self.bd.as_str()]);
+        args.extend(tail);
+        args
+    }
+
+    /// `pipe dispatch`（1 周・契機 (a)・実装役の口は要る＝無い周は列を測らない・台帳の待ちだけの fixture なので何も起こさない）。
+    fn dispatch(&self, tail: &[&str]) -> Output {
+        let mut extra = vec!["--runner", "true"];
+        extra.extend(tail);
+        super::pipe::run_pipe(&self.pipe_args(&["dispatch"], &extra))
+    }
+
+    /// `pipe dispatch ls`（観測だけ・起こさず書かない）。
+    fn ls(&self) -> Output {
+        super::pipe::run_pipe(&self.pipe_args(&["dispatch", "ls"], &[]))
+    }
+
+    /// `fleet lifecycle show` の stdout。
+    fn shown(&self) -> String {
+        super::pipe::stdout_of(&self.fleet(&["show"]))
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+    )]
+    fn lock_by_a_live_process(&self) {
+        fs::create_dir_all(self.state.join("fleet")).expect("dir を作れる");
+        fs::write(self.state.join("fleet").join("lifecycle.lock"), format!("{}\n", std::process::id())).expect("lock を置ける");
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+    )]
+    fn unlock(&self) {
+        fs::remove_file(self.state.join("fleet").join("lifecycle.lock")).expect("lock を外せる");
+    }
+}
+
+/// `generated_at` を戻す先。
+const LIFE_OLD: &str = "2020-01-01T00:00:00Z";
+
+/// 出力の text に、依存を待つ開いた契約が contract-queued・理由 dependency で在る。
+fn assert_queued(text: &str, who: &str) {
+    let line = text.lines().find(|line| line.starts_with("part=contract id=toy-c2 "));
+    assert!(
+        line.is_some_and(|found| found.contains(" phase=contract-queued ") && found.ends_with(" reason=dependency")),
+        "{who}: 依存を待つ契約は contract-queued・理由 dependency: {text}"
+    );
+}
+
+/// write と show は同じ字で、頭の行と部品の行が §12 の形（key の順・値の無い欄は `-`）。
+#[test]
+fn fleet_lifecycle_write_and_show_print_the_same_text_in_the_documented_form() {
+    let life = Life::new();
+    let written = life.write(&[]);
+    let (out, err) = (super::pipe::stdout_of(&written), super::pipe::stderr_of(&written));
+    assert_eq!(written.status.code(), Some(i32::from(RC_OK)), "write は rc 0: {err}");
+    assert_eq!(life.shown(), out, "write と show は 1 字も違わない");
+    let mut lines = out.lines();
+    let head: Vec<&str> = lines.next().unwrap_or_default().split_whitespace().collect();
+    let keys: Vec<&str> = head.iter().map(|word| word.split('=').next().unwrap_or_default()).collect();
+    assert_eq!(keys, ["lifecycle", "version", "generated", "scope", "ledger", "events", "main", "stale"], "頭の行の key の順: {head:?}");
+    assert!(head.contains(&"version=1") && head.contains(&"scope=full") && head.contains(&"stale=-"), "{head:?}");
+    let part = out.lines().find(|line| line.starts_with("part=contract id=toy-c2 ")).unwrap_or_default();
+    let part_keys: Vec<&str> = part.split_whitespace().map(|word| word.split('=').next().unwrap_or_default()).collect();
+    assert_eq!(part_keys, ["part", "id", "phase", "turn", "since", "reason"], "部品の行の key の順: {part}");
+    assert!(part.contains(" since=-"), "値の無い欄は `-`: {part}");
+    assert_queued(&out, "e");
+    super::pipe::clean(&[&life.repo, &life.state]);
+}
+
+/// 出力の無い周と読めない周は rc 1 で stdout が空・stderr の 1 行。
+#[test]
+fn fleet_lifecycle_show_refuses_an_absent_and_an_unreadable_output() {
+    let life = Life::new();
+    let absent = life.fleet(&["show"]);
+    assert_eq!(absent.status.code(), Some(i32::from(RC_REFUSED)), "無い周は rc 1");
+    assert!(absent.stdout.is_empty(), "stdout は 0 byte");
+    assert_eq!(super::pipe::stderr_of(&absent).trim_end(), "lifecycle=absent");
+    fs::create_dir_all(life.state.join("fleet")).expect("dir を作れる");
+    fs::write(life.json_path(), "{ not json").expect("壊れた出力を置ける");
+    let broken = life.fleet(&["show"]);
+    assert_eq!(broken.status.code(), Some(i32::from(RC_REFUSED)), "読めない周は rc 1");
+    assert!(broken.stdout.is_empty(), "stdout は 0 byte");
+    assert_eq!(super::pipe::stderr_of(&broken).trim_end(), "lifecycle=unreadable");
+    super::pipe::clean(&[&life.repo, &life.state]);
+}
+
+/// 生きた pid が持つ lock は `--wait-ms` の後に busy（rc 1・stderr の 1 行・stdout は空）・撃った時の印より古くない file が在れば書き直さない
+/// （台帳が変わっても出力は動かない）。
+#[test]
+fn fleet_lifecycle_write_is_busy_for_a_live_lock_and_coalesced_for_a_fresh_output() {
+    let life = Life::new();
+    life.lock_by_a_live_process();
+    let busy = life.write(&["--wait-ms", "100"]);
+    assert_eq!(busy.status.code(), Some(i32::from(RC_REFUSED)), "busy は rc 1");
+    assert!(busy.stdout.is_empty(), "stdout は空");
+    assert_eq!(super::pipe::stderr_of(&busy).trim_end(), "lifecycle=busy");
+    assert_eq!(life.generated(), None, "書かない");
+    life.unlock();
+    assert_eq!(life.write(&[]).status.code(), Some(i32::from(RC_OK)));
+    assert_eq!(life.write(&[]).status.code(), Some(i32::from(RC_OK)), "1 周目の線で進んだ印を写す 2 周目");
+    life.retime();
+    let before = life.shown();
+    life.put("ledger", &format!("[{LIFE_TASK}]\n"));
+    let again = life.write(&[]);
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "coalesced は rc 0");
+    assert_eq!(super::pipe::stdout_of(&again), before, "印が古くない file は書き直さず今の組を出す");
+    assert_eq!(life.generated().as_deref(), Some(LIFE_OLD), "rename しない");
+    super::pipe::clean(&[&life.repo, &life.state]);
+}
+
+/// 使い方の行と `scribe2 help fleet` の頁（FORM と SUBCOMMANDS）が `lifecycle` を持つ。
+#[test]
+fn fleet_lifecycle_usage_and_help_page_name_the_verb() {
+    let usage = run_fleet(&[]);
+    assert!(String::from_utf8_lossy(&usage.stderr).contains("lifecycle <write|show>"), "使い方の行");
+    let help = Command::new(bin()).args(["help", "fleet"]).output().expect("binary を起動できる");
+    let page = String::from_utf8_lossy(&help.stdout).into_owned();
+    assert!(page.lines().any(|line| line.starts_with("usage: fleet ") && line.contains("lifecycle <write|show>")), "FORM: {page}");
+    assert!(page.lines().any(|line| line.starts_with("  lifecycle ")), "SUBCOMMANDS: {page}");
+}
+
+/// 契機 (a) の `pipe dispatch` と (e) の `fleet lifecycle write` で出力が進み、`dispatch ls` では進まない。どの契機の出力にも
+/// 依存を待つ開いた契約が contract-queued・理由 dependency で出る。
+#[test]
+fn fleet_lifecycle_triggers_a_and_e_advance_generated_and_ls_does_not() {
+    let life = Life::new();
+    let round = life.dispatch(&[]);
+    assert_eq!(round.status.code(), Some(i32::from(RC_OK)), "dispatch は rc 0: {}", super::pipe::stderr_of(&round));
+    assert!(life.generated().is_some(), "(a) の周が出力を書く: {}", super::pipe::stderr_of(&round));
+    assert_queued(&life.shown(), "a");
+    fs::remove_file(life.json_path()).expect("出力を消せる");
+    assert_eq!(life.write(&[]).status.code(), Some(i32::from(RC_OK)));
+    assert_queued(&life.shown(), "e");
+    life.retime();
+    let ls = life.ls();
+    assert_eq!(ls.status.code(), Some(i32::from(RC_OK)), "ls は rc 0: {}", super::pipe::stderr_of(&ls));
+    assert_eq!(life.generated().as_deref(), Some(LIFE_OLD), "ls では進まない");
+    let again = life.dispatch(&[]);
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "dispatch は rc 0: {}", super::pipe::stderr_of(&again));
+    assert_ne!(life.generated().as_deref(), Some(LIFE_OLD), "(a) で進む");
+    super::pipe::clean(&[&life.repo, &life.state]);
+}
+
+impl Life {
+    /// Gated PASS の便を 1 本つくる（宣言に remote は無い＝終端は push も CI も撃たず台帳の close だけ）。
+    fn gated(&self) -> String {
+        super::pipe::gated_pass(&self.repo, &self.state, &self.design, &self.state.join("lens-ran"))
+    }
+
+    /// `pipe land --run ID`（`extra` は `--terminal-only` や `--rules`）。
+    fn land(&self, id: &str, extra: &[&str]) -> Output {
+        let mut tail = vec!["--run", id];
+        tail.extend(extra);
+        super::pipe::run_pipe(&self.pipe_args(&["land"], &tail))
+    }
+
+    /// PR の形で着地した便を、偽 remote・偽 gh・偽 CI つきで `pipe retire` が通る形にする（返すのは PATH の値）。
+    #[expect(
+        clippy::expect_used,
+        reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+    )]
+    fn prepared_pr(&self, id: &str) -> String {
+        let (repo, state) = (&self.repo, &self.state);
+        let landed = super::pipe::run_pipe(&[
+            "land", "--run", id, "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(), "--pr-cmd", "true",
+        ]);
+        assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "PR 形の land は rc 0: {}", super::pipe::stderr_of(&landed));
+        let remote = state.join("remote.git");
+        super::pipe::git(state, &["init", "--bare", "-q", &remote.display().to_string()]);
+        super::pipe::git(repo, &["remote", "add", "fake", &remote.display().to_string()]);
+        let ci = state.join("life-ci.sh");
+        fs::write(&ci, "#!/bin/sh\nprintf '[{\"status\":\"completed\",\"conclusion\":\"success\"}]\\n'\n").expect("偽 CI を書ける");
+        let declaration = fs::read_to_string(repo.join(".vessel.toml")).expect("宣言を読める");
+        fs::write(repo.join(".vessel.toml"), format!("{declaration}remote = \"fake\"\nci-cmd = \"{} {{sha}}\"\n", ci.display())).expect("宣言を書ける");
+        super::pipe::git(repo, &["add", "-f", ".vessel.toml"]);
+        super::pipe::git(repo, &["commit", "-q", "-m", "terminal-decl"]);
+        let (main, branch) = (super::pipe::git(repo, &["rev-parse", "refs/heads/main"]), format!("scribe2/{id}"));
+        let tree = super::pipe::git(repo, &["rev-parse", &format!("{branch}^{{tree}}")]);
+        let merge = super::pipe::git(repo, &["commit-tree", &tree, "-p", &main, "-p", &branch, "-m", "merge"]);
+        super::pipe::git(repo, &["push", "-q", "-f", &remote.display().to_string(), &format!("{merge}:refs/heads/main")]);
+        let bin = state.join("life-bin");
+        fs::create_dir_all(&bin).expect("道具の dir を作れる");
+        let gh = bin.join("gh");
+        fs::write(&gh, format!("#!/bin/sh\nprintf '{{\"state\":\"MERGED\",\"mergeCommit\":{{\"oid\":\"{merge}\"}}}}\\n'\n")).expect("偽 gh を書ける");
+        fs::set_permissions(&gh, std::os::unix::fs::PermissionsExt::from_mode(0o755)).expect("実行権を付ける");
+        fs::set_permissions(&ci, std::os::unix::fs::PermissionsExt::from_mode(0o755)).expect("実行権を付ける");
+        format!("{}:{}", bin.display(), crate::toolbox_path(state))
+    }
+
+    /// `pipe retire --run ID`（偽 gh を PATH の先頭に）。
+    fn retire(&self, id: &str, path: &str, extra: &[&str]) -> Output {
+        let mut tail = vec!["--run", id];
+        tail.extend(extra);
+        super::pipe::run_pipe_with_path(path, &self.pipe_args(&["retire"], &tail))
+    }
+
+    /// 台帳 client の close を呼んだ回数。
+    fn closes(&self) -> usize {
+        fs::read_to_string(self.dir.join("close-log")).map(|text| text.lines().count()).unwrap_or(0)
+    }
+}
+
+/// (d) 着地の本体の close と `--terminal-only` の終端の close と `pipe retire` の close で出力が書かれ、close が落ちた周は書かれない
+/// （同じ歯の中の肯定と組）。呼び手の rc と stdout は変わらず stderr に `lifecycle=` も出ない。
+#[test]
+fn fleet_lifecycle_close_paths_advance_generated_and_a_failed_close_does_not() {
+    let failing = Life::new();
+    let id = failing.gated();
+    failing.put("close-rc", "3\n");
+    let failed = failing.land(&id, &[]);
+    assert_eq!(failed.status.code(), Some(i32::from(RC_REFUSED)), "close が落ちた終端は rc 1: {}", super::pipe::stderr_of(&failed));
+    assert_eq!(failing.generated(), None, "落ちた close の周は出力を書かない");
+    failing.put("close-rc", "0\n");
+    let replay = failing.land(&id, &["--terminal-only"]);
+    assert_eq!(replay.status.code(), Some(i32::from(RC_OK)), "撃ち直しは rc 0: {}", super::pipe::stderr_of(&replay));
+    assert_eq!(super::pipe::stdout_of(&replay).trim_end(), format!("run={id} terminal=closed:no-ci"), "終端の 1 行");
+    assert!(failing.generated().is_some(), "terminal-only の close の後に書く");
+    assert!(!super::pipe::stderr_of(&replay).contains("lifecycle="), "Written の周は stderr に出さない");
+    super::pipe::clean(&[&failing.repo, &failing.state]);
+
+    let body = Life::new();
+    let id = body.gated();
+    let landed = body.land(&id, &[]);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "着地の本体の終端は rc 0: {}", super::pipe::stderr_of(&landed));
+    assert!(body.generated().is_some(), "着地の本体の close の後に書く: {}", super::pipe::stderr_of(&landed));
+    assert_eq!(body.closes(), 1, "close は 1 回");
+    assert_queued(&body.shown(), "d");
+    super::pipe::clean(&[&body.repo, &body.state]);
+
+    let retired = Life::new();
+    let id = retired.gated();
+    let path = retired.prepared_pr(&id);
+    retired.put("close-rc", "3\n");
+    let declined = retired.retire(&id, &path, &[]);
+    assert_eq!(declined.status.code(), Some(i32::from(RC_REFUSED)), "close が落ちた retire は rc 1: {}", super::pipe::stderr_of(&declined));
+    assert_eq!(retired.generated(), None, "落ちた close の周は出力を書かない");
+    retired.put("close-rc", "0\n");
+    let out = retired.retire(&id, &path, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "retire は rc 0: {} / {}", super::pipe::stdout_of(&out), super::pipe::stderr_of(&out));
+    assert!(retired.generated().is_some(), "retire の close の後に書く");
+    assert!(!super::pipe::stderr_of(&out).contains("lifecycle="), "Written の周は stderr に出さない");
+    super::pipe::clean(&[&retired.repo, &retired.state]);
+}
+
+/// lock の待ちを短くした rules の写し（埋め込みの manifest の `fleet.lock_retry_ms` だけを 100 ms にする）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn life_fast_rules(life: &Life) -> String {
+    let body = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/manifest.toml")).expect("manifest を読める");
+    let from = "id = \"fleet.lock_retry_ms\"\nkind = \"LockRetryMs\"\nvalue = 5000";
+    assert!(body.contains(from), "行の字面が在る");
+    let path = life.state.join("life-rules.toml");
+    fs::write(&path, body.replace(from, "id = \"fleet.lock_retry_ms\"\nkind = \"LockRetryMs\"\nvalue = 100")).expect("写しを書ける");
+    path.display().to_string()
+}
+
+/// 呼び手の出力の字（repo の path と便の id を伏せる）。
+fn life_told(out: &Output, life: &Life, id: &str) -> (Option<i32>, String) {
+    let text = super::pipe::stdout_of(out).replace(&life.repo.display().to_string(), "<repo>").replace(id, "<id>");
+    (out.status.code(), text)
+}
+
+/// 契機 (a) の `pipe dispatch` と (d) の `--terminal-only` と `pipe retire` の周で、Written の周と lock を生きた pid で持たせた周の
+/// 呼び手の rc と stdout の字が等しく `lifecycle=` を持たず、stderr の `lifecycle=` の行は busy の周の `lifecycle=busy` の 1 行だけ。
+#[test]
+fn fleet_lifecycle_caller_rc_and_stdout_are_the_same_for_a_written_and_a_busy_round() {
+    let lines_of = |out: &Output| -> Vec<String> {
+        super::pipe::stderr_of(out).lines().filter(|line| line.contains("lifecycle=")).map(str::to_owned).collect()
+    };
+    let written = Life::new();
+    let rules = life_fast_rules(&written);
+    let first = written.dispatch(&["--rules", &rules]);
+    assert!(lines_of(&first).is_empty(), "Written の周は stderr に出さない: {}", super::pipe::stderr_of(&first));
+    assert!(!super::pipe::stdout_of(&first).contains("lifecycle="), "stdout に出さない");
+    assert!(written.generated().is_some());
+    let busy = Life::new();
+    busy.lock_by_a_live_process();
+    let second = busy.dispatch(&["--rules", &life_fast_rules(&busy)]);
+    assert_eq!(life_told(&second, &busy, ""), life_told(&first, &written, ""), "(a) の rc と stdout は等しい");
+    assert_eq!(lines_of(&second), ["lifecycle=busy"], "busy の周の stderr の 1 行");
+    assert_eq!(busy.generated(), None, "busy の周は書かない");
+    super::pipe::clean(&[&written.repo, &written.state, &busy.repo, &busy.state]);
+
+    assert_eq!(life_close_round(false, false), life_close_round(true, false), "(d) terminal-only の rc と stdout は等しい");
+    assert_eq!(life_close_round(false, true), life_close_round(true, true), "(d) retire の rc と stdout は等しい");
+}
+
+/// (d) の 1 周（`retire` が偽なら 1 周目の close を落としてから `--terminal-only`・真なら PR の便の retire）を撃ち、呼び手の字を返す。
+/// `locked` の周は lock を生きた pid で持たせる（stderr の `lifecycle=` の行は busy の周の 1 行だけ）。
+fn life_close_round(locked: bool, retire: bool) -> (Option<i32>, String) {
+    let life = Life::new();
+    let id = life.gated();
+    let path = if retire {
+        life.prepared_pr(&id)
+    } else {
+        life.put("close-rc", "3\n");
+        assert_eq!(life.land(&id, &[]).status.code(), Some(i32::from(RC_REFUSED)), "前提: 1 周目の close は落ちる");
+        life.put("close-rc", "0\n");
+        String::new()
+    };
+    if locked {
+        life.lock_by_a_live_process();
+    }
+    let rules = life_fast_rules(&life);
+    let out = if retire { life.retire(&id, &path, &["--rules", &rules]) } else { life.land(&id, &["--terminal-only", "--rules", &rules]) };
+    let err = super::pipe::stderr_of(&out);
+    let lines: Vec<&str> = err.lines().filter(|line| line.contains("lifecycle=")).collect();
+    assert_eq!(lines, if locked { vec!["lifecycle=busy"] } else { Vec::new() }, "stderr の lifecycle= の行: {err}");
+    let told = life_told(&out, &life, &id);
+    super::pipe::clean(&[&life.repo, &life.state]);
+    told
+}
+
+/// 台帳を読めない周は書かず、理由 `ledger` の印が残る（出力は前のまま・stderr の 1 行は `lifecycle=unreadable`）。
+#[test]
+fn fleet_lifecycle_unreadable_ledger_writes_nothing_and_marks_the_reason() {
+    let life = Life::new();
+    assert_eq!(life.write(&[]).status.code(), Some(i32::from(RC_OK)));
+    assert_eq!(life.write(&[]).status.code(), Some(i32::from(RC_OK)), "1 周目の線で進んだ印を写す");
+    life.retime();
+    life.put("list-rc", "1\n");
+    fs::write(life.repo.join(".beads/issues.jsonl"), "[]\n\n").expect("台帳の file を進められる");
+    let out = life.write(&[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "読めない周は rc 1");
+    assert_eq!(super::pipe::stderr_of(&out).trim_end(), "lifecycle=unreadable");
+    assert_eq!(life.generated().as_deref(), Some(LIFE_OLD), "出力は動かない");
+    let stale = fs::read_to_string(life.state.join("fleet").join("lifecycle.stale")).unwrap_or_default();
+    assert!(stale.contains("unreadable") && stale.contains("\"ledger\""), "理由 ledger の印: {stale}");
+    assert!(life.shown().contains("stale=unreadable"), "頭の行の stale に出る");
+    super::pipe::clean(&[&life.repo, &life.state]);
+}
