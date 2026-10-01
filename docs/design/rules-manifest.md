@@ -303,6 +303,27 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 - 却下: 75500（上限の許可の行 a〜e の見込みだけを覆い、起票済みのほかの契約の見込み約 4,450 行が入らない）／上げずに先に削る（削れる量が読めず、起票済みの契約の着地が遅れる）。
 - flip-check の入口: 変える test file は `tests/e2e/rules.rs` の 1 本で、直す歯と置き換えた歯のどちらも base（値 74000）で RED になる。
 
+## 22. lens.max_turns を 100 に上げる（契約表の行 s）
+
+- 何が起きているか（main c910d002・verified）:
+  - rules 行 `lens.max_turns` は値 30 で、[pipeline.md](./pipeline.md) §67 の行 bi が入れた。§67 の限界は「値 30 は読んだ lens の実測（2〜10 turn）からの余裕で、重い便で足りるかは着地の後に turns で見る」と書く。
+  - PATH の binary を入れ替えて上限が効き始めた後、契約の審査 4 本のうち 3 本が上限で INCONCLUSIVE（unparsed）に止まった。行の予約（31 turn）・ledger-form の行 o（31 turn）・上限の許可の行 a（31 turn を 2 回）。
+  - 直近の便 80 本の契約の審査で、1 turn を越えた 19 本の turn は 7〜81 で、31 以上が 11 本（58%）だった。gate の lens は 51 本で最大 18。
+  - user 裁定 2026-10-01T08:09Z（rules 行の値・逐語は器の裁定の event に残る・台帳の問い s2-07l.750・裁定 id s2-07l.750:20261001T0809Z-1）で、上限を 100 に上げる（実測の最大 81 に余裕を足した値）。
+- 約束（この 3 つだけ）:
+  1. `rules/manifest.toml` の行 `lens.max_turns` の `value` を 100 に・`ruling` を `user 2026-10-01T08:09Z` に・`ruled_at` を `2026-10-01` に書き換える。行の id・kind・`enabled`・位置は不変で、行は増やさない（C5）。
+  2. 値を pin している既存の歯 2 本を直す。実測: repo の test で値 30 を埋め込みの値として持つのは、次の 2 つだけである。
+     - rules の歯の file の `lens_turns_embedded_manifest_declares_the_row_with_its_ruling`（値・整数の読み手の値・裁定 id・裁定日・doc comment の値）
+     - headless の歯の file の定数（埋め込みの値の写し・裁定 id の doc comment）と、それを読む `lens_turns_passes_the_row_value_in_every_stage` の assert の文言
+     新しい値と裁定に直す。headless の lens の歯の `turns_row(30)` は不発効の行の fixture で、埋め込みの値を写していないので触らない。
+  3. 歯の名は変えない。どちらも直した後は、base（値 30）で値の比べが RED になる。
+- 触らない: `src` の全部・§67 の散文が書いたその時点の値 30（履歴）・ほかの rules 行・上限で終わった周の読み（§67 の形 4）。
+- 着地の後: lens は埋め込みの manifest を読むので、PATH の binary を入れ替えるまで上限は 30 のまま（運用の手順・本行の done の外）。上限で止まった行（ledger-form の行 o・上限の許可の行 a）は、入れ替えの後に撃ち直す。
+- 却下:
+  - 段ごとに上限の行を分ける（契約の審査と gate で別の値）: 行と kind が 1 つずつ増え、§67 の「lens の turn の上限は 1 つ」の決めを覆す。gate の lens の実測は最大 18 で、100 でも費用は token の上限（`gate.token_cap`）が別に縛る。
+  - 60（実測の p50 に近い値）: 31 以上の 11 本のうち 4 本（64・77・81 ほか）が残る。
+- flip-check の入口: 変える test file は rules の歯の file と headless の歯の file の 2 本で、直した歯はどちらも base（値 30）で RED になる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -489,4 +510,14 @@ write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs"
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_cli_get_returns_value", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_core_lines_82000_"]
 size = "S"
 done = "§21 の約束 1〜3 のとおり: 埋め込み manifest の R-C4-1 が値 82000 と裁定 id user 2026-10-01T04:49Z と ruled_at 2026-10-01 を持ち、rules get R-C4-1 が 82000 を出す歯と上げた行を名指す歯（rules_core_lines_82000_ で始まる・前の値の名の歯は置き換えて残さない）が緑で、§4.1 の表が同じ値と裁定を写して前の値 74000 の裁定を履歴に残し、src と憲法 §3 の閾値セルは不変で、xtask の閾値の読み手と歯（limits_match_rules_manifest・rules_manifest・real_limits）は現物の manifest から値を読むので 1 字も変えずに緑"
+
+[[contract]]
+id = "s"
+title = "lens.max_turns（lens の turn の上限）を 30 → 100 に上げる — 値と裁定 id と ruled_at だけを書き換え、埋め込みの値を pin する歯 2 本を新しい値と裁定に直す（裁定 user 2026-10-01T08:09Z）"
+req = ["FR5", "FR9"]
+section = "22"
+write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "crates/scribe2-boundary/tests/e2e/headless.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_turns_embedded_manifest_declares_the_row_with_its_ruling", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_turns_passes_the_row_value_in_every_stage"]
+size = "S"
+done = "(1) 埋め込み manifest の lens.max_turns は値 100・裁定 id user 2026-10-01T08:09Z・裁定日 2026-10-01 で、kind LensMaxTurns・発効・位置と行の数は変わらない〔直す既存の歯 lens_turns_embedded_manifest_declares_the_row_with_its_ruling の値・整数の読み手の値・裁定 id・裁定日の pin〕 (2) --rules を渡さない lens は、段に依らず argv に --max-turns 100 の対をちょうど 1 つ持つ〔直す既存の歯 lens_turns_passes_the_row_value_in_every_stage の埋め込みの値の定数〕 base は値 30 なので (1)(2) の値の比べが RED"
 <!-- contracts:end -->
