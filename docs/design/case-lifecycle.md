@@ -97,15 +97,15 @@
 | row-unbeaded・epic-closable・misfit | seat | |
 | requirement-unrowed | seat | 閾値越えに数えない（FR90） |
 
-contract-queued の理由から手番（語の集合が `WAIT_REASONS` を含むことを歯で測る。dispatcher の後の行が足す語 unreflected-ruling・floor は先に置く）:
+contract-queued の理由から手番（語の集合が `WAIT_REASONS` を含むことを歯で測る。dispatcher の後の行が足す語 unreflected-ruling・floor と、[row-review.md](./row-review.md) の行 f・g が足す語 reserved・sibling は先に置く）:
 
 | 理由 | 手番 |
 |---|---|
 | dependency・overlap・host-busy・launched | vessel |
-| hold・no-design-pointer・unreflected-ruling・floor | seat |
+| hold・no-design-pointer・unreflected-ruling・floor・reserved・sibling | seat |
 | settled | none（最新の便の部品が手番を持つ） |
 
-- `admission` は contract-refused に当たり、queued の部品にはならない。ただし表は `WAIT_REASONS` の 8 語を全部覆う（語が増えたら表の歯が落ちる）ので、admission を contract-refused と同じ手番 seat で持つ（表は 10 語）。表に無い語は misfit `no-phase` へ倒す（fail-closed）。
+- `admission` は contract-refused に当たり、queued の部品にはならない。ただし表は `WAIT_REASONS` の 8 語を全部覆う（語が増えたら表の歯が落ちる）ので、admission を contract-refused と同じ手番 seat で持つ（表は 10 語・row-review.md の行 f と g が 1 語ずつ足して 12 語）。表に無い語は misfit `no-phase` へ倒す（fail-closed）。
 
 ## 4. misfit の理由の語（閉じた 15 語）
 
