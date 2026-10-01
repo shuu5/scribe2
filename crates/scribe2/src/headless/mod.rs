@@ -42,7 +42,7 @@ pub mod lens {
     use crate::cli_args;
     use crate::cli_outcome::Outcome;
 
-    /// lens が受ける flag（本体の `KNOWN_FLAGS` と同じ 8 つ・宣言順・`--stage` の値は本体が裁く）。
+    /// lens が受ける flag（本体の `KNOWN_FLAGS` と同じ 9 つ・宣言順・`--stage` の値は本体が裁く・9 つ目は値を取らない）。
     const ALLOWED: &[cli_args::Allowed] = &[
         value("--contract"),
         value("--worktree"),
@@ -52,6 +52,7 @@ pub mod lens {
         value("--claude"),
         value("--cgroup-root"),
         value("--stage"),
+        cli_args::Allowed::switch("--print-version"),
     ];
 
     /// `lens` を 1 回。

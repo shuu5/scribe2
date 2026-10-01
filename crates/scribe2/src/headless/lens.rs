@@ -74,6 +74,7 @@ use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::json_lite;
 use crate::fleet::select::Model;
 use crate::fleet::Usage;
+use crate::hook::vessel::digest::fnv1a_64;
 use crate::pipe::confine;
 use crate::pipe::contract::Contract;
 use crate::pipe::move_proof::RULINGS_FILE;
@@ -106,8 +107,23 @@ const ROW_CAP: &str = "gate.token_cap";
 const ROW_TURNS: &str = "lens.max_turns";
 
 /// lens が受ける flag の全部（この外は未知の引数として断る）。
-const KNOWN_FLAGS: [&str; 8] =
-    ["--contract", "--worktree", "--permission-mode", "--rules", "--account-dir", "--claude", "--cgroup-root", "--stage"];
+const KNOWN_FLAGS: [&str; 9] = [
+    "--contract",
+    "--worktree",
+    "--permission-mode",
+    "--rules",
+    "--account-dir",
+    "--claude",
+    "--cgroup-root",
+    "--stage",
+    PRINT_VERSION,
+];
+
+/// 版の 1 行だけを stdout に出す flag（値を取らない・claude を起こさず、`--contract` / `--worktree` を要らず読まない・設計 row-review.md §5）。
+const PRINT_VERSION: &str = "--print-version";
+
+/// 版の 1 行の見出しの語。
+const VERSION_HEAD: &str = "lens-version";
 
 /// 段の flag（値は [`STAGE_PRELENS`] だけ・設計 pipeline.md §61）。
 const STAGE_FLAG: &str = "--stage";
@@ -138,7 +154,7 @@ const POLL: Duration = Duration::from_secs(1);
 /// 使い方の 1 行。
 pub fn usage() -> String {
     format!(
-        "usage: {} lens --contract F --worktree D [--permission-mode M] [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage prelens|memo] < diff",
+        "usage: {} lens --contract F --worktree D [--permission-mode M] [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage prelens|memo] [--print-version] < diff",
         crate::name::NAME
     )
 }
@@ -162,7 +178,7 @@ fn unknown_arg(args: &[String]) -> Option<&str> {
             return Some(arg);
         }
         at += 1;
-        if args.get(at).is_some_and(|value| !value.starts_with("--")) {
+        if arg != PRINT_VERSION && args.get(at).is_some_and(|value| !value.starts_with("--")) {
             at += 1;
         }
     }
@@ -215,6 +231,9 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(error) => return refusal("lens", &error, usage()),
     };
+    if args.iter().any(|arg| arg == PRINT_VERSION) {
+        return version(args, row);
+    }
     let parsed = (|| {
         if let Some(found) = unknown_arg(args) {
             return Err(format!("未知の引数 {found}"));
@@ -270,6 +289,35 @@ pub fn dispatch(args: &[String]) -> Outcome {
         &call_of(&prompt, (model, effort, turns), claude.as_deref(), account.as_deref(), &worktree),
         Path::new(cgroup_root.as_deref().unwrap_or(confine::CGROUP_ROOT)),
     )
+}
+
+/// `--print-version` の 1 回（設計 row-review.md §5 行 h）: claude を起こさず、lens の子が claude を起こす時と同じ組み立て
+/// （[`rows_of`] の cap と [`call_of`] が組む [`Call`] の欄のうち prompt の本文と path の値を除いた全部）と組み込みの雛形 3 本の
+/// 本文の FNV-1a 64 を `key=value` で並べた 1 行を stdout に出す。`--contract` / `--worktree` は読まない。rules 行が解けない周は
+/// claude を起こす周と同じ rc と断りの 1 行で、stdout は空。
+fn version(args: &[String], row: &str) -> Outcome {
+    if let Some(found) = unknown_arg(args) {
+        return Outcome::failed(RC_REFUSED, vec![format!("lens: 未知の引数 {found}"), usage()]);
+    }
+    let (cap, model, effort, turns) = match rows_of(args, row) {
+        Ok(found) => found,
+        Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")),
+    };
+    let call = call_of("", (model, effort, turns), None, None, "");
+    let pairs = [
+        ("model", call.model.unwrap_or_default().to_owned()),
+        ("effort", call.effort.unwrap_or_default().to_owned()),
+        ("cap", cap.to_string()),
+        ("tools", call.tools.unwrap_or_default().to_owned()),
+        ("permission", call.permission_mode.to_owned()),
+        ("output", call.output.flag().unwrap_or("text").to_owned()),
+        ("turns", call.max_turns.map_or_else(String::new, |found| found.to_string())),
+        ("lens.txt", fnv1a_64(TEMPLATE.as_bytes())),
+        ("lens-contract.txt", fnv1a_64(CONTRACT_TEMPLATE.as_bytes())),
+        ("lens-memo.txt", fnv1a_64(MEMO_TEMPLATE.as_bytes())),
+    ];
+    let body: Vec<String> = pairs.iter().map(|(key, value)| format!("{key}={value}")).collect();
+    Outcome::ok_line(format!("{VERSION_HEAD} {}", body.join(" ")))
 }
 
 /// claude を 1 回起こす材料（契約の審査・diff の審査・memo の審査が同じ 1 本で組む）。

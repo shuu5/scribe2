@@ -1038,3 +1038,152 @@ fn lens_turns_error_max_turns_envelope_reads_as_inconclusive_naming_the_row() {
     let out = lens_stdout_with(&success);
     assert!(out.contains("\"verdict\":\"PASS\"") && !out.contains("lens.max_turns"), "success の封筒は PASS を採る: {out}");
 }
+
+/// 版の 1 行を求める rules の写しの行の値（cap・`lens.model`・`pipe.precheck_lens_model`・`runner.effort`・`pipe.size_s_lines`）。
+#[derive(Clone, Copy)]
+struct VersionRows {
+    cap: u64,
+    lens_model: &'static str,
+    prelens_model: &'static str,
+    effort: &'static str,
+    size_s_lines: u64,
+}
+
+/// 基準の行の値（どの欄も他と違う値で、1 つだけ変えた周が 1 対で測れる）。
+const VERSION_BASE: VersionRows =
+    VersionRows { cap: 4096, lens_model: "opus", prelens_model: "haiku", effort: "high", size_s_lines: 100 };
+
+/// `pipe.size_s_lines` の行（版に載らない行の代表・発効）。
+fn size_row(lines: u64) -> String {
+    format!("id = \"pipe.size_s_lines\"\nkind = \"PipeSizeSLines\"\nvalue = {lines}\nenabled = true\n")
+}
+
+/// [`VersionRows`] の写しを `name` で書く。
+fn version_rules(dir: &Path, name: &str, rows: VersionRows) -> PathBuf {
+    rules_with_rows(
+        dir,
+        name,
+        &[
+            cap_row(rows.cap),
+            lens_model_row(rows.lens_model),
+            prelens_model_row(rows.prelens_model),
+            effort_row(rows.effort),
+            size_row(rows.size_s_lines),
+        ],
+    )
+}
+
+/// `lens --print-version --rules R` を撃つ（`extra` は後ろに足す・`--claude` は偽 claude）。
+fn run_version(dir: &Path, rules: &Path, extra: &[&str], claude: &Path) -> Output {
+    let mut args = vec!["lens", "--print-version", "--rules"];
+    let rules = rules.display().to_string();
+    let claude = claude.display().to_string();
+    args.extend([rules.as_str(), "--claude", claude.as_str()]);
+    args.extend(extra);
+    run_bin(dir, &args, b"")
+}
+
+/// 成功した版の 1 行（rc 0・stdout がちょうど 1 行・stderr 0 byte を確かめて返す）。
+fn version_line(out: &Output, label: &str) -> String {
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{label}: {}", stderr_of(out));
+    assert!(out.stderr.is_empty(), "{label}: stderr は 0 byte: {}", stderr_of(out));
+    let text = stdout_of(out);
+    assert_eq!(text.lines().count(), 1, "{label}: stdout はちょうど 1 行: {text}");
+    assert!(text.starts_with("lens-version "), "{label}: lens-version で始まる: {text}");
+    text.trim_end().to_owned()
+}
+
+/// (a)(d) `--print-version` は `--contract` と `--worktree` が無くても rc 0 で版の 1 行だけを出し、偽 claude は 0 回（痕跡で測る）。
+/// 無い path を渡しても読まず、同じ行を出す。
+#[test]
+fn headless_lens_version_prints_one_line_without_contract_or_worktree_and_never_calls_claude() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let rules = version_rules(&dir, "base.toml", VERSION_BASE);
+    let bare = version_line(&run_version(&dir, &rules, &[], &claude), "flag だけ");
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    for key in ["model=", "effort=", "cap=", "tools=", "permission=", "output=", "turns=", "lens.txt=", "lens-contract.txt=", "lens-memo.txt="] {
+        assert_eq!(bare.matches(&format!(" {key}")).count(), 1, "{key} を 1 つだけ持つ: {bare}");
+    }
+    assert!(bare.contains(" tools=Read,Grep,Glob ") && bare.contains(" permission=dontAsk ") && bare.contains(" output=json "), "{bare}");
+    assert!(bare.contains(" cap=4096 ") && bare.contains(" turns=30 "), "{bare}");
+    let missing = dir.join("no-such-dir");
+    let gone = missing.display().to_string();
+    let away = run_version(&dir, &rules, &["--contract", &gone, "--worktree", &gone], &claude);
+    assert_eq!(version_line(&away, "無い path"), bare, "契約と worktree は読まない");
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    clean(&[&dir]);
+}
+
+/// (b) rules の写しの `lens.model`・`runner.effort`・`gate.token_cap` をそれぞれ 1 つだけ変えた 3 回はどれも基準の行と違い、
+/// `pipe.size_s_lines` だけを変えた回と同じ写しの 2 回目は基準の行と同じ。
+#[test]
+fn headless_lens_version_changes_with_each_row_it_carries_and_only_those() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{}\n", false, 0);
+    let line = |name: &str, rows: VersionRows| {
+        let rules = version_rules(&dir, name, rows);
+        version_line(&run_version(&dir, &rules, &[], &claude), name)
+    };
+    let base = line("base.toml", VERSION_BASE);
+    for (name, rows) in [
+        ("model.toml", VersionRows { lens_model: "sonnet", ..VERSION_BASE }),
+        ("effort.toml", VersionRows { effort: "low", ..VERSION_BASE }),
+        ("cap.toml", VersionRows { cap: 8192, ..VERSION_BASE }),
+    ] {
+        assert_ne!(line(name, rows), base, "{name}: 1 行変えれば版の行も変わる");
+    }
+    assert_eq!(line("size.toml", VersionRows { size_s_lines: 7, ..VERSION_BASE }), base, "載せない行を変えても版は同じ");
+    assert_eq!(line("again.toml", VERSION_BASE), base, "同じ写しの 2 回目は同じ行");
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    clean(&[&dir]);
+}
+
+/// (c) model の値は lens の子が claude を起こす時と同じ rules 行から読む: `--stage` 無しと `--stage memo` は `lens.model`・
+/// `--stage prelens` は `pipe.precheck_lens_model`。
+#[test]
+fn headless_lens_version_reads_the_model_row_of_the_stage() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{}\n", false, 0);
+    let rules = version_rules(&dir, "stages.toml", VERSION_BASE);
+    for (extra, want) in [(&[][..], "opus"), (&["--stage", "memo"][..], "opus"), (&["--stage", "prelens"][..], "haiku")] {
+        let line = version_line(&run_version(&dir, &rules, extra, &claude), &format!("{extra:?}"));
+        assert!(line.contains(&format!(" model={want} ")), "{extra:?}: model={want}: {line}");
+    }
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    clean(&[&dir]);
+}
+
+/// (e) `--rules` の file が無い写しと `gate.token_cap` の行を欠く写しは、claude を起こす周と同じ rc と同じ断りの 1 行を出し、
+/// stdout は 0 byte。
+#[test]
+fn headless_lens_version_refuses_like_the_claude_run_when_rows_cannot_be_read() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{}\n", false, 0);
+    let contract = contract_in(&dir);
+    let no_cap = rules_with_rows(&dir, "no-cap.toml", &[lens_model_row(LENS_MODEL), effort_row(RUNNER_EFFORT)]);
+    for (name, rules) in [("file が無い", dir.join("absent.toml")), ("cap の行が無い", no_cap)] {
+        let version = run_version(&dir, &rules, &[], &claude);
+        let rules = rules.display().to_string();
+        let run = run_bin_owned(&dir, &lens_args(&contract, &dir, &["--rules", &rules], &claude), b"diff");
+        assert_eq!(version.status.code(), Some(i32::from(RC_BROKEN)), "{name}: {}", stderr_of(&version));
+        assert_eq!(version.status.code(), run.status.code(), "{name}: claude を起こす周と同じ rc");
+        assert_eq!(stderr_of(&version), stderr_of(&run), "{name}: 同じ断りの 1 行");
+        assert_eq!(stderr_of(&version).lines().count(), 1, "{name}: 断りは 1 行: {}", stderr_of(&version));
+        assert!(version.stdout.is_empty(), "{name}: stdout は 0 byte: {}", stdout_of(&version));
+    }
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
+    clean(&[&dir]);
+}
+
+/// (f) help の lens の頁は `--print-version` を 1 行だけ載せ、usage も 1 つだけ載せる。
+#[test]
+fn headless_lens_version_flag_is_listed_once_on_the_help_page() {
+    let dir = tmp();
+    let out = run_bin(&dir, &["help", "lens"], b"");
+    let page = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert_eq!(page.lines().filter(|line| line.trim_start().starts_with("--print-version")).count(), 1, "頁の flag の行: {page}");
+    assert_eq!(vessel::headless::lens::usage().matches("--print-version").count(), 1, "usage は flag を 1 つ載せる");
+    clean(&[&dir]);
+}

@@ -318,7 +318,7 @@ pub const TABLE: &[Entry] = &[
             "asks Claude to judge it against the contract, and prints the verdict with its",
             "findings. It changes nothing in the worktree.",
         ],
-        form: "{NAME} lens --contract F --worktree D [--permission-mode M] [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage prelens|memo] < diff",
+        form: "{NAME} lens --contract F --worktree D [--permission-mode M] [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage prelens|memo] [--print-version] < diff",
         subcommands: NO_SUBCOMMANDS,
         flags: &[
             ("--contract F", "Contract file the diff is judged against."),
@@ -328,6 +328,7 @@ pub const TABLE: &[Entry] = &[
             ("--claude PATH", "Claude program to start instead of the default one."),
             ("--cgroup-root DIR", "cgroup under which the session is confined."),
             ("--stage prelens|memo", "prelens: pre-check lens; memo: memo review (--contract F = its material)."),
+            ("--print-version", "Print one line naming this reviewer's version; starts no session."),
         ],
         examples: &["{NAME} lens --contract C --worktree WT < diff"],
         see: &["docs/design/pipeline.md", "docs/design/gate-cost.md"],
