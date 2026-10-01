@@ -2004,3 +2004,32 @@ terms:
     definition: 消費の上限の rules 行のうち rules 行 pipe.permit_rows が名指す、 許可の読み手を持つ 1 行 (予算 cap の行) を、 bead 1 つに限って manifest の値より大きい有限の値へ上げる記録 (ADR-0106・SRS FR110・FR111・設計 docs/design/limit-permit.md)。 event log の kind LimitPermitted の 1 件で (取り消しは同じ kind で detail が revoked の別の記帳で、 許可に数えない)、 対話の session の経路 (機械の値 chat) の発話に結んだ裁定 id を要り、 期限 (上限は rules 行 pipe.permit_max_h)・bead の着地・同じ bead と行の新しい記帳・取り消しで切れ、 同じ bead と行の最新の記帳がその許可自身で値が manifest の値より大きい周だけ効く。 読むのはその bead の便の gate の予算の照合と gate が起こす lens だけで、 manifest の値は変えない。 上限を外す形は持たない。 event の kind と口 pipe permit はこの語の別名として書く。
     relationships: [rules 行, manifest, event log, 裁定 id, 裁定 event, 発話 event, 発話の経路, 対話面, 台帳の問い, gate, lens]
     flagged_ambiguities: [上限の許可 (bead 1 つの消費の上限を上げる記録・ADR-0106) と上限の余地 (受付が見込み行数と比べる file の上限との差・ADR-0057) と上限停止 (口座残量の上限で便が止まること) は別, 型の名 Allowance は口座残量の型で使用済みなので、 上限の許可の訳に使わない, 上限の許可 (記帳と取り消しは権能 approve の手・FR41) と承認 event (FR16・席が逐語を渡すので許可の根拠にしない) は別, 断りの語 landed と状態の語 landed (bead の便が着地済み) は着地の形の close の理由 landed <sha> ci=… と同じ字で別の欄]
+  # ---------------------------------------------------------------- 台帳の形の写し (ADR-0107)
+  - canonical: 台帳の形の門
+    domain: consumer
+    aliases: [ledger shape gate]
+    definition: 起票の門で止まらなかった bd / bdw の 6 つの書き (create の付け先と plan・update の付け先と型と数えに戻す状態・dep remove・reopen) に台帳を 1 回読み、 根に着かない・溢れた親・親子の輪・根から外す書きと親の無い plan の node を、 直す 1 行つきで断る hook の判定 (設計 docs/design/ledger-form.md §12)。 記録の語は起票の門と同じ ledger-deny。 ADR-0107 の後は、 内容の鍵が今の store と字で等しい周に台帳の形の写しで測る。
+    relationships: [起票の門, 台帳, hook, 台帳の形の写し, 内容の鍵]
+  - canonical: 台帳の形の写し
+    domain: consumer
+    aliases: [ledger shape copy]
+    definition: 台帳の読み 1 回の出力から、 台帳の形の門の判定に要る 4 つの欄 (id・status・型・parent-child の辺) だけを写した state dir の直下の file (ADR-0107・設計 docs/design/ledger-form.md §20)。 repo の root ごとに 1 つで、 1 行目が内容の鍵・2 行目が bd の list と同じ key の名の JSON 配列。 書くのは先読みの口だけで、 台帳の形の門は鍵が今の鍵と字で等しい周だけ読む。 導出物で真実を持たず、 消しても判定は変わらない。
+    relationships: [台帳の形の門, 先読みの口, 内容の鍵, state dir, 台帳 adapter]
+    flagged_ambiguities: [台帳の形の写し (state dir の file・ADR-0107) と、 台帳の形の門が読みの後に書きの効きを足していく手の中の写し (code の Ledger) と、 bd が書き出す mirror (.beads の issues.jsonl) と、 写しの工程 (ADR-0051) は別]
+  - canonical: 先読みの口
+    domain: consumer
+    aliases: [prefetch mouth, ledger prefetch]
+    definition: 席が hook の外で撃つ器の口 ledger prefetch (ADR-0107・設計 docs/design/ledger-form.md §20)。 内容の鍵を読みの前後で測り、 rules 行 seat.ledger_timeout_s の待ち上限で台帳を 1 回読み、 前後の鍵が等しい周だけ台帳の形の写しを書く。 書かない周は閉じた 7 語の理由で断る。 hook の予算の外に在る。
+    relationships: [台帳の形の写し, 内容の鍵, 台帳 adapter, rules 行, 席]
+  - canonical: 内容の鍵
+    domain: consumer
+    aliases: [store content key]
+    definition: 台帳の store の中身が写した時から変わっていないかを測る 1 行 (ADR-0107)。 写しの形の版・root の path・台帳の印の root と世代と chunk 数・journal の byte 長を並べ、 台帳の印が embedded の store の形で journal を読める周だけ在る。 bd 1.1.0 では読みで動かず書きで動く (実測・bd の版を上げる便が測り直す)。
+    relationships: [台帳の印, 台帳の形の写し, 先読みの口, 台帳の形の門]
+    flagged_ambiguities: [内容の鍵 (写しを使ってよいかを測る 1 行・ADR-0107) と、 入力の印 (局面の出力が読んだ入力の目印・ADR-0088) と、 索引の鍵 (code の索引・ADR-0105) は別]
+  - canonical: 台帳の印
+    domain: consumer
+    aliases: [ledger mark]
+    definition: 入力の印のうち台帳の分 (ADR-0088・設計 docs/design/case-lifecycle.md §5.3)。 embedded の store を持つ台帳は store の目次の file (manifest) の 1 行から root・世代・chunk 数を組み、 store の無い台帳は issues.jsonl の長さと更新時刻で、 bd も git も撃たずに読む。 ADR-0107 の内容の鍵はこの印を使い回す。
+    relationships: [入力の印, 局面の出力, 古さの印, 内容の鍵]
+    flagged_ambiguities: [store の目次の file (dolt の manifest) は rules の manifest (規則の値の唯一の置き場) と別の file]
