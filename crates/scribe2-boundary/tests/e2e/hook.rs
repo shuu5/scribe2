@@ -20,6 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
+use vessel::fleet::lifecycle_mark as lmark;
 use vessel::fleet::{json_lite, Registration};
 use vessel::hook::vessel::digest::{self, PluginRecord};
 use vessel::hook::precompact::{self, Slot, TEXT_WIDTH};
@@ -98,12 +99,21 @@ fn run_vessel(args: &[&str]) -> Output {
 }
 
 /// `hook` を binary で 1 回撃つ。payload は stdin へ流す。
+fn run_hook_args(args: &[&str], payload: &str) -> Output {
+    run_hook_with(args, payload, None)
+}
+
+/// [`run_hook_args`] の本体（`path` が在れば子の PATH をそれへ替える・shim を先に置く歯の口）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn run_hook_args(args: &[&str], payload: &str) -> Output {
-    let mut child = Command::new(bin())
+fn run_hook_with(args: &[&str], payload: &str, path: Option<&str>) -> Output {
+    let mut command = Command::new(bin());
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let mut child = command
         .arg("hook")
         .args(args)
         .stdin(Stdio::piped())
@@ -3011,5 +3021,273 @@ fn group_record(account: &str, previous: &str) -> String {
 /// 移動中の 1 行（器の字面を借りない）。
 fn moving_line(row: &str, current: &str) -> String {
     format!("group={GROUP_NAME} row={row} current={current} — 器が移動中: 作業記憶を台帳と git に残して待つ（/exit は器が送る）")
+}
+
+// ─────────────── 門が通した周の古さの印（設計 case-lifecycle.md §14 行 e・FR90 / AC60・接頭辞 `hook_stale_mark_`） ───────────────
+//
+// 台帳の書きと `gh pr merge` が門を通った周に `lifecycle.stale` へ印が付く（局面の出力は書き直さない）。bd と git の shim は呼びを
+// file へ記す（git の shim は本物へ渡す）。出力は `fleet lifecycle write` で作り、印の値は読み手を借りずに fixture から組む。
+
+/// embedded の台帳の manifest（root `rootA`・gc の世代 `gc0`・journal 1 つの chunks が `chunks`）。
+fn stale_manifest(chunks: u64) -> String {
+    format!("5:nbs:__DOLT__:lock:rootA:gc0:{}:{chunks}", "v".repeat(32))
+}
+
+/// manifest の fixture が持つ台帳の印（書きの前の値）。
+fn stale_ledger(chunks: u64) -> lmark::Value {
+    lmark::Value::Ledger(lmark::Ledger::Noms {
+        root: "rootA".to_owned(),
+        generation: digest::fnv1a_64(b"gc0"),
+        chunks,
+    })
+}
+
+/// 通る `gh pr merge`（本文に発端の trailer を持つ）。
+fn stale_merge_command() -> String {
+    let mut chars = NAME.chars();
+    let head: String = chars.next().map(|first| first.to_uppercase().to_string()).unwrap_or_default();
+    format!("gh pr merge 1 --squash --body 'x\n\n{head}{}-Source: s2-a.1'", chars.as_str())
+}
+
+/// 通る台帳の書き。
+const STALE_WRITE: &str = "bdw update s2-1 --status open";
+
+/// 親 dir ごと書く。
+fn put_file(path: &Path, text: &str) {
+    assert!(path.parent().is_some_and(|dir| fs::create_dir_all(dir).is_ok()), "{} の親を作れる", path.display());
+    assert!(fs::write(path, text).is_ok(), "{} を書けた", path.display());
+}
+
+/// 実行できる script を置く。
+fn put_script(path: &Path, text: &str) {
+    put_file(path, text);
+    let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+    assert!(fs::set_permissions(path, mode).is_ok(), "{} に実行権を付けた", path.display());
+}
+
+/// 台帳の manifest と main の ref を持つ置き場（出力はまだ無い）。
+struct StalePlace {
+    repo: TmpDir,
+    state: TmpDir,
+    shims: TmpDir,
+}
+
+impl StalePlace {
+    fn new() -> Self {
+        let repo = git_repo();
+        git(&repo, &["branch", "-M", "main"]);
+        git(&repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/main"]);
+        let state = linked(&repo);
+        put_file(&repo.join(".beads/metadata.json"), r#"{"dolt_mode":"embedded","dolt_database":"beads"}"#);
+        let place = Self { repo, state, shims: tmp() };
+        place.manifest(7);
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let real = std::env::split_paths(&path).map(|dir| dir.join("git")).find(|found| found.is_file());
+        let log = place.shims.join("calls.log");
+        put_script(&place.shims.join("bd"), &format!("#!/bin/sh\necho bd >> {}\necho '[]'\n", log.display()));
+        let real = real.unwrap_or_else(|| PathBuf::from("/usr/bin/git"));
+        put_script(&place.shims.join("git"), &format!("#!/bin/sh\necho git >> {}\nexec {} \"$@\"\n", log.display(), real.display()));
+        place
+    }
+
+    fn manifest(&self, chunks: u64) {
+        put_file(&self.repo.join(".beads/embeddeddolt/beads/.dolt/noms/manifest"), &stale_manifest(chunks));
+    }
+
+    /// shim を先に置いた PATH で `hook pre-tool-use` を撃つ。
+    fn hook_at(&self, cwd: &Path, command: &str) -> Output {
+        let shimmed = format!("{}:{}", self.shims.display(), std::env::var("PATH").unwrap_or_default());
+        let project = cwd.display().to_string();
+        run_hook_with(&["pre-tool-use", "--project", &project], &bash_payload(cwd, command), Some(&shimmed))
+    }
+
+    /// 通る周（rc 0・0 byte）を撃つ。
+    fn pass(&self, command: &str) {
+        assert_silent(&self.hook_at(&self.repo, command), command);
+    }
+
+    /// bd と git の shim の呼びの数。
+    fn calls(&self) -> usize {
+        fs::read_to_string(self.shims.join("calls.log")).map_or(0, |text| text.lines().count())
+    }
+
+    /// 局面の出力を `fleet lifecycle write` で作る（印の file も空の marks で作られる）。
+    fn output(&self) {
+        let bd = self.shims.join("bd").display().to_string();
+        let (state, repo) = (self.state.display().to_string(), self.repo.display().to_string());
+        let out = self.fleet(&["write", "--state-dir", &state, "--repo", &repo, "--bd", &bd]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "fleet lifecycle write は rc 0: {}", stderr_text(&out));
+    }
+
+    #[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+    fn fleet(&self, args: &[&str]) -> Output {
+        Command::new(bin()).arg("fleet").arg("lifecycle").args(args).output().expect("binary を起動できる")
+    }
+
+    /// 全部の書き直しを 1 回（出力が古ければ rename して、印の消えを測る）。
+    fn rewrite(&self) {
+        self.output();
+    }
+
+    /// event log に 1 行足す（event log だけの進み）。
+    #[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+    fn record(&self, run: &str) {
+        let state = self.state.display().to_string();
+        let out = Command::new(bin())
+            .args(["fleet", "record", "--kind", "RunCreated", "--run", run, "--bead", "b1", "--state-dir", &state])
+            .output()
+            .expect("binary を起動できる");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "fleet record は rc 0: {}", stderr_text(&out));
+    }
+
+    /// main と origin の main を 1 つ進め、その sha を返す。
+    fn advance_main(&self) -> String {
+        git(&self.repo, &["commit", "-q", "--allow-empty", "-m", "next"]);
+        git(&self.repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/main"]);
+        git(&self.repo, &["rev-parse", "refs/heads/main"])
+    }
+
+    /// 付いた印（種類と値・file の順）。無いか読めない周は空。
+    fn marks(&self) -> Vec<(lmark::Kind, lmark::Value)> {
+        match lmark::read_stale(&self.state) {
+            lmark::Stale::Marks(found) => found.into_iter().map(|mark| (mark.kind, mark.value)).collect(),
+            lmark::Stale::Absent | lmark::Stale::Unreadable => Vec::new(),
+        }
+    }
+
+    /// 出力の bytes（書き直しを撃たない証拠）。
+    fn json(&self) -> Vec<u8> {
+        fs::read(lmark::fleet_dir(&self.state).join(lmark::JSON_FILE)).unwrap_or_default()
+    }
+
+    fn main_sha(&self) -> String {
+        git(&self.repo, &["rev-parse", "refs/remotes/origin/main"])
+    }
+}
+
+/// (1)(2) bdw の update が通った周に ledger-gate の印が付き、値は書きの前の manifest の印・出力の bytes は変わらない。断られた書き
+/// （起票の門）と読みだけの bd（`bd --readonly list`・`bd show`）では付かない。
+#[test]
+fn hook_stale_mark_ledger_write_carries_the_ledger_value_and_a_read_or_a_denied_write_carries_none() {
+    let place = StalePlace::new();
+    place.output();
+    let before = place.json();
+    assert!(!before.is_empty(), "出力が在る");
+    let denied = place.hook_at(&place.repo, "bdw create --title=x --labels intake:memo");
+    assert_eq!(denied.status.code(), Some(i32::from(RC_BROKEN)), "起票の門が断る: {}", stderr_text(&denied));
+    assert!(place.marks().is_empty(), "断られた書きには付かない");
+    for command in ["bd --readonly list", "bd show s2-1", "bd list --json"] {
+        place.pass(command);
+        assert!(place.marks().is_empty(), "{command}: 読みだけの bd には付かない");
+    }
+    place.pass(STALE_WRITE);
+    assert_eq!(place.marks(), [(lmark::Kind::LedgerGate, stale_ledger(7))], "通った書きに書きの前の台帳の印");
+    assert_eq!(place.json(), before, "印を付けた周は出力を書き直さない");
+    clean(&[&place.repo, &place.state, &place.shims]);
+}
+
+/// (3) `gh pr merge` が通った周に merge-gate の印が付き、値は origin/main の sha（loose の ref・packed-refs だけ・worktree でも同じ）。
+/// `gh pr view` には付かない。
+#[test]
+fn hook_stale_mark_merge_carries_the_main_sha_from_a_loose_ref_a_packed_refs_and_a_worktree() {
+    let place = StalePlace::new();
+    place.output();
+    place.pass("gh pr view 1");
+    assert!(place.marks().is_empty(), "gh pr view には付かない");
+    place.pass(&stale_merge_command());
+    assert_eq!(place.marks(), [(lmark::Kind::MergeGate, lmark::Value::Main(place.main_sha()))], "loose の ref");
+    let packed = place.advance_main();
+    git(&place.repo, &["pack-refs", "--all"]);
+    assert!(!place.repo.join(".git/refs/remotes/origin/main").exists(), "loose の ref は packed-refs へ移った");
+    place.pass(&stale_merge_command());
+    assert_eq!(place.marks(), [(lmark::Kind::MergeGate, lmark::Value::Main(packed.clone()))], "packed-refs だけ・後の印が置き換える");
+    let loose = place.advance_main();
+    let parent = tmp();
+    let tree = parent.join("wt");
+    git(&place.repo, &["worktree", "add", "-q", &tree.display().to_string(), "-b", "wt"]);
+    assert!(fs::copy(place.repo.join(MARKER), tree.join(MARKER)).is_ok(), "marker は repo の木に在る（fixture は追跡しないので写す）");
+    git(&tree, &["commit", "-q", "--allow-empty", "-m", "wt only"]);
+    assert_ne!(git(&tree, &["rev-parse", "HEAD"]), loose, "worktree の HEAD は main と違う");
+    assert_silent(&place.hook_at(&tree, &stale_merge_command()), "worktree の merge");
+    assert_eq!(place.marks(), [(lmark::Kind::MergeGate, lmark::Value::Main(loose))], "worktree は common dir の ref を読む");
+    clean(&[&place.repo, &place.state, &place.shims, &parent]);
+}
+
+/// (4)(6) 出力の無い置き場では 2 種の片を持つ command を通しても印の file が出来ず、同じ置き場に出力を作った後の同じ command では
+/// 2 つの印が付く。bd と git の shim の呼びの数は 2 つの周で等しい（印付けは子 process を撃たない・anchor の門の git は両方に在る）。
+#[test]
+fn hook_stale_mark_two_kinds_follow_an_output_and_the_child_process_count_is_the_same() {
+    let place = StalePlace::new();
+    let command = format!("{STALE_WRITE}; {}", stale_merge_command());
+    let first = place.calls();
+    place.pass(&command);
+    let without = place.calls().saturating_sub(first);
+    assert!(!lmark::fleet_dir(&place.state).join(lmark::STALE_FILE).exists(), "出力の無い置き場には印の file も作らない");
+    assert!(place.marks().is_empty(), "出力の無い置き場では付かない");
+    assert!(without > 0, "anchor の門が窓の読みで git を撃つ（shim が呼びを数える）");
+    place.output();
+    let second = place.calls();
+    place.pass(&command);
+    let with = place.calls().saturating_sub(second);
+    assert_eq!(
+        place.marks(),
+        [(lmark::Kind::LedgerGate, stale_ledger(7)), (lmark::Kind::MergeGate, lmark::Value::Main(place.main_sha()))],
+        "出力を作った後は 2 種の印"
+    );
+    assert_eq!(with, without, "印が付いた周の子 process の数は出力の無い周と等しい");
+    clean(&[&place.repo, &place.state, &place.shims]);
+}
+
+/// (5) 2 度の書きで印は 1 つ（値は 2 度目）。印の後に manifest を動かさない書き直しでは消えず、chunks を進めた後の同じ口で消える
+/// （対）。merge の印は event log だけ進めた書き直しでは消えず、main を印の sha の子へ進めた後の同じ口で消える（対）。
+#[test]
+fn hook_stale_mark_is_replaced_and_cleared_only_by_a_later_ledger_or_a_later_main() {
+    let place = StalePlace::new();
+    place.output();
+    let before = place.json();
+    place.pass(&format!("{STALE_WRITE}; {}", stale_merge_command()));
+    let merged = place.main_sha();
+    place.manifest(8);
+    place.pass(STALE_WRITE);
+    assert_eq!(
+        place.marks(),
+        [(lmark::Kind::LedgerGate, stale_ledger(8)), (lmark::Kind::MergeGate, lmark::Value::Main(merged.clone()))],
+        "種類ごとに 1 つ・2 度目の値が前を置き換える"
+    );
+    assert_eq!(place.json(), before, "どの周も出力を書き直さない");
+    place.record("r1");
+    place.rewrite();
+    assert_ne!(place.json(), before, "event log の進みで全部の書き直しが rename した");
+    assert_eq!(place.marks().len(), 2, "manifest も main も動かない書き直しでは消えない（event log だけの進みで merge の印は消えない）");
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+    place.manifest(9);
+    place.rewrite();
+    assert_eq!(place.marks(), [(lmark::Kind::MergeGate, lmark::Value::Main(merged))], "chunks を進めた後は台帳の印だけが消える");
+    place.advance_main();
+    place.rewrite();
+    assert!(place.marks().is_empty(), "main を印の sha の子へ進めた後は merge の印が消える");
+    clean(&[&place.repo, &place.state, &place.shims]);
+}
+
+/// (7) 台帳の印を読めない置き場（manifest が壊れている）と `lifecycle.stale.lock` を生きた所有者が持つ周は、allow が変わらず印も
+/// 付かない。manifest を直した後・lock を外した後の同じ command では付く。
+#[test]
+fn hook_stale_mark_fails_open_for_an_unreadable_manifest_and_a_held_lock() {
+    let place = StalePlace::new();
+    place.output();
+    put_file(&place.repo.join(".beads/embeddeddolt/beads/.dolt/noms/manifest"), "short");
+    place.pass(STALE_WRITE);
+    assert!(place.marks().is_empty(), "台帳の印を読めない周は付けない");
+    place.manifest(7);
+    place.pass(STALE_WRITE);
+    assert_eq!(place.marks(), [(lmark::Kind::LedgerGate, stale_ledger(7))], "manifest を直した後は付く");
+    let lock = lmark::fleet_dir(&place.state).join(lmark::STALE_LOCK);
+    put_file(&lock, &format!("{}\n", std::process::id()));
+    place.pass(&stale_merge_command());
+    assert_eq!(place.marks().len(), 1, "lock を持った周は allow のまま印を付けない");
+    assert!(fs::remove_file(&lock).is_ok(), "lock を外せる");
+    place.pass(&stale_merge_command());
+    assert_eq!(place.marks().len(), 2, "lock を外した後は付く");
+    clean(&[&place.repo, &place.state, &place.shims]);
 }
 

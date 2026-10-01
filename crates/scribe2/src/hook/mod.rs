@@ -25,6 +25,7 @@ pub mod merge_gate;
 pub mod permission;
 pub mod precompact;
 pub mod role_guard;
+pub mod stale_gate;
 pub mod stamp;
 pub mod turn_end;
 pub mod utterance;
@@ -709,7 +710,13 @@ fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
     // 権能 guard が断らなかった周の後ろの 1 段（走っている便の行の門・設計 vessel-hook.md §15 形 7）。
     let scene = live_row::Scene { tool: &tool, command: command.as_deref(), payload, cwd, root, state_dir: hooked.dir };
     match live_row::decide(&scene) {
-        LiveRowDecision::Pass => role,
+        LiveRowDecision::Pass => {
+            // 最後の allow の出口（Bash の道だけ）: 通した書きと merge に古さの印を足す（書き直さない・設計 case-lifecycle.md §14）。
+            if tool == command::BASH {
+                stale_gate::mark(command.as_deref().unwrap_or_default(), root, hooked.dir);
+            }
+            role
+        }
         LiveRowDecision::Deny { what, line } => denied(hooked, &format!("live-row-deny {what}"), line, started),
     }
 }
