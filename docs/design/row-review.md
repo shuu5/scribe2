@@ -100,7 +100,24 @@
 
 ## 6. 先撃ちの退役（事前審査の機械の予想と束は残す）
 
-- 段 1（§11 の行 d）: rules 行 `pipe.precheck_lens_per_round` の値を 0 にし（値の変更は裁定 id が要る）、同じ行で先撃ちの `round` が値 0 の周に材料の組み直しも撃たないようにする（今は値に依らず一時の worktree を毎周組む・§2）。同じ行で本 repo の vessel 宣言に `row-review = true` を足す。事前審査の機械の予想（形 x）と束（形 y）は残す（lens を撃たず安い・依存待ちの確定の誤りを束ねる役は行の審査と重ならない）。
+- 段 1（§11 の行 d）: rules 行 `pipe.precheck_lens_per_round` の値を 0 にする（裁定 user 2026-09-30T22:13Z 項 precheck）。同じ行で、先撃ちの `round` が値 0 の周に、依存待ちの行ごとの手（材料の組み直し・判定の写し直し・起こす）を 1 つも撃たないようにする（今は値に依らず、事前審査の鍵が動いた行の材料を一時の worktree で組み直して判定を写し直す・§2）。周の頭の片付け（`prune`）は値 0 の周も撃つ。同じ行で本 repo の vessel 宣言に `row-review = true` を足す。事前審査の機械の予想（形 x）と束（形 y）は残す（lens を撃たず安い・依存待ちの確定の誤りを束ねる役は行の審査と重ならない）。
+  - 値 0 の周の持ち越し: 先撃ちの確定（在り処 prelens の finding）は値 0 の周に持ち越さない。
+    - 理由: 写し直すには材料の鍵が要り、鍵は材料を組まないと求まらない。組まずに前の鍵を書き換えて写すと、材料が変わった行に別の材料の判定を写す。
+    - 起きること: 値を 0 にすると、事前審査の鍵の rules の語（rules の写しの sha か器の build の commit）が動く。その周に事前審査が、依存待ちの全部の行の結果を機械の予想の finding だけで書き直すので、先撃ちの確定とそれを根にした束はその周に消える。切り替えの時に撃ち中だった lens が後で終えた判定も、結果に写らない。
+    - 列の挙動は変わらない: 先撃ちの判定は通行証にしない予想で、起こす判定・受付・待ちの理由のどれも読まない。審査は merge の門の行の審査（§3・§4）と Reviewed（§5）が持つ。
+  - 既存の歯の扱いと変異の A/B:
+    - e2e の review の歯の file の `pipe_prelens_same_material_keeps_the_finding_across_a_main_move` の値 0 の脚は、前の周の確定を値 0 の周に持ち越すことを求めるので、この行で向きが逆になる。
+    - 脚はその歯から抜き、行 d の新しい歯 pipe_prelens_off_ の (c) へ移して逆の向きで測る。同じ置き場で、値 0 の周の後に、置き場の key が周の前と同じ字・結果が clean・束が 0 本であることを測る。その歯の残りの 2 脚（`--lens` の周と `--lens` の無い周）は本文を変えない。
+    - 札: 歯の file の歯の区間は (a)(c) が base で赤いので、file ごとの flip-check の overlay は赤く、retroactive の札は要らない（脚を抜く直しは単独では base で緑）。
+    - 判定の順は、片付け → 値 0 の判定 → 組み直し → 写し直し。次の変異はそれぞれ歯で落ちる。
+      - 値 0 の判定を片付けの前に置くと (b) が落ちる。
+      - 値 0 の周に組み直しを残すと (c) の key の assert が落ちる。
+      - 組まずに key の 1 行目だけを今の鍵へ書き換えて写すと、(c) の key と結果の assert が落ちる。
+      - 鍵の一致を見ずに前の判定を写すと、(c) の結果と束の assert が落ちる。
+  - 設計の線（歯を持たない・審査が読む）:
+    - 値 0 の判定は、行を読めて値が 0 の周だけで、`prune` の後・行ごとの loop の前に 1 度だけ置く。`limit_of` は行が無い・読めない周も値 0 と同じく「撃たない」に畳むので、値 0 の判定には使わない。
+    - 行が無い・読めない周と `--lens` の無い周は、今どおり組み直して写す（段 2 で外すまで、既存の挙動を変えない）。
+    - 値 0 の周は、母集団に居る行の置き場の file（材料の鍵・起こした時の鍵・判定・木の印・組めない理由）を書き換えも外しもしない。そのため、Reviewed の先撃ちの使い回しの読み口は今どおりそれを読み（行 c の読み口の後ろ・行 e が外す）、切り替えの前の組めない理由は dispatch ls の ` prelens=unbuilt` に残る（行 e が語ごと外す・新しい語は足さない）。
 - 段 2（§11 の行 e）: 先撃ちの残りの code を外す: 先撃ちの子 module の残り（行 a0 が共用の子 module へ移した 4 本は外さない）と、その宣言の行、lens の `--stage prelens`、rules 行 `pipe.precheck_lens_per_round` と `pipe.precheck_lens_model`、先撃ちを測る歯、`[DISPATCH-PRECHECK]` の行の ` prelens=` の字面、`Review` の先撃ちの model の欄と Reviewed の先撃ちの使い回しの読み口と ` prelens:reused` の語。外すのは git の履歴に残る code の退役（憲法 N1 の可逆な形）で、使い回しの読み口は行 c が行の審査の記録へ移した後に外す。共用の子 module の宣言の祖先の腕（`declare`）は層の型の match の腕として残す（行の審査は宣言の層を木に当てないので呼ばれない・層の型を分けるのはこの設計の外）。
 
 ## 7. 行の予約（落ちた行が write-set を持ち続ける）
@@ -164,7 +181,7 @@
 | a | 行の審査の口（§3）＝撃つ側と記録の書き手 | h・a1 | pipe の新しい子 module（`+`）・subcommand の 4 面（cli.rs・args.rs・help・外形 snapshot）・review.rs |
 | b | merge の門の 2 つ目の判定と任意 key row-review（§4） | a | hook の 3 file（merge の門・anchor の門・入口）・宣言の 2 file |
 | c | Reviewed の段の使い回し（§5） | a | review.rs |
-| d | 先撃ちの退役の段 1（§6） | b・c | rules 行の値・本 repo の vessel 宣言・prelens.rs |
+| d | 先撃ちの退役の段 1（§6） | b・c | rules 行の値・本 repo の vessel 宣言・prelens.rs・e2e の review の歯の file（値 0 の脚の移し） |
 | e | 先撃ちの退役の段 2（§6） | d | 先撃ちの子 module（`~`）と縮む面（`-`） |
 | f | 行の予約と rules 行 `pipe.reserve_h`（§7） | — | dispatch の新しい子 module（`+`）・dispatch.rs・candidates.rs・局面の表・rules |
 | g | 兄弟の待ち（§8） | a・f | dispatch.rs・candidates.rs・局面の表（行 f の子 module は触らない） |
@@ -282,15 +299,15 @@ done = "(1) toy repo の設計の PR の commit で行の審査（偽 lens は P
 
 [[contract]]
 id = "d"
-title = "先撃ちの退役の段 1 — rules 行 pipe.precheck_lens_per_round を値 0（裁定 user 2026-09-30T22:13Z 項 precheck）にし、値 0 の周は先撃ちの材料の組み直しも一時の worktree も作らず、本 repo の vessel 宣言に row-review = true を足して merge の門の 2 つ目の判定を本 repo に掛ける（§6）"
+title = "先撃ちの退役の段 1 — rules 行 pipe.precheck_lens_per_round を値 0（裁定 user 2026-09-30T22:13Z 項 precheck）にし、値 0 の周は先撃ちの材料の組み直しも一時の worktree も作らず前の判定も写し直さず、本 repo の vessel 宣言に row-review = true を足して merge の門の 2 つ目の判定を本 repo に掛ける（§6）"
 req = ["FR100", "FR101"]
 section = "6"
 write-set = ["rules/manifest.toml", ".vessel.toml", "crates/scribe2/src/pipe/dispatch/prelens.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/pipe/review.rs", "crates/scribe2-boundary/tests/e2e/hook/guards.rs", "=crates/scribe2-boundary/tests/e2e/pipe/intake.rs"]
-verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_prelens_off_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_prelens_row_follows_the_lens_count", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_merge_gate_self_declaration_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_accepts_self_hosted_declaration_under_embedded_ceiling", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_prelens_limit_counts_the_flying_lens_and_zero_fires_nothing"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_prelens_off_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_prelens_row_follows_the_lens_count", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_merge_gate_self_declaration_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_accepts_self_hosted_declaration_under_embedded_ceiling", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_prelens_limit_counts_the_flying_lens_and_zero_fires_nothing", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_prelens_same_material_keeps_the_finding_across_a_main_move"]
 size = "S"
-growth = ["crates/scribe2/src/pipe/dispatch/prelens.rs:6", "crates/scribe2-boundary/tests/e2e/pipe/review.rs:70", "crates/scribe2-boundary/tests/e2e/hook/guards.rs:30"]
+growth = ["crates/scribe2/src/pipe/dispatch/prelens.rs:6", "crates/scribe2-boundary/tests/e2e/pipe/review.rs:90", "crates/scribe2-boundary/tests/e2e/hook/guards.rs:30"]
 depends = ["b", "c"]
-done = "(1) 埋め込みの manifest の pipe.precheck_lens_per_round は値 0・裁定 id user 2026-09-30T22:13Z 項 precheck・裁定日 2026-09-30 で、行の位置と kind と形は変わらない〔直す既存の歯 rules_prelens_row_follows_the_lens_count の値と裁定の pin〕 (2) 値 0 の rules の写しの周の dispatch の 1 周は、clean の依存待ちの行が在っても先撃ちの置き場に一時の worktree も材料の dir も key も作らず worktree の登録も増えず、値 1 の同じ fixture の周は作る〔pipe_prelens_off_ の (a)・対照つき〕 (3) 値 0 の周も、母集団を出た bead の置き場と前の周の木は今どおり外す〔pipe_prelens_off_ の (b)〕 (4) 値 0 の周に 1 本も起こさない既存の挙動は変わらない〔変わらない既存の歯 pipe_prelens_limit_counts_the_flying_lens_and_zero_fires_nothing〕 (5) 本 repo の .vessel.toml は row-review = true を持ち、その宣言を写した tmp の anchor で、trailer の良い本文を渡す head を固定しない merge が no-head-pin で断られる〔hook_merge_gate_self_declaration_ の (a)〕 (6) 自己ホストの宣言を写した toy repo の受付は通る〔変わらない既存の歯 pipe_intake_accepts_self_hosted_declaration_under_embedded_ceiling〕 base は値 1 で、値 0 の周も材料を組み、本 repo の宣言が key を持たないので (1)(2)(5) が RED"
+done = "(1) 埋め込みの manifest の pipe.precheck_lens_per_round は値 0・裁定 id user 2026-09-30T22:13Z 項 precheck・裁定日 2026-09-30 で、行の位置と kind と形は変わらない〔直す既存の歯 rules_prelens_row_follows_the_lens_count の値と裁定の pin〕 (2) 値 0 の rules の写しの周の dispatch の 1 周は、clean の依存待ちの行が在っても先撃ちの置き場に材料の dir も key も作らず、値 1 の同じ fixture の周は作る〔pipe_prelens_off_ の (a)・対照つき・同じ歯が pin する一時の worktree の dir と登録の不在は base も同じ周の終わりに外すので回帰の pin〕 (3) 値 0 の周も、母集団を出た bead の置き場と前の周の木は今どおり外す〔pipe_prelens_off_ の (b)〕 (4) 値 0 の周に 1 本も起こさない既存の挙動は変わらない〔変わらない既存の歯 pipe_prelens_limit_counts_the_flying_lens_and_zero_fires_nothing〕 (5) 値 1 の写しで依存待ちの行 B が FAIL の確定を結果に写し終え、行 C の lens が撃ち中の置き場で、rules の写しを値 0 に書き換えて main に材料に入らない file を commit した次の周の後、B の置き場の key の本文は周の前と同じ字（確定を持つ行の置き場も組み直さない）〔pipe_prelens_off_ の (c)〕 (6) 同じ周の後の B の結果は result=clean で finding= の行を持たず、dispatch ls の [DISPATCH-BUNDLE] の行は 0 本（先撃ちの確定を値 0 の周に持ち越さない）〔pipe_prelens_off_ の (c)〕 (7) 値 1 の写しの --lens の周と --lens の無い周は今どおり確定を持ち越し、値 0 の脚は (5)(6) へ移す〔直す既存の歯 pipe_prelens_same_material_keeps_the_finding_across_a_main_move・残る 2 脚の本文は変えない〕 (8) 本 repo の .vessel.toml は row-review = true を持ち、その宣言を写した tmp の anchor で、trailer の良い本文を渡す head を固定しない merge が no-head-pin で断られる〔hook_merge_gate_self_declaration_ の (a)〕 (9) 自己ホストの宣言を写した toy repo の受付は通る〔変わらない既存の歯 pipe_intake_accepts_self_hosted_declaration_under_embedded_ceiling〕 base は値 1 で、値 0 の周も材料を組み直して判定を写し直し、本 repo の宣言が key を持たないので (1)(2)(5)(6)(8) が RED"
 
 [[contract]]
 id = "e"
