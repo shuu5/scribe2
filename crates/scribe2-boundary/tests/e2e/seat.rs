@@ -1268,12 +1268,72 @@ fn tick_shims(dir: &Path) -> String {
     format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default())
 }
 
-/// `seat tick` を偽の PATH で 1 回撃つ。
+/// 切り替えの線でない main の字（局面の出力の印の値）。
+const LC_MAIN: &str = "abcdef0123456789abcdef0123456789abcdef01";
+
+/// 置き場の event log（登録 row だけ）へ末尾の行を足す。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
+fn tick_log_append(place: &TickPlace, tail: &[String]) {
+    let log = vessel::fleet::store::events_path(&place.state);
+    let mut text = fs::read_to_string(&log).expect("登録 row の event log が在る");
+    tail.iter().for_each(|line| text.push_str(&format!("{line}\n")));
+    fs::write(&log, text).expect("末尾を足せる");
+}
+
+/// 局面の出力（入力の印の event log は `events`・台帳と main は固定）を置き場の `fleet/lifecycle.json` に書く（局面の出力の fixture を
+/// 書く 1 本・設計 seat-heartbeat.md §24）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tick_lifecycle_save(place: &TickPlace, parts: Vec<vessel::case::Part>, owned: vessel::fleet::lifecycle::Owned, events: vessel::fleet::lifecycle_mark::Events) {
+    use vessel::fleet::lifecycle::{render_output, Output as Lifecycle, Scope};
+    use vessel::fleet::lifecycle_mark::{Ledger, Marks};
+    let stamp = vessel::fleet::cli::format_utc(unix_now().saturating_sub(600));
+    let out = Lifecycle {
+        generated_at: stamp.clone(),
+        scope: Scope::Full,
+        full_at: stamp,
+        interval_s: Some(600),
+        closed_window_h: Some(72),
+        marks: Marks { ledger: Ledger::Files { len: 1, mtime_ns: 1 }, events, main: LC_MAIN.to_owned() },
+        unmeasured: Vec::new(),
+        owned,
+        parts,
+    };
+    let dir = place.state.join("fleet");
+    fs::create_dir_all(&dir).expect("fleet の dir を作れる");
+    fs::write(dir.join("lifecycle.json"), render_output(&out)).expect("出力を置ける");
+}
+
+/// 登録 row だけの event log の印（長さと 1 行目の ts）を入力の印に持つ前の全部の書き直しの出力を置き、その後ろに `tail` を足す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tick_lifecycle_put(place: &TickPlace, parts: Vec<vessel::case::Part>, tail: &[String]) {
+    let events = vessel::fleet::lifecycle_mark::read_events(&place.state).expect("event log の印を読める");
+    tick_log_append(place, tail);
+    tick_lifecycle_save(place, parts, vessel::fleet::lifecycle::Owned::default(), events);
+}
+
+/// 撃つ直前に部品 0・owned 0 の局面の出力を今の event log の印で書いてから撃つ（出力が在って古くなく、新しい語は出ない・既存の歯が使う名）。
 fn tick_run(place: &TickPlace, extra: &[&str]) -> Output {
+    if let Some(events) = vessel::fleet::lifecycle_mark::read_events(&place.state) {
+        tick_lifecycle_save(place, Vec::new(), vessel::fleet::lifecycle::Owned::default(), events);
+    }
+    tick_run_bare(place, extra)
+}
+
+/// `seat tick` を偽の PATH で 1 回撃つ（何も書かない素の 1 本）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tick_run_bare(place: &TickPlace, extra: &[&str]) -> Output {
     let state = place.state.display().to_string();
     Command::new(bin())
         .args(["seat", "tick", "--state-dir", &state, "--target", TICK_TARGET])
@@ -1281,6 +1341,22 @@ fn tick_run(place: &TickPlace, extra: &[&str]) -> Output {
         .env("PATH", &place.path)
         .output()
         .expect("binary を起動できる")
+}
+
+/// (l)（設計 seat-heartbeat.md §24・接頭辞 `seat_tick_lifecycle_alarm_`）撃つ helper の割り方: 黙った席へ書いてから撃つ helper（[`tick_run`]）で
+/// 撃った周の合図は alarm を持たず、素で撃つ helper（[`tick_run_bare`]）で出力の無い置き場を撃った周の合図は `alarm=unreadable` を持つ。
+#[test]
+fn seat_tick_lifecycle_alarm_write_then_fire_helper_shows_no_alarm_and_the_bare_one_shows_unreadable() {
+    let sent = |run: fn(&TickPlace, &[&str]) -> Output| {
+        let place = tick_place(true);
+        tick_silent_for(&place, 1900);
+        let out = run(&place, &[]);
+        assert_eq!(stdout_of(&out), tick_inject(0), "黙りの閾値を越えた周は段 0 で送る: stderr={}", stderr_of(&out));
+        let prefix = format!("send-keys -t {TICK_TARGET} -l ");
+        tick_keys(&place).iter().filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned)).collect::<Vec<_>>()
+    };
+    assert_eq!(sent(tick_run), [tick_signal(0)], "書いてから撃つ側は alarm が無い");
+    assert_eq!(sent(tick_run_bare), [format!("{} alarm=unreadable", tick_signal(0))], "素で撃つ側は出力が無いので unreadable");
 }
 
 /// 打刻 file を `(state, event, ts)` の列で書き直す。

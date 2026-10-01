@@ -13,6 +13,7 @@
 
 use crate::fleet::cli::format_utc;
 use crate::fleet::json_tree::{self, Tree};
+use crate::fleet::lifecycle_read::Lifecycle;
 use crate::invocation::Invocation;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::collections::BTreeMap;
@@ -37,6 +38,8 @@ pub enum Unmeasured {
     GitUnavailable,
     /// anchor が git の repo でない。
     NotARepo,
+    /// 局面の出力が無いか読めない（無いと読めないは分けない・分けるのは doctor の lifecycle の 3 行）。
+    Lifecycle,
 }
 
 /// [`Unmeasured`] の全 variant（宣言順）。
@@ -45,6 +48,7 @@ pub const UNMEASURED: &[Unmeasured] = &[
     Unmeasured::LedgerTimeout,
     Unmeasured::GitUnavailable,
     Unmeasured::NotARepo,
+    Unmeasured::Lifecycle,
 ];
 
 impl Unmeasured {
@@ -55,6 +59,7 @@ impl Unmeasured {
             Self::LedgerTimeout => "ledger-timeout",
             Self::GitUnavailable => "git-unavailable",
             Self::NotARepo => "not-a-repo",
+            Self::Lifecycle => "lifecycle",
         }
     }
 }
@@ -72,10 +77,12 @@ pub enum Kind {
     Commit,
     /// 未 commit の変更を持つ worktree（anchor を含む）。
     Dirty,
+    /// 局面の出力の席の手番の閾値越え（出力の owned の値をそのまま写す・設計 seat-heartbeat.md §24）。
+    Owned,
 }
 
 /// [`Kind`] の全 variant（宣言順＝出す順）。
-pub const KINDS: &[Kind] = &[Kind::Wip, Kind::Bead, Kind::Git, Kind::Commit, Kind::Dirty];
+pub const KINDS: &[Kind] = &[Kind::Wip, Kind::Bead, Kind::Git, Kind::Commit, Kind::Dirty, Kind::Owned];
 
 impl Kind {
     /// `kind=` に出す字面。
@@ -86,6 +93,7 @@ impl Kind {
             Self::Git => "git",
             Self::Commit => "commit",
             Self::Dirty => "dirty",
+            Self::Owned => "owned",
         }
     }
 
@@ -97,6 +105,7 @@ impl Kind {
             Self::Git => "[RECENT-GIT]",
             Self::Commit => "[RECENT-COMMIT]",
             Self::Dirty => "[RECENT-DIRTY]",
+            Self::Owned => "[RECENT-OWNED]",
         }
     }
 }
@@ -410,10 +419,33 @@ fn relative_of(anchor: &Path, path: &Path) -> PathBuf {
     }
 }
 
-/// 区間の全行（台帳の 2 種類 → git の 3 種類・[`KINDS`] の宣言順）。
-pub fn render(beads: Result<&[Bead], Unmeasured>, anchor: &Path, now: u64) -> Vec<String> {
+/// 局面の出力の 1 種類（owned）。出力が無いか読めない周は `[RECENT-UNMEASURED] kind=owned reason=lifecycle`、読めた周は件数が 1 以上で
+/// `[RECENT-OWNED] count=<n> oldest=<部品>:<id> phase=<局面> since=<時刻>`（最古が無い周は `oldest=- phase=- since=-`）・0 件で
+/// `[RECENT-NONE] kind=owned`。件数と最古は出力の値をそのまま写し、古い周は末尾に ` stale=<種類,…>`（部品の閾値越えの印は数え直さない・FR94）。
+pub fn owned_lines(lifecycle: &Lifecycle) -> Vec<String> {
+    let Lifecycle::Read(found) = lifecycle else {
+        return vec![unmeasured_line(Kind::Owned, Unmeasured::Lifecycle)];
+    };
+    let stale = if found.stale.is_empty() {
+        String::new()
+    } else {
+        format!(" stale={}", found.stale.iter().map(|reason| reason.as_str()).collect::<Vec<_>>().join(","))
+    };
+    if found.owned.count == 0 {
+        return vec![format!("{}{stale}", none_line(Kind::Owned))];
+    }
+    let first = found.owned.oldest.as_ref().map_or_else(
+        || "oldest=- phase=- since=-".to_owned(),
+        |old| format!("oldest={}:{} phase={} since={}", old.part.as_str(), old.id, old.phase.as_str(), old.since),
+    );
+    vec![format!("{} count={} {first}{stale}", Kind::Owned.marker(), found.owned.count)]
+}
+
+/// 区間の全行（台帳の 2 種類 → git の 3 種類 → 局面の出力の 1 種類・[`KINDS`] の宣言順）。
+pub fn render(beads: Result<&[Bead], Unmeasured>, anchor: &Path, now: u64, lifecycle: &Lifecycle) -> Vec<String> {
     let mut lines = ledger_lines(beads, now);
     lines.extend(git_lines(anchor));
+    lines.extend(owned_lines(lifecycle));
     lines
 }
 

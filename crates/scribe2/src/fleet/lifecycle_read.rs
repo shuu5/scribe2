@@ -123,15 +123,24 @@ fn oldest<'p>(parts: impl Iterator<Item = &'p Part>) -> Option<(&'p Part, &'p st
     parts.filter_map(|part| part.since.as_deref().and_then(|since| epoch_of(since).map(|at| (at, part, since)))).min_by_key(|(at, _, _)| *at).map(|(_, part, since)| (part, since))
 }
 
+/// 未仕分けの発話（部品の種類が発話で局面が utterance-open）。
+fn open_utterances(parts: &[Part]) -> impl Iterator<Item = &Part> {
+    parts.iter().filter(|part| part.part == Kind::Utterance && part.phase == Phase::UtteranceOpen)
+}
+
+/// 未仕分けの発話の数（doctor の発話の行と管理 tick の alarm の語 `unsorted` が呼ぶ 1 本・FR94）。
+pub fn unsorted(parts: &[Part]) -> usize {
+    open_utterances(parts).count()
+}
+
 /// 発話の行。窓の中の仕分け済みの発話は、行き先が会話だけなら chat・要望か答えの行き先を持てば request と、発話の単位で 1 と数える。
 fn utterance_line(parts: &[Part]) -> String {
     let utterances = || parts.iter().filter(|part| part.part == Kind::Utterance);
-    let unsorted = || utterances().filter(|part| part.phase == Phase::UtteranceOpen);
     let sorted = || utterances().filter(|part| part.phase == Phase::UtteranceSorted);
     let request = sorted().filter(|part| part.links.destination.iter().any(|found| found.to != Sink::ToChat)).count();
     let chat = sorted().filter(|part| !part.links.destination.iter().any(|found| found.to != Sink::ToChat)).count();
-    let first = oldest(unsorted()).map_or("-", |(_, since)| since);
-    format!("{} unsorted={} oldest={first} request={request} chat={chat}", HEADS[0], unsorted().count())
+    let first = oldest(open_utterances(parts)).map_or("-", |(_, since)| since);
+    format!("{} unsorted={} oldest={first} request={request} chat={chat}", HEADS[0], unsorted(parts))
 }
 
 /// memo の行（処置の待ちの本数と、その中の最古の年齢）。

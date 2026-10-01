@@ -226,7 +226,7 @@ fn hook_session_recent_git_head_commits_and_dirty_worktree() {
         recent.iter().position(|line| line.starts_with(kind.marker()) || line.contains(&format!(" kind={}", kind.as_str())))
     };
     let order: Vec<usize> = recent::KINDS.iter().filter_map(|kind| first_of(*kind)).collect();
-    assert_eq!(order.len(), recent::KINDS.len(), "5 種類が全部出る: {recent:?}");
+    assert_eq!(order.len(), recent::KINDS.len(), "6 種類が全部出る: {recent:?}");
     assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "種類の順: {order:?} {recent:?}");
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
@@ -1492,4 +1492,172 @@ fn hook_unsorted_stop_writes_a_start_position_only_for_a_session_with_an_id() {
     start_session(&repo, &["--state-dir", &flag], "sid-h");
     assert_eq!(session_files(&state), ["sid-h/start"], "開始の位置が 1 つ");
     clean(&[&repo, &state]);
+}
+
+// ───── 直近の流れの事実行の種類 owned（設計 seat-heartbeat.md §24 約束 4・5・契約表の行 ac・接頭辞 `hook_session_recent_owned_`） ─────
+//
+// 席の置き場の `fleet/lifecycle.json`（局面の出力）を直に置き、SessionStart が読み手 1 本（台帳と main の組）で出力の owned の値を
+// `[RECENT-OWNED]` / `[RECENT-NONE]` / `[RECENT-UNMEASURED]` の行に写すかを測る。
+
+/// 席の手番の閾値越えの数え（件数 `count`・最古は `count` が 1 以上の周だけ X）。
+fn owned_value(count: u64) -> vessel::fleet::lifecycle::Owned {
+    let oldest = (count > 0).then(|| vessel::fleet::lifecycle::Oldest {
+        part: vessel::case::Kind::Contract,
+        id: "s2-x.1".to_owned(),
+        phase: vessel::case::Phase::ContractRefused,
+        since: "2026-09-01T00:00:00Z".to_owned(),
+    });
+    vessel::fleet::lifecycle::Owned { count, unset: 0, unknown: 0, oldest }
+}
+
+/// toy repo に台帳の file（files の形）と main の ref を足す（出力の入力の印を器の印の読み手で今の値に読むため）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn owned_toy(place: &RolePlace) {
+    fs::create_dir_all(place.repo.join(".beads")).expect("台帳の dir を作れる");
+    fs::write(place.repo.join(".beads").join("issues.jsonl"), "[]\n").expect("台帳の file を書ける");
+    let refs = place.repo.join(".git").join("refs").join("remotes").join("origin");
+    fs::create_dir_all(&refs).expect("ref の dir を作れる");
+    fs::write(refs.join("main"), "0123456789abcdef0123456789abcdef01234567\n").expect("main の ref を書ける");
+}
+
+/// 局面の出力を置く（入力の印は器の印の読み手で今の値を読んで書く）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn owned_put(place: &RolePlace, parts: Vec<vessel::case::Part>, owned: vessel::fleet::lifecycle::Owned) {
+    use vessel::fleet::lifecycle::{render_output, Output, Scope};
+    let marks = lmark::Marks {
+        ledger: lmark::read_ledger(&place.repo).expect("台帳の印を読める"),
+        events: lmark::read_events(&place.state).expect("event log の印を読める"),
+        main: lmark::read_main(&place.repo).expect("main の印を読める"),
+    };
+    let stamp = vessel::fleet::cli::format_utc(vessel::seat::state::now_secs().saturating_sub(600));
+    let out = Output {
+        generated_at: stamp.clone(),
+        scope: Scope::Full,
+        full_at: stamp,
+        interval_s: Some(600),
+        closed_window_h: Some(72),
+        marks,
+        unmeasured: Vec::new(),
+        owned,
+        parts,
+    };
+    let dir = place.state.join("fleet");
+    fs::create_dir_all(&dir).expect("fleet の dir を作れる");
+    fs::write(dir.join("lifecycle.json"), render_output(&out)).expect("出力を置ける");
+}
+
+/// 登録した席で session-start を撃ち、復帰の DATA のうち owned の行（`[RECENT-OWNED]` と `kind=owned` の行）と DATA の最後の行を返す。
+fn owned_lines(place: &RolePlace, path: &str) -> (Vec<String>, Option<String>) {
+    let (_, recent) = brief_and_recent(place, path, &place.bd);
+    let owned = recent.iter().filter(|line| line.starts_with("[RECENT-OWNED]") || line.contains(" kind=owned")).cloned().collect();
+    (owned, recent.last().cloned())
+}
+
+/// 閾値越えの最古（X）を持つ件数 `count` の owned の行。
+fn owned_want(count: u64) -> String {
+    format!("[RECENT-OWNED] count={count} oldest=contract:s2-x.1 phase=contract-refused since=2026-09-01T00:00:00Z")
+}
+
+/// (h) 閾値越え 1 件の出力で `[RECENT-OWNED]` の行が count=1 と最古の部品・id・局面・時刻を持つ（古くない周は stale= が無い）。
+#[test]
+fn hook_session_recent_owned_names_the_count_and_the_oldest() {
+    let place = role_place();
+    let path = stub_seat(&place, "ownedh", Some("orchestrator"));
+    owned_toy(&place);
+    owned_put(&place, Vec::new(), owned_value(1));
+    let (owned, _) = owned_lines(&place, &path);
+    assert_eq!(owned, [owned_want(1)], "件数 1 と最古");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (i) 件数 0 の出力で `[RECENT-NONE] kind=owned`（OWNED の行は出ない）。
+#[test]
+fn hook_session_recent_owned_is_none_for_a_count_of_zero() {
+    let place = role_place();
+    let path = stub_seat(&place, "ownedi", Some("orchestrator"));
+    owned_toy(&place);
+    owned_put(&place, Vec::new(), owned_value(0));
+    let (owned, _) = owned_lines(&place, &path);
+    assert_eq!(owned, ["[RECENT-NONE] kind=owned"], "件数 0");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (j) 出力の無い置き場と json の読めない置き場の 2 周で `[RECENT-UNMEASURED] kind=owned reason=lifecycle`。owned の行は事実行の区間の最後の行。
+#[test]
+fn hook_session_recent_owned_is_unmeasured_for_an_absent_or_unreadable_output() {
+    let place = role_place();
+    let path = stub_seat(&place, "ownedj", Some("orchestrator"));
+    owned_toy(&place);
+    let want = "[RECENT-UNMEASURED] kind=owned reason=lifecycle";
+    let (owned, last) = owned_lines(&place, &path);
+    assert_eq!((owned, last.as_deref()), (vec![want.to_owned()], Some(want)), "出力が無い周");
+    let dir = place.state.join("fleet");
+    fs::create_dir_all(&dir).unwrap_or_else(|err| panic!("mkdir: {err}"));
+    fs::write(dir.join("lifecycle.json"), "{\"version\":2}\n").unwrap_or_else(|err| panic!("write: {err}"));
+    let (owned, last) = owned_lines(&place, &path);
+    assert_eq!((owned, last.as_deref()), (vec![want.to_owned()], Some(want)), "json が読めない周");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (k) 古さ: 変化の無い周は stale= が無く、台帳の file を変えた周は stale=ledger・main の ref を動かした周は stale=main・古さの印の file に
+/// ledger-gate の印を置いた周は stale=ledger-gate（出力は周ごとに今の印で書き直す）。
+#[test]
+fn hook_session_recent_owned_names_why_the_output_is_stale() {
+    let place = role_place();
+    let path = stub_seat(&place, "ownedk", Some("orchestrator"));
+    owned_toy(&place);
+    let rounds = || {
+        let (owned, _) = owned_lines(&place, &path);
+        owned
+    };
+    owned_put(&place, Vec::new(), owned_value(1));
+    assert_eq!(rounds(), [owned_want(1)], "変化の無い周");
+    fs::write(place.repo.join(".beads").join("issues.jsonl"), "[]\n\n").unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(rounds(), [format!("{} stale=ledger", owned_want(1))], "台帳を変えた周");
+    owned_put(&place, Vec::new(), owned_value(1));
+    let main = place.repo.join(".git").join("refs").join("remotes").join("origin").join("main");
+    fs::write(main, "fedcba9876543210fedcba9876543210fedcba98\n").unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(rounds(), [format!("{} stale=main", owned_want(1))], "main を動かした周");
+    owned_put(&place, Vec::new(), owned_value(1));
+    let ledger = lmark::read_ledger(&place.repo).unwrap_or_else(|| panic!("台帳の印を読める"));
+    let found = lmark::Mark { kind: lmark::Kind::LedgerGate, at: "2026-10-01T00:00:00Z".to_owned(), value: lmark::Value::Ledger(ledger) };
+    let policy = vessel::fleet::store::LockPolicy { retry_ms: 50, stale_ms: 600_000 };
+    assert_eq!(lmark::add_mark(&place.state, &found, policy), lmark::Added::Added, "印を足せた");
+    assert_eq!(rounds(), [format!("{} stale=ledger-gate", owned_want(1))], "古さの印の file に ledger-gate を置いた周");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (p) 件数 2・最古 X で閾値越えの印を持つ部品が 0 の出力は `[RECENT-OWNED] count=2` の行が最古 X を持ち、件数 0 で閾値越えの印を持つ部品が在る
+/// 出力は `[RECENT-NONE] kind=owned`（部品の印を数え直さず出力の値を写す）。
+#[test]
+fn hook_session_recent_owned_copies_the_output_and_never_recounts_the_marks() {
+    let place = role_place();
+    let path = stub_seat(&place, "ownedp", Some("orchestrator"));
+    owned_toy(&place);
+    owned_put(&place, Vec::new(), owned_value(2));
+    let (owned, _) = owned_lines(&place, &path);
+    assert_eq!(owned, [owned_want(2)], "件数 2・印を持つ部品 0");
+    let phase = vessel::case::Phase::MemoWaiting;
+    let marked = vessel::case::Part {
+        part: vessel::case::Kind::Memo,
+        id: "s2-m.1".to_owned(),
+        phase,
+        turn: vessel::case::turn_of(phase.as_str(), None).unwrap_or_else(|| panic!("表に在る語")),
+        since: None,
+        reason: None,
+        closed: false,
+        overdue: Some(true),
+        links: vessel::case::Links::default(),
+        extra: vessel::case::Extra::Memo { due: None, triggers: None, keep: None },
+    };
+    owned_put(&place, vec![marked], owned_value(0));
+    let (owned, _) = owned_lines(&place, &path);
+    assert_eq!(owned, ["[RECENT-NONE] kind=owned"], "件数 0・印を持つ部品 1");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
 }

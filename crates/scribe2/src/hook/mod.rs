@@ -35,6 +35,7 @@ pub mod vessel;
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::json_tree;
+use crate::fleet::lifecycle_read;
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::name::{BUILD_COMMIT, NAME};
 use crate::rules::manifest::Manifest;
@@ -646,7 +647,9 @@ fn recent(hooked: &Hooked, outcome: &mut Outcome, started: Instant, read: Result
         Err(LedgerError::Timeout) => Err(recent::Unmeasured::LedgerTimeout),
         Err(LedgerError::Unreadable) => Err(recent::Unmeasured::LedgerUnreadable),
     };
-    let lines = recent::render(beads.as_deref().map_err(|reason| *reason), hooked.root, crate::seat::state::now_secs());
+    // 局面の出力は比べる組を台帳と main・repo の引数を hook の根にして読む（doctor と同じ渡し方・設計 seat-heartbeat.md §24 約束 4）。
+    let lifecycle = lifecycle_read::read(hooked.dir, hooked.root, &[lifecycle_read::Input::Ledger, lifecycle_read::Input::Main]);
+    let lines = recent::render(beads.as_deref().map_err(|reason| *reason), hooked.root, crate::seat::state::now_secs(), &lifecycle);
     let text = lines.join("\n");
     let emit = Emit { who: EVENT_SESSION_START, what: WHAT_RECENT, when: "SessionStart", line: &text };
     outcome.err.extend(record_lines(hooked.dir, &record(&emit, hooked, started)));

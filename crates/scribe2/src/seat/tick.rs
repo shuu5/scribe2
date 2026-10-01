@@ -60,6 +60,7 @@ use super::role::Role;
 use super::state::{self, SeatState, Stamp};
 use super::{host_groups_dir, pane_is_shell, pane_of, sanitize_target, seat_dir, state_dir_of, StateDir, REASON_TMUX_FAILED};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
+use crate::fleet::lifecycle_read;
 use crate::fleet::usage::{self, fresh_rows};
 use crate::fleet::select::{select, Input as SelectInput, Purpose, Selection, LIMIT_PCT};
 use crate::fleet::{Registration, RegistrationLatest, State};
@@ -852,7 +853,9 @@ fn ladder(input: &Input, front: Front) -> Result<Front, Verdict> {
     };
     // 並列の実測（設計 §16・列の結果なし＝`held=` を出さない・台帳も列も撃たない）で段を上げるかを決める（§17 形 2）。
     let measured = facts::facts(&input.state.path, None, now);
-    let (alarm_s, words) = idle_alarm(rows, &measured, now);
+    // 局面の出力は置き場の出力・古さの印の file・event log の印だけ読む（比べる組は event log の 1 種類・台帳も git も撃たない・§24 約束 2）。
+    let lifecycle = lifecycle_read::read(&input.state.path, &input.state.path, &[lifecycle_read::Input::Events]);
+    let (alarm_s, words) = idle_alarm(rows, &measured, now, &lifecycle);
     let (stale_s, step) = raise(&rows.pace, candidate(record.as_ref(), digest), alarm_s);
     let pointer = pointer_of(&rows.pace, record.map(|found| found.sent_at), step, now);
     let alarm = if words.is_empty() { String::new() } else { format!(" alarm={}", words.join(",")) };

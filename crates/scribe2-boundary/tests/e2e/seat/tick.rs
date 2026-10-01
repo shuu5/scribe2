@@ -2640,9 +2640,6 @@ fn seat_tick_alarm_unreflected_reads_an_unreadable_file_as_no_item() {
 
 // ─────────── 局面の出力の部分の書き直し（設計 case-lifecycle.md §13・接頭辞 `seat_tick_rewrites_lifecycle_`） ───────────
 
-/// 切り替えの線でない main の字（印の値）。
-const LC_MAIN: &str = "abcdef0123456789abcdef0123456789abcdef01";
-
 /// 偽の bd と git を `<dir>/bin` に置く（呼びを `<dir>/vcs-calls` に 1 行ずつ残す）。
 fn tick_vcs_shims(place: &TickPlace) {
     let calls = place.at("vcs-calls").display().to_string();
@@ -2679,45 +2676,6 @@ fn lc_part(kind: vessel::case::Kind, id: &str, phase: vessel::case::Phase, [reas
     }
 }
 
-/// 置き場の event log（登録 row だけ）へ末尾の行を足す。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn tick_log_append(place: &TickPlace, tail: &[String]) {
-    let log = vessel::fleet::store::events_path(&place.state);
-    let mut text = fs::read_to_string(&log).expect("登録 row の event log が在る");
-    tail.iter().for_each(|line| text.push_str(&format!("{line}\n")));
-    fs::write(&log, text).expect("末尾を足せる");
-}
-
-/// 登録 row だけの event log の印（長さと 1 行目の ts）を入力の印に持つ前の全部の書き直しの出力を置き、その後ろに `tail` を足す。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn tick_lifecycle_put(place: &TickPlace, parts: Vec<vessel::case::Part>, tail: &[String]) {
-    use vessel::fleet::lifecycle::{render_output, Output as Lifecycle, Owned, Scope};
-    use vessel::fleet::lifecycle_mark::{read_events, Ledger, Marks};
-    let events = read_events(&place.state).expect("event log の印を読める");
-    tick_log_append(place, tail);
-    let stamp = vessel::fleet::cli::format_utc(unix_now().saturating_sub(600));
-    let out = Lifecycle {
-        generated_at: stamp.clone(),
-        scope: Scope::Full,
-        full_at: stamp,
-        interval_s: Some(600),
-        closed_window_h: Some(72),
-        marks: Marks { ledger: Ledger::Files { len: 1, mtime_ns: 1 }, events, main: LC_MAIN.to_owned() },
-        unmeasured: Vec::new(),
-        owned: Owned::default(),
-        parts,
-    };
-    let dir = place.state.join("fleet");
-    fs::create_dir_all(&dir).expect("fleet の dir を作れる");
-    fs::write(dir.join("lifecycle.json"), render_output(&out)).expect("出力を置ける");
-}
-
 /// 出力の在る置き場と無い置き場（同じ末尾）で tick を 1 回ずつ撃つ。どちらも rc 0・stdout と stderr は `lifecycle` の字を持たず、
 /// 2 つの置き場の字が一致し、偽の bd と git の呼びは 0 のまま（出力の無い置き場も同じ）。書き直された出力を返す。
 #[expect(
@@ -2731,7 +2689,7 @@ fn tick_lifecycle_round(parts: Vec<vessel::case::Part>, tail: &[String]) -> vess
     let mut seen = Vec::new();
     for place in [&live, &idle] {
         tick_vcs_shims(place);
-        let out = tick_run(place, &[]);
+        let out = tick_run_bare(place, &[]);
         assert_eq!(rc_of(&out), i32::from(RC_OK), "tick の rc は 0 のまま: {}", stderr_of(&out));
         let (stdout, stderr) = (stdout_of(&out), stderr_of(&out));
         assert!(!stdout.contains("lifecycle") && !stderr.contains("lifecycle"), "字を足さない: {stdout}{stderr}");
@@ -2778,4 +2736,179 @@ fn seat_tick_rewrites_lifecycle_moves_a_run_stage_without_changing_the_tick() {
     let moved = find("r-w1").map(|part| (part.phase, part.reason.clone(), part.since.clone()));
     assert_eq!(moved, Some((Phase::RunLanding, Some("Gated".to_owned()), Some(stamp))), "便の局面が移る");
     assert_eq!(find("s2-w.1"), Some(&contract), "契約の部品は動かない");
+}
+
+// ───── 局面の出力と管理 tick の alarm（設計 seat-heartbeat.md §24 約束 1〜3・5・契約表の行 ac・接頭辞 `seat_tick_lifecycle_alarm_`） ─────
+//
+// 置き場の `<state>/fleet/lifecycle.json`（局面の出力）と古さの印の file を直に置き、tick が出力・古さの印の file・event log の印だけを読んで
+// alarm= の語 unsorted・owned・stale・unreadable を足すかを測る。撃つのは素の helper（何も書かない）。
+
+/// 局面の出力の置き場: 黙った席（打刻は 1900 秒前の Stop＝黙りの閾値 1800 を越える）に、今の event log の印を入力の印に持つ出力を置く。
+fn lc_alarm_place(parts: Vec<vessel::case::Part>, owned: vessel::fleet::lifecycle::Owned) -> TickPlace {
+    let place = tick_place(true);
+    tick_silent_for(&place, 1900);
+    lc_alarm_save(&place, parts, owned);
+    place
+}
+
+/// 今の event log の印で出力を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn lc_alarm_save(place: &TickPlace, parts: Vec<vessel::case::Part>, owned: vessel::fleet::lifecycle::Owned) {
+    let events = vessel::fleet::lifecycle_mark::read_events(&place.state).expect("event log の印を読める");
+    tick_lifecycle_save(place, parts, owned, events);
+}
+
+/// 発話 1 つ（`open` なら未仕分け・でなければ仕分け済み）。
+fn lc_utterance(id: &str, open: bool) -> vessel::case::Part {
+    use vessel::case::{Channel, Extra, Kind, Phase};
+    let phase = if open { Phase::UtteranceOpen } else { Phase::UtteranceSorted };
+    lc_part(Kind::Utterance, id, phase, [None, Some("2026-09-30T00:00:00Z")], Extra::Utterance { session: None, channel: Channel::Chat })
+}
+
+/// 処置の待ちでない memo 1 つ。
+fn lc_memo(id: &str) -> vessel::case::Part {
+    use vessel::case::{Extra, Kind, Phase};
+    lc_part(Kind::Memo, id, Phase::MemoWaiting, [None, None], Extra::Memo { due: None, triggers: None, keep: None })
+}
+
+/// 席の手番の閾値越えの数え（件数 `count`・最古は `count` が 1 以上の周だけ X）。
+fn lc_owned(count: u64, unset: u64, unknown: u64) -> vessel::fleet::lifecycle::Owned {
+    use vessel::case::{Kind, Phase};
+    let oldest = (count > 0).then(|| vessel::fleet::lifecycle::Oldest { part: Kind::Contract, id: "s2-x.1".to_owned(), phase: Phase::ContractRefused, since: "2026-09-01T00:00:00Z".to_owned() });
+    vessel::fleet::lifecycle::Owned { count, unset, unknown, oldest }
+}
+
+/// 黙った席へ素で 1 回撃ち、偽 tmux へ送った合図の text の列を返す（撃つ前に偽の bd と git を置き、呼びは 0 のまま）。
+fn lc_alarm_sent(place: &TickPlace) -> Vec<String> {
+    tick_vcs_shims(place);
+    let out = tick_run_bare(place, &[]);
+    assert_eq!(stdout_of(&out), tick_inject(0), "黙りの閾値を越えた周は段 0 で送る: stderr={}", stderr_of(&out));
+    assert_eq!(tick_vcs_calls(place), 0, "bd と git は撃たない");
+    tick_floor_texts(place)
+}
+
+/// 合図の text の期待（`alarm` が空なら alarm= の欄は無い）。
+fn lc_alarm_want(alarm: &str) -> String {
+    tick_facts_want(&if alarm.is_empty() { " live=0 idle=-".to_owned() } else { format!(" live=0 idle=- alarm={alarm}") })
+}
+
+/// (a) 未仕分けの発話 1 つだけの出力で alarm= は unsorted だけ。仕分け済みの発話と memo だけで owned の件数 0 の出力は alarm= が無い。
+#[test]
+fn seat_tick_lifecycle_alarm_names_unsorted_only_for_an_open_utterance() {
+    let place = lc_alarm_place(vec![lc_utterance("u1", true)], lc_owned(0, 0, 0));
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("unsorted")], "未仕分けの発話 1 つ");
+    let place = lc_alarm_place(vec![lc_utterance("u2", false), lc_memo("s2-m.1")], lc_owned(0, 0, 0));
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("")], "仕分け済みの発話と memo だけ");
+}
+
+/// (b) 部品が無く owned の件数 1 の出力で alarm= は owned だけ。件数 0 で unset 1・unknown 1 の出力は alarm= が無い。
+#[test]
+fn seat_tick_lifecycle_alarm_names_owned_only_for_a_count_of_one_or_more() {
+    let place = lc_alarm_place(Vec::new(), lc_owned(1, 0, 0));
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("owned")], "件数 1");
+    let place = lc_alarm_place(Vec::new(), lc_owned(0, 1, 1));
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("")], "件数 0・unset 1・unknown 1");
+}
+
+/// event log に 1 行足す（登録 row の行の写し＝読める行で、並列の実測も席の登録も変えない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn lc_alarm_grow(place: &TickPlace) {
+    let text = fs::read_to_string(vessel::fleet::store::events_path(&place.state)).expect("event log が在る");
+    let first = text.lines().next().expect("登録 row の行が在る").to_owned();
+    tick_log_append(place, &[first]);
+}
+
+/// 古さの印を 1 つ足す（merge の門の印）。
+fn lc_alarm_mark(place: &TickPlace) {
+    use vessel::fleet::lifecycle_mark::{add_mark, Added, Kind, Mark, Value};
+    let found = Mark { kind: Kind::MergeGate, at: "2026-10-01T00:00:00Z".to_owned(), value: Value::Main(LC_MAIN.to_owned()) };
+    let policy = vessel::fleet::store::LockPolicy { retry_ms: 50, stale_ms: 600_000 };
+    assert_eq!(add_mark(&place.state, &found, policy), Added::Added, "印を足せた");
+}
+
+/// (c) 古さの印 1 つ・未仕分けの発話 1 つ・owned の件数 1・床の検査の不合格で alarm= は floor,unsorted:stale,owned:stale（完全一致）。
+#[test]
+fn seat_tick_lifecycle_alarm_orders_the_words_after_floor_and_marks_them_stale() {
+    let place = lc_alarm_place(vec![lc_utterance("u1", true)], lc_owned(1, 0, 0));
+    lc_alarm_mark(&place);
+    tick_floor_put(&place, &tick_floor_body("fail", "1"));
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("floor,unsorted:stale,owned:stale")]);
+}
+
+/// (d) 出力の入力の印が今の event log の印と同じ周は unsorted（:stale が無い）。同じ置き場の log に 1 行足した周は unsorted:stale。
+#[test]
+fn seat_tick_lifecycle_alarm_adds_stale_when_the_event_log_moved() {
+    let place = lc_alarm_place(vec![lc_utterance("u1", true)], lc_owned(0, 0, 0));
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("unsorted")], "印が同じ");
+    let place = lc_alarm_place(vec![lc_utterance("u1", true)], lc_owned(0, 0, 0));
+    lc_alarm_grow(&place);
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("unsorted:stale")], "log に 1 行足した");
+}
+
+/// (e) 部品が無く件数 0 で印が今の log と同じ出力は語が無い。同じ置き場の log に 1 行足した周は alarm=stale の 1 語。
+#[test]
+fn seat_tick_lifecycle_alarm_names_stale_alone_when_nothing_else_is_named() {
+    let place = lc_alarm_place(Vec::new(), lc_owned(0, 0, 0));
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("")], "印が同じ");
+    let place = lc_alarm_place(Vec::new(), lc_owned(0, 0, 0));
+    lc_alarm_grow(&place);
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("stale")], "log に 1 行足した");
+}
+
+/// (f) 出力の無い置き場・json が読めない置き場・古さの印の file が読めない置き場の 3 周で、どれも alarm=unreadable の 1 語。
+#[test]
+fn seat_tick_lifecycle_alarm_names_unreadable_alone_for_an_absent_or_unreadable_output() {
+    let absent = tick_place(true);
+    tick_silent_for(&absent, 1900);
+    let broken = lc_alarm_place(Vec::new(), lc_owned(0, 0, 0));
+    fs::write(broken.state.join("fleet").join("lifecycle.json"), "{\"version\":2}\n").ok();
+    let stale = lc_alarm_place(vec![lc_utterance("u1", true)], lc_owned(1, 0, 0));
+    fs::write(stale.state.join("fleet").join("lifecycle.stale"), "not json\n").ok();
+    for (name, place) in [("出力が無い", &absent), ("json が読めない", &broken), ("古さの印の file が読めない", &stale)] {
+        assert_eq!(lc_alarm_sent(place), [lc_alarm_want("unreadable")], "{name}");
+    }
+}
+
+/// (m) 未仕分けの発話 1 つの出力を持つ置き場で、heartbeat の実効の値が on の周は合図が alarm=unsorted を持ち、off の周は合図を送らない（0 key）。
+#[test]
+fn seat_tick_lifecycle_alarm_reaches_only_a_seat_whose_heartbeat_is_on() {
+    let place = lc_alarm_place(vec![lc_utterance("u1", true)], lc_owned(0, 0, 0));
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("unsorted")], "on の周");
+    let place = lc_alarm_place(vec![lc_utterance("u1", true)], lc_owned(0, 0, 0));
+    heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
+    let out = tick_run_bare(&place, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "off の周も rc 0: {}", stderr_of(&out));
+    assert!(tick_floor_texts(&place).is_empty(), "off の周は 0 key");
+}
+
+/// (o) 段 2 の梯子の記録で段 2 の待ちを越えない置き場に未仕分けの発話 1 つの出力を置いた周は、合図を送らず段の待ちの noop で記録の段は動かない。
+/// 黙りの閾値を越えた記録なしの置き場の周に送る合図は alarm=unsorted を持つ（上げの秒を渡す変異は待ちの周に段 0 で送って落ちる）。
+#[test]
+fn seat_tick_lifecycle_alarm_never_raises_the_ladder() {
+    let place = tick_floor_place(None);
+    lc_alarm_save(&place, vec![lc_utterance("u1", true)], lc_owned(0, 0, 0));
+    let line = stdout_of(&tick_run_bare(&place, &[]));
+    assert!(tick_floor_is_step_wait(&line), "未仕分けだけの周は段の待ち: {line}");
+    assert!(tick_floor_texts(&place).is_empty(), "0 key");
+    assert_eq!(tick_ladder(&place).map(|(_, step, _)| step), Some(1), "記録の段は動かない（送っていない）");
+    let place = lc_alarm_place(vec![lc_utterance("u1", true)], lc_owned(0, 0, 0));
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("unsorted")], "黙りの閾値を越えた記録なしの周");
+}
+
+/// (n) owned の件数 2・最古 X で閾値越えの印を持つ部品が 0 の出力は alarm= が owned。件数 0 で閾値越えの印を持つ部品が在る出力は alarm= が無い
+/// （tick は部品の印を数え直さず出力の件数を写す）。
+#[test]
+fn seat_tick_lifecycle_alarm_copies_the_owned_count_and_never_recounts_the_marks() {
+    let place = lc_alarm_place(Vec::new(), lc_owned(2, 0, 0));
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("owned")], "件数 2・印を持つ部品 0");
+    let mut marked = lc_memo("s2-m.1");
+    marked.overdue = Some(true);
+    let place = lc_alarm_place(vec![marked], lc_owned(0, 0, 0));
+    assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("")], "件数 0・印を持つ部品 1");
 }

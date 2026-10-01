@@ -9,6 +9,7 @@
 
 use super::{Pointer, Rows, ROW_LADDER};
 use crate::fleet::json_lite::{self, Value};
+use crate::fleet::lifecycle_read::{unsorted, Lifecycle};
 use crate::name::NAME;
 use crate::pipe::dispatch::facts::{Fact, Facts};
 use crate::seat::state::{Event, Stamp};
@@ -120,8 +121,9 @@ pub fn signal(step: u32, pace: &Pace) -> String {
 /// 段の上げの判定（設計 §17 形 1 / 2）: 行が無い・読めない周は上げず語 `idle-unset`、値が正で live が 0 と測れ 0 本の分数 × 60 が
 /// 値以上の周だけ上げて語 `idle`、他（値 0・測れない・値なし）は上げず語なし。事前審査の本数を持つ周（dispatcher.md §27 形 4）は
 /// 続けて、`seat.precheck_alarm_s` の行が無い・読めない周は上げず語 `precheck-unset`、値が正で最も古い束の初めて見た時刻から
-/// 値の秒数以上経った周は上げて語 `precheck`。返り値は（上げた周の値の小さい方, `alarm=` の語の列〔u の語が先〕）。
-pub(super) fn idle_alarm(rows: &Rows, found: &Facts, now: u64) -> (Option<u64>, Vec<&'static str>) {
+/// 値の秒数以上経った周は上げて語 `precheck`。局面の出力の語（[`lifecycle_words`]・設計 §24 約束 1）は floor の後ろに足し、
+/// 上げの秒を持たない。返り値は（上げた周の値の小さい方, `alarm=` の語の列〔u の語が先〕）。
+pub(super) fn idle_alarm(rows: &Rows, found: &Facts, now: u64, lifecycle: &Lifecycle) -> (Option<u64>, Vec<&'static str>) {
     let idle = match (rows.idle_alarm_s, &found.live, &found.idle) {
         (None, _, _) => (None, Some("idle-unset")),
         (Some(value), Fact::Value(0), Fact::Value(minutes)) if value > 0 && minutes.saturating_mul(60) >= value => (Some(value), Some("idle")),
@@ -136,7 +138,26 @@ pub(super) fn idle_alarm(rows: &Rows, found: &Facts, now: u64) -> (Option<u64>, 
     let floor = found.floor.map_or((None, None), |_| (Some(u64::MAX), Some("floor")));
     // 未反映の裁定は 1 件以上の周に語 `unreflected` だけ足し、段は上げない（precheck の後・floor の前・設計 §38 約束 7）。
     let unreflected = (found.unreflected > 0).then_some("unreflected");
-    ([idle.0, precheck.0, floor.0].into_iter().flatten().min(), [idle.1, precheck.1, unreflected, floor.1].into_iter().flatten().collect())
+    let mut words: Vec<&'static str> = [idle.1, precheck.1, unreflected, floor.1].into_iter().flatten().collect();
+    words.extend(lifecycle_words(lifecycle));
+    ([idle.0, precheck.0, floor.0].into_iter().flatten().min(), words)
+}
+
+/// 局面の出力の語（設計 §24 約束 1）: 出力が無いか読めない周は `unreadable` の 1 語、読めた周は未仕分けの発話が 1 以上で `unsorted`・
+/// owned の件数が 1 以上で `owned`、古い理由が在る周は出した語に `:stale` を添え、件数が 0 で古い周は `stale` の 1 語。
+fn lifecycle_words(lifecycle: &Lifecycle) -> Vec<&'static str> {
+    let Lifecycle::Read(found) = lifecycle else {
+        return vec!["unreadable"];
+    };
+    let stale = !found.stale.is_empty();
+    let words: Vec<&'static str> = [
+        (unsorted(&found.parts) > 0).then_some(if stale { "unsorted:stale" } else { "unsorted" }),
+        (found.owned.count > 0).then_some(if stale { "owned:stale" } else { "owned" }),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if words.is_empty() && stale { vec!["stale"] } else { words }
 }
 
 /// 段の上げ（pure・設計 §17 形 3 (a)(b)・**1 本**）: 上げた周は（黙りの閾値, 段）を（`seat.tick_stale_s` と値の小さい方, 0）に。

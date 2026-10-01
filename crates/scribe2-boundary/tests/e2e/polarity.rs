@@ -453,13 +453,13 @@ fn polarity_drops_the_working_memory_guards() {
 /// 復帰の DATA（`s2-07l.489`・設計 seat-roles.md §21）は **in-loop / fail-open** の計測の境界で、guard ではない
 /// （行為を止めない＝`fleet::UnmeasuredReason` と同型・`NOT_A_GUARD` の 1 行）: 台帳・git を測れない周はその種類だけ
 /// `[RECENT-UNMEASURED]` を出し、他の種類と §5 の指示文は出す。一覧（`<NAME> polarity`）の行数と集計は**不変**で、
-/// 理由の閉じた enum（`Unmeasured`・4 variant・宣言順）が `reason=` の字面を持つ。
+/// 理由の閉じた enum（`Unmeasured`・5 variant・宣言順）が `reason=` の字面を持つ。
 #[test]
 fn polarity_keeps_session_recent_out_of_the_guard_list_as_in_loop_fail_open() {
     let recent: Polarity = vessel::seat::recent::POLARITY;
     assert_eq!(recent, Polarity { timing: Timing::InLoop, on_failure: OnFailure::FailOpen }, "測れない種類だけ UNMEASURED・他は出す");
     let reasons: Vec<&str> = vessel::seat::recent::UNMEASURED.iter().map(|reason| reason.as_str()).collect();
-    assert_eq!(reasons, ["ledger-unreadable", "ledger-timeout", "git-unavailable", "not-a-repo"], "理由の閉じた列（宣言順）");
+    assert_eq!(reasons, ["ledger-unreadable", "ledger-timeout", "git-unavailable", "not-a-repo", "lifecycle"], "理由の閉じた列（宣言順）");
     assert!(is_declaration_order(vessel::seat::recent::UNMEASURED, |reason| reason as usize), "宣言順");
     // `NOT_A_GUARD` は値の slice なので site は弁別できない＝同じ値（in-loop / fail-open）を持つ site の本数を pin する
     // （`fleet::UnmeasuredReason`・`select::NoCandidateReason`・復帰の DATA・圧縮の枠の書く側と読む側の 5 つ＝DATA の
