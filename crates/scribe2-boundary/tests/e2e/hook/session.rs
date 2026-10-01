@@ -964,6 +964,25 @@ fn hook_utterance_record_does_not_skip_lookalikes() {
     clean(&[&repo, &state]);
 }
 
+/// (b3) 同じ session の係の知らせ（頭が `<agent-message`）は、先頭に空白を置いても記帳 0・出力 0 byte。本文の 2 行目に
+/// `<agent-message` を置いた prompt は 1 件記帳される。
+#[test]
+fn hook_utterance_record_skips_agent_message_() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    assert_recorded(&utter_plain(&repo, &[], "対照"), "対照");
+    for (why, prompt) in [
+        ("頭が agent-message", "<agent-message from=\"x\">\n本文の行"),
+        ("先頭に空白を置いた agent-message", "  \n<agent-message from=\"x\">\n本文の行"),
+    ] {
+        assert_silent(&utter_plain(&repo, &[], prompt), why);
+    }
+    assert_eq!(utterances(&state).len(), 1, "記帳は対照の 1 件だけ");
+    assert_recorded(&utter_plain(&repo, &[], "依頼\n<agent-message from=\"x\">"), "2 行目の agent-message");
+    assert_eq!(utterances(&state).len(), 2, "2 行目の agent-message は 1 件記帳される");
+    clean(&[&repo, &state]);
+}
+
 /// (c) marker の無い repo と別の `NAME` の repo は記帳 0・出力 0 byte。対照の仕える repo は 1 件記帳される。
 #[test]
 fn hook_utterance_record_is_silent_outside_a_served_repo() {
