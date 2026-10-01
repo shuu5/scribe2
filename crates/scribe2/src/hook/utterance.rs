@@ -192,7 +192,7 @@ mod tests {
         let pressed = crate::hook::group::Pressed { window: crate::fleet::WindowKind::FiveHour, used: 90, cap: 85 };
         let made = [
             ("notify::terminal_line", terminal_line(&Terminal { bead: "b", run: "r", stage: "Landed", word: "ok" })),
-            ("notify::idle_line", idle_line(&turn, &facts, &[]).expect("候補が在る周は idle の行")),
+            ("notify::idle_line", idle_line(&turn, &facts, Some(&[])).expect("候補が在る周は idle の行")),
             ("notify::precheck_line", precheck_line(&(vec![("x".to_owned(), PathBuf::from("/p"))], 1))),
             ("deliver::line", crate::seat::deliver::line("r-1")),
             ("signal::signal", crate::seat::tick::signal::signal(0, &pace)),
