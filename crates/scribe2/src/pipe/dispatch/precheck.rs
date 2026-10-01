@@ -12,13 +12,15 @@ use super::super::contract::Contract;
 use super::super::gate::Verdict;
 use super::super::land::verdict_of;
 use super::super::refuse::{discern, normalize, Certainty, DELETE_FILE, NEW_FILE};
-use super::super::table::Pointer;
-use super::super::{base_of_run, contract_path, current, git_bytes, head_of, worktree_path, DIR};
+use super::super::row_review::Basis;
+use super::super::table::{parse_pointer, read_rows, ContractRow, Pointer};
+use super::super::{base_of_run, contract_path, current, git_bytes, head_of, show_head, worktree_path, DIR};
 use super::candidates::{is_blocking, pointer_of};
 use super::{Input, Turn, WaitReason, CLOSED, DASH};
 use crate::fleet::{Stage, State};
 use crate::ledger::form::{is_memo, is_question};
 use crate::seat::ledger::Issue;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -112,6 +114,8 @@ pub(in crate::pipe) enum Layer {
 struct Ctx<'a, 'b> {
     /// 列の材料。
     input: &'a Input<'b>,
+    /// 同じ周に読んだ台帳の全件。
+    issues: &'a [Issue],
     /// 母集団と到達。
     population: &'a Population,
     /// 同じ周に `turn` が読んだ base の材料。
@@ -119,64 +123,206 @@ struct Ctx<'a, 'b> {
 }
 
 /// Gated PASS の便（live ∧ `Gated` ∧ verdict PASS・verdict の読みは着地の段と同じ [`verdict_of`]）なら run id。
-fn tree_run<'a>(input: &Input<'_>, row: &'a Row) -> Option<&'a str> {
+fn tree_run<'a>(state_dir: &Path, row: &'a Row) -> Option<&'a str> {
     let (run, stage, _) = row.live.as_ref()?;
-    (*stage == Stage::Gated && verdict_of(input.state_dir, run) == Some(Verdict::Pass)).then_some(run.as_str())
+    (*stage == Stage::Gated && verdict_of(state_dir, run) == Some(Verdict::Pass)).then_some(run.as_str())
 }
 
 /// 祖先ごとの状態の語（鍵の材料・形 4）: `declared`／`run:<便>`／`tree:<便>@<worktree の HEAD の sha>`。
-fn state_word(input: &Input<'_>, row: &Row) -> String {
-    match (tree_run(input, row), row.live.as_ref()) {
-        (Some(run), _) => format!("tree:{run}@{}", head_of(&worktree_path(input.repo, run)).unwrap_or_else(|| DASH.to_owned())),
+fn state_word(repo: &Path, state_dir: &Path, row: &Row) -> String {
+    match (tree_run(state_dir, row), row.live.as_ref()) {
+        (Some(run), _) => format!("tree:{run}@{}", head_of(&worktree_path(repo, run)).unwrap_or_else(|| DASH.to_owned())),
         (None, Some((run, ..))) => format!("run:{run}"),
         (None, None) => "declared".to_owned(),
     }
 }
 
-/// bead の open な祖先（到達のうち閉じていない契約の行だけ・依存の順）。
-fn ancestors_of(population: &Population, bead: &str) -> Vec<String> {
-    let reach = population.reach.get(bead).map(Vec::as_slice).unwrap_or_default();
-    reach.iter().filter(|id| population.rows.contains_key(*id)).cloned().collect()
+/// 祖先 1 つの状態（行の審査の記録の `ancestors` の語・設計 row-review.md §3 形 3）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::pipe) enum Standing {
+    /// 祖先を指す bead が全部 closed（base に着地済み・層は空）。
+    Landed,
+    /// 祖先の便が Gated で判定 PASS（実物の層）。
+    Tree,
+    /// それ以外（宣言の予想の層）。
+    Declared,
 }
 
-/// 祖先 1 つの重ね方を決めて memo に置く（決まらない周は `None`＝生成が断る・写しを読めない・差分を読めない）。
-///
-/// live な便は写しの write-set（受付が凍結した値）か、Gated PASS なら実物。live でない行は自分の祖先を重ねた予想の base で
-/// [`generated`] を撃った契約の write-set。先に `None` を置くので、循環は決まらない側に倒れて回らない。
-fn resolve(ctx: &Ctx<'_, '_>, bead: &str, memo: &mut BTreeMap<String, Option<Layer>>) {
-    if memo.contains_key(bead) {
-        return;
-    }
-    memo.insert(bead.to_owned(), None);
-    let Some(row) = ctx.population.rows.get(bead) else {
-        return;
-    };
-    let layer = match (tree_run(ctx.input, row), row.live.as_ref()) {
-        (Some(run), _) => tree_of(ctx.input, run),
-        (None, Some((_, _, copied))) => copied.clone().map(Layer::Declared),
-        (None, None) => {
-            let ancestors = ancestors_of(ctx.population, bead);
-            for id in &ancestors {
-                resolve(ctx, id, memo);
+/// 祖先 1 つの（行・状態・当てる層）と、行の祖先の列（依存の順）と basis の対（口 (G) の返り）。
+pub(in crate::pipe) type Ancestor = (String, Standing, Layer);
+pub(in crate::pipe) type Ancestry = (Vec<Ancestor>, Basis);
+
+/// 設計 pointer の行の字（`<path>#<id>`・行の祖先の層の口の鍵）。
+fn row_key(pointer: &Pointer) -> String {
+    format!("{}#{}", pointer.path, pointer.id)
+}
+
+/// 行を鍵にした祖先の読み（1 周に 1 回の台帳と表の読みを借りる・設計 row-review.md §3 形 3）。
+struct Walk<'a> {
+    /// repo（表と base を読む）。
+    repo: &'a Path,
+    /// 置き場。
+    state_dir: &'a Path,
+    /// 母集団と到達。
+    population: Population,
+    /// 設計 pointer の行ごとの bead（memo でも台帳の問いでもない全件）。
+    beads: BTreeMap<String, Vec<&'a Issue>>,
+    /// doc ごとの表の行（読めない doc は理由・1 度読んだら読み直さない）。
+    docs: RefCell<BTreeMap<String, Result<Vec<ContractRow>, String>>>,
+}
+
+impl<'a> Walk<'a> {
+    /// 台帳と置き場の状態から読む。
+    fn new(repo: &'a Path, state_dir: &'a Path, issues: &'a [Issue], state: &State) -> Self {
+        let mut beads: BTreeMap<String, Vec<&Issue>> = BTreeMap::new();
+        for issue in issues.iter().filter(|issue| !is_memo(issue) && !is_question(issue)) {
+            if let Some(pointer) = pointer_of(&issue.acceptance) {
+                beads.entry(row_key(&pointer)).or_default().push(issue);
             }
-            layers(&ancestors, memo).and_then(|found| {
-                let (materials, _) = overlay(ctx.base, &found);
-                generated(ctx.input.repo, &row.pointer, &materials).ok().map(|(contract, _)| Layer::Declared(contract.write_set))
-            })
         }
-    };
-    memo.insert(bead.to_owned(), layer);
+        Self { repo, state_dir, population: population(issues, state_dir, state), beads, docs: RefCell::default() }
+    }
+
+    /// 行を指す bead が全部 closed か（bead が 1 本以上在る行だけ）。
+    fn landed(&self, row: &str) -> bool {
+        self.beads.get(row).is_some_and(|found| found.iter().all(|issue| issue.status == CLOSED))
+    }
+
+    /// 行を代表する open な bead（Gated PASS の便を持つ bead → live な便を持つ bead → bead id の先頭の順）。
+    fn rep(&self, row: &str) -> Option<(&str, &Row)> {
+        let mut open: Vec<(&str, &Row)> = self.beads.get(row)?.iter().filter_map(|issue| Some((issue.id.as_str(), self.population.rows.get(&issue.id)?))).collect();
+        open.sort_by_key(|(id, _)| *id);
+        let tree = open.iter().find(|(_, found)| tree_run(self.state_dir, found).is_some());
+        tree.or_else(|| open.iter().find(|(_, found)| found.live.is_some())).or_else(|| open.first()).copied()
+    }
+
+    /// 行の表の depends（同じ doc の行・読めない周は理由）。
+    fn depends_of(&self, row: &str) -> Result<Vec<String>, String> {
+        let pointer = parse_pointer(row).map_err(|err| format!("{row} は設計 pointer の形でない（{}）", err.reason()))?;
+        let mut docs = self.docs.borrow_mut();
+        let table = docs.entry(pointer.path.clone()).or_insert_with(|| {
+            let text = show_head(self.repo, &pointer.path).ok_or_else(|| format!("{} を base（HEAD）から読めない", pointer.path))?;
+            read_rows(&pointer.path, &text).map_err(|errors| errors.iter().map(|error| error.reason()).collect::<Vec<String>>().join(" / "))
+        });
+        let rows = table.as_ref().map_err(Clone::clone)?;
+        let found = rows.iter().find(|found| found.id == pointer.id).ok_or_else(|| format!("{} に行 {} が無い", pointer.path, pointer.id))?;
+        Ok(found.depends.iter().map(|id| format!("{}#{id}", pointer.path)).collect())
+    }
+
+    /// 行の bead が台帳の blocks で待つ open な契約の行（依存の順）。
+    fn blocked_by(&self, row: &str) -> Vec<String> {
+        let found = self.beads.get(row).map(Vec::as_slice).unwrap_or_default();
+        let reach = found.iter().filter_map(|issue| self.population.reach.get(&issue.id)).flatten();
+        reach.filter_map(|id| self.population.rows.get(id)).map(|found| row_key(&found.pointer)).collect()
+    }
+
+    /// 行の祖先（依存の順・自分は含まない）: 表の depends を推移でたどった同じ doc の行と、行の bead の台帳の blocks の到達
+    /// （着地済みの行は先へたどらない・表を読めない周は行自身なら理由・祖先なら先を持たない行）。
+    fn closure(&self, row: &str) -> Result<Vec<String>, String> {
+        let (mut seen, mut order) = (BTreeSet::from([row.to_owned()]), Vec::new());
+        self.visit(row, &mut seen, &mut order, true)?;
+        Ok(order)
+    }
+
+    /// [`Self::closure`] の深さ優先（帰りがけに積む＝依存が先に並ぶ）。
+    fn visit(&self, row: &str, seen: &mut BTreeSet<String>, order: &mut Vec<String>, root: bool) -> Result<(), String> {
+        if self.landed(row) {
+            return Ok(());
+        }
+        let direct = match self.depends_of(row) {
+            Ok(found) => found,
+            Err(reason) if root => return Err(reason),
+            Err(_) => Vec::new(),
+        };
+        for dep in direct.into_iter().chain(self.blocked_by(row)) {
+            if seen.insert(dep.clone()) {
+                self.visit(&dep, seen, order, false)?;
+                order.push(dep);
+            }
+        }
+        Ok(())
+    }
+
+    /// 祖先ごとの鍵の語（`<bead>=<状態の語>`・bead の無い祖先は行の字・着地済みは書かない＝base の HEAD が鍵に入る）。
+    fn words(&self, row: &str) -> Vec<String> {
+        let ancestors = self.closure(row).unwrap_or_default();
+        let word = |id: &String| match self.rep(id) {
+            Some((bead, found)) => format!("{bead}={}", state_word(self.repo, self.state_dir, found)),
+            None => format!("{id}=declared"),
+        };
+        ancestors.iter().filter(|id| !self.landed(id)).map(word).collect()
+    }
+
+    /// 祖先 1 つの状態と層を決めて memo に置く（決まらない周は `None`）。着地済みは空の層。live な便は写しの write-set か、Gated
+    /// PASS なら実物。便の無い行は自分の祖先を重ねた予想の base で [`generated`] を撃った契約の write-set。先に `None` を置くので
+    /// 循環は決まらない側に倒れて回らない。
+    fn resolve(&self, base: &Materials, row: &str, memo: &mut BTreeMap<String, Option<(Standing, Layer)>>) {
+        if memo.contains_key(row) {
+            return;
+        }
+        memo.insert(row.to_owned(), None);
+        let found = if self.landed(row) { Some((Standing::Landed, Layer::Declared(Vec::new()))) } else { self.pending(base, row, memo) };
+        memo.insert(row.to_owned(), found);
+    }
+
+    /// 着地していない祖先の状態と層。
+    fn pending(&self, base: &Materials, row: &str, memo: &mut BTreeMap<String, Option<(Standing, Layer)>>) -> Option<(Standing, Layer)> {
+        let live = self.rep(row).map(|(_, found)| found);
+        if let Some(run) = live.and_then(|found| tree_run(self.state_dir, found)) {
+            return tree_of(self.repo, self.state_dir, run).map(|layer| (Standing::Tree, layer));
+        }
+        if let Some((_, _, copied)) = live.and_then(|found| found.live.as_ref()) {
+            return copied.clone().map(|write_set| (Standing::Declared, Layer::Declared(write_set)));
+        }
+        let (pointer, ancestors) = (parse_pointer(row).ok()?, self.closure(row).ok()?);
+        for id in &ancestors {
+            self.resolve(base, id, memo);
+        }
+        let found: Option<Vec<&Layer>> = ancestors.iter().map(|id| memo.get(id)?.as_ref().map(|(_, layer)| layer)).collect();
+        let (materials, _) = overlay(base, &found?);
+        generated(self.repo, &pointer, &materials).ok().map(|(contract, _)| (Standing::Declared, Layer::Declared(contract.write_set)))
+    }
+
+    /// 行の祖先ごとの（行・状態・当てる層）と basis（依存の順・祖先の層か契約の生成が決まらない周は理由）。
+    fn ancestry(&self, base: &Materials, row: &str) -> Result<Ancestry, String> {
+        let order = self.closure(row)?;
+        let mut memo = BTreeMap::new();
+        for id in &order {
+            self.resolve(base, id, &mut memo);
+        }
+        let mut found = Vec::new();
+        for id in order {
+            let decided = memo.remove(&id).flatten();
+            let (standing, layer) = decided.ok_or_else(|| format!("祖先 {id} の層を決められない（写し・差分・契約の生成を読めない）"))?;
+            found.push((id, standing, layer));
+        }
+        let declared = found.iter().any(|(_, standing, _)| *standing == Standing::Declared);
+        let basis = match (declared, self.beads.contains_key(row)) {
+            (true, _) => Basis::Forecast,
+            (false, true) => Basis::Actual,
+            (false, false) => Basis::Partial,
+        };
+        Ok((found, basis))
+    }
 }
 
-/// 祖先の重ね方の列（1 つでも決まらなければ `None`）。
-fn layers<'a>(ancestors: &[String], memo: &'a BTreeMap<String, Option<Layer>>) -> Option<Vec<&'a Layer>> {
-    ancestors.iter().map(|id| memo.get(id).and_then(Option::as_ref)).collect()
+/// 祖先の層の口（設計 row-review.md §3 の口 (G)・事前審査の予想はこの口の上に載る）: 行 `row`（`<doc>#<行 id>`）の祖先ごとの
+/// （行・状態・当てる層）の列と basis。祖先は表の depends を推移でたどった同じ doc の行と、行を指す bead が在ればその台帳の blocks の
+/// 祖先。`base` は 1 周に 1 回読んだ材料で、口の中で読み直さない。表か bead の pointer を読めない周・祖先の層を決められない周は理由。
+pub(in crate::pipe) fn ancestry(repo: &Path, state_dir: &Path, issues: &[Issue], base: &Materials, row: &str) -> Result<Ancestry, String> {
+    let state = current(state_dir).map_err(|errors| errors.iter().map(ToString::to_string).collect::<Vec<String>>().join(" / "))?;
+    Walk::new(repo, state_dir, issues, &state).ancestry(base, row)
+}
+
+/// 予想に重ねる層（着地済みの祖先は base に在るので重ねない）。
+fn applied(found: &[Ancestor]) -> Vec<&Layer> {
+    found.iter().filter(|(_, standing, _)| *standing != Standing::Landed).map(|(_, _, layer)| layer).collect()
 }
 
 /// Gated PASS の便の実物（worktree の base..HEAD の name-status・rename は対）。
-fn tree_of(input: &Input<'_>, run: &str) -> Option<Layer> {
-    let worktree = worktree_path(input.repo, run);
-    let (base, head) = (base_of_run(input.state_dir, run).known()?, head_of(&worktree)?);
+fn tree_of(repo: &Path, state_dir: &Path, run: &str) -> Option<Layer> {
+    let worktree = worktree_path(repo, run);
+    let (base, head) = (base_of_run(state_dir, run).known()?, head_of(&worktree)?);
     let range = format!("{base}..{head}");
     let text = String::from_utf8(git_bytes(&worktree, &["diff", "--name-status", "-z", "-M", &range])?).ok()?;
     let (mut add, mut remove, mut bodies) = (Vec::new(), Vec::new(), Vec::new());
@@ -247,14 +393,18 @@ pub(super) struct Finding {
     pub(super) reason: String,
 }
 
-/// 先撃ちの予想の口（行 aa・設計 §27 形 aa 1・層の読み手を 2 本にしない・C2）: 待ち行の祖先の層（依存の順・[`resolve`] と同じ
-/// memo）と、予想の base で [`generated`] を撃った契約。祖先の層か生成が決まらない周は `None`。
-fn forecast(ctx: &Ctx<'_, '_>, bead: &str, memo: &mut BTreeMap<String, Option<Layer>>) -> Option<super::prelens::Forecast> {
-    let (row, ancestors) = (ctx.population.rows.get(bead)?, ancestors_of(ctx.population, bead));
-    for id in &ancestors {
-        resolve(ctx, id, memo);
-    }
-    let found = layers(&ancestors, memo)?;
+/// 待ち行の祖先の層（行の鍵の口 [`ancestry`]・依存の順）。祖先の層を決められない周は `None`。
+fn layers_of(ctx: &Ctx<'_, '_>, row: &Row) -> Option<Vec<Ancestor>> {
+    let key = row_key(&row.pointer);
+    ancestry(ctx.input.repo, ctx.input.state_dir, ctx.issues, ctx.base, &key).ok().map(|(found, _)| found)
+}
+
+/// 先撃ちの予想の口（行 aa・設計 §27 形 aa 1・層の読み手を 2 本にしない・C2）: 待ち行の祖先の層（依存の順）と、予想の base で
+/// [`generated`] を撃った契約。祖先の層か生成が決まらない周は `None`。
+fn forecast(ctx: &Ctx<'_, '_>, bead: &str) -> Option<super::prelens::Forecast> {
+    let row = ctx.population.rows.get(bead)?;
+    let found = layers_of(ctx, row)?;
+    let found = applied(&found);
     let (contract, body) = generated(ctx.input.repo, &row.pointer, &overlay(ctx.base, &found).0).ok()?;
     Some(super::prelens::Forecast { layers: found.into_iter().cloned().collect(), contract, body })
 }
@@ -262,11 +412,9 @@ fn forecast(ctx: &Ctx<'_, '_>, bead: &str, memo: &mut BTreeMap<String, Option<La
 /// 待ち行 1 つを予想の base で撃つ（形 2）: 祖先の重ね方が 1 つでも決まらなければ `None`（`unmeasured:forecast`）。
 /// 撃つのは [`generated`] と [`judge`]（置き場なし・lock の前の読みなし＝列の候補の `blocker` と同じ形）だけで、置き場の要る
 /// 判定と base の木の実走は撃たない。
-fn judged(ctx: &Ctx<'_, '_>, row: &Row, ancestors: &[String], memo: &mut BTreeMap<String, Option<Layer>>) -> Option<Vec<Finding>> {
-    for id in ancestors {
-        resolve(ctx, id, memo);
-    }
-    let (materials, moving) = overlay(ctx.base, &layers(ancestors, memo)?);
+fn judged(ctx: &Ctx<'_, '_>, row: &Row) -> Option<Vec<Finding>> {
+    let found = layers_of(ctx, row)?;
+    let (materials, moving) = overlay(ctx.base, &applied(&found));
     let input = ctx.input;
     let denials = match generated(input.repo, &row.pointer, &materials) {
         Err(denial) => vec![denial],
@@ -390,7 +538,8 @@ pub(super) fn round(input: &Input<'_>, turn: &Turn, issues: &[Issue], base: Opti
     let (Some(base), Ok(state), Some(head)) = (base, current(input.state_dir), head_of(input.repo)) else {
         return;
     };
-    let population = population(issues, input.state_dir, &state);
+    let walk = Walk::new(input.repo, input.state_dir, issues, &state);
+    let population = &walk.population;
     let waiting: Vec<&str> = waiting_of(turn).into_iter().filter(|bead| population.rows.contains_key(*bead)).collect();
     let dir = dir_of(input.state_dir);
     if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -400,31 +549,27 @@ pub(super) fn round(input: &Input<'_>, turn: &Turn, issues: &[Issue], base: Opti
             }
         }
     }
-    let (rules, ctx) = (rules_word(input), Ctx { input, population: &population, base });
-    let (mut memo, mut before) = (BTreeMap::new(), BTreeMap::new());
+    let (rules, ctx) = (rules_word(input), Ctx { input, issues, population, base });
+    let mut before = BTreeMap::new();
     for &bead in &waiting {
         let Some(row) = population.rows.get(bead) else {
             continue;
         };
-        let ancestors = ancestors_of(&population, bead);
-        let words: Vec<String> = ancestors
-            .iter()
-            .filter_map(|id| population.rows.get(id).map(|found| format!("{id}={}", state_word(input, found))))
-            .collect();
+        let words = walk.words(&row_key(&row.pointer));
         let key = format!("head:{head} rules:{rules} ancestors:{}", words.join(","));
         let previous = read(&dir.join(bead));
         if previous.as_ref().is_some_and(|kept| kept.key == key) {
             continue;
         }
-        let findings = judged(&ctx, row, &ancestors, &mut memo);
+        let findings = judged(&ctx, row);
         write(&dir, bead, &key, findings.as_deref(), previous.as_ref());
         before.insert(bead, previous);
     }
     // 先撃ち（行 aa・設計 §27 形 aa）は書き直した後・束ねる前（書き直す前の結果を前の結果として判定を同じ周に写し直す・形 aa 4）。
-    let sweep = super::prelens::Sweep { input, dir: &dir, population: &population, waiting: &waiting, before };
-    super::prelens::round(&sweep, &mut |bead| forecast(&ctx, bead, &mut memo));
+    let sweep = super::prelens::Sweep { input, dir: &dir, population, waiting: &waiting, before };
+    super::prelens::round(&sweep, &mut |bead| forecast(&ctx, bead));
     // 周の終わりに確定の finding を根で束ねる（行 y・設計 §27 形 1）。
-    super::bundle::round(input, &dir, &population, &waiting);
+    super::bundle::round(input, &dir, population, &waiting);
 }
 
 /// `dispatch ls` の事前審査の行（依存待ちの候補ごとに 1 行・結果の file を読むだけ・形 7）:

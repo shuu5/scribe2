@@ -543,6 +543,45 @@ fn pipe_dispatch_precheck_follows_blocks_transitively_but_not_parents_or_closed(
     clean(&[&repo, &state]);
 }
 
+/// 行 `id` の欄に表の depends（同じ doc の行 id の列）を足す（write-set だけ差し替える）。
+fn precheck_row_after(id: &str, write_set: &str, depends: &str) -> Vec<String> {
+    let (set, after) = (format!("write-set = {write_set}"), format!("depends = {depends}"));
+    row_fields(id, &["write-set"], &[set.as_str(), after.as_str()])
+}
+
+/// (h) 祖先が表の depends だけで繋がる（行 a1・設計 row-review.md §3 の口 (G)）: 台帳では hold した別の bead だけを blocks で待ち、表の
+/// depends で `+` の file を宣言する open な行（hold）に繋がる行は、その file を素で持って clean。同じ台帳と同じ write-set で depends
+/// を持たない対照の行は firm:1（write-set-item-unresolved）のまま。
+#[test]
+fn pipe_dispatch_precheck_table_depends_declares_the_new_file_without_a_ledger_block() {
+    let rows = [
+        precheck_row("a", r#"["+src/fresh.rs"]"#, ""),
+        precheck_row("h", r#"["src/lib.rs"]"#, ""),
+        precheck_row_after("b", r#"["src/fresh.rs"]"#, r#"["a"]"#),
+        precheck_row("c", r#"["src/fresh.rs"]"#, ""),
+    ];
+    let (repo, state) = precheck_repo(&rows, &[]);
+    let on_h = [("s2-pre.3", "blocks")];
+    let bd = fake_bd(
+        &state,
+        &[
+            waiting_on("s2-pre.1", "a", &[]),
+            waiting_on("s2-pre.3", "h", &[]),
+            waiting_on("s2-pre.2", "b", &on_h),
+            waiting_on("s2-pre.4", "c", &on_h),
+        ],
+    );
+    hold(&state, &["s2-pre.1", "s2-pre.3"]);
+    precheck_turn(&repo, &state, &bd);
+    let after = precheck_of(&state, "s2-pre.2");
+    assert_eq!(result_of(&state, "s2-pre.2"), "clean", "表の depends の + を素で持つ行は clean: {after}");
+    assert!(after.lines().any(|line| line.starts_with("key=head:") && line.contains(" ancestors:s2-pre.1=declared,")), "{after}");
+    let control = precheck_of(&state, "s2-pre.4");
+    assert_eq!(result_of(&state, "s2-pre.4"), "firm:1,provisional:0", "depends を持たない対照は確定のまま: {control}");
+    assert!(control.contains("name=write-set-item-unresolved at=files:src/fresh.rs "), "{control}");
+    clean(&[&repo, &state]);
+}
+
 // ───── 受付の断りの記帳（設計 docs/design/dispatcher.md §32・行 ag・接頭辞 `pipe_dispatch_intake_refused_`） ─────
 //
 // 起こす側の周が受付の断りを契約ごとに `IntakeRefused` 1 件に残す。base の周は 1 件も書かない（本数 0 で RED）。

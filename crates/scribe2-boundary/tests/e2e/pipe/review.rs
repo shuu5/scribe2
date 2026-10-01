@@ -1790,3 +1790,315 @@ fn lens_read_prelens_verdict_stays_on_the_tree_it_read_across_a_main_move() {
         prelens_clean(&place, &[]);
     }
 }
+
+// ───── 行の審査の記録の読み手と鍵の口（設計 docs/design/row-review.md §3・§9・行 a1・接頭辞 `pipe_review_record_`） ─────
+//
+// 口 (A)〜(F) と (H) を e2e が直に呼ぶ（`vessel::pipe::row_review`）。記録は §9 の形で手で書く（書き手は行 a の歯が測る）。
+// 口 (G) は事前審査の予想の外形（`pipe_dispatch_precheck_table_depends_`）が測る。
+
+use vessel::pipe::gate::Verdict;
+use vessel::pipe::review::FindingKind;
+use vessel::pipe::row_review::{self, Basis, Listed, Parts, RefResult};
+
+/// 40 桁の 16 進の sha（字は 1 字で埋める）。
+fn rr_sha(digit: char) -> String {
+    digit.to_string().repeat(40)
+}
+
+/// 置き場の行の審査の根（§9: state dir の pipe の下の row-review）。
+fn rr_root(state: &Path) -> PathBuf {
+    state.join("pipe").join("row-review")
+}
+
+/// 空の置き場（tmp の下の `state`）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rr_state() -> PathBuf {
+    let state = tmp().join(STATE_LEAF);
+    fs::create_dir_all(rr_root(&state).join("ref")).expect("置き場を作れる");
+    state
+}
+
+/// ref の記録の file（本文をそのまま置く）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rr_ref(state: &Path, sha: &str, body: &str) {
+    fs::write(rr_root(state).join("ref").join(sha), body).expect("ref の記録を書ける");
+}
+
+/// 撃ち中の印（`<pid> <起動時刻>`）を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rr_mark(state: &Path, sha: &str, pid: u32) {
+    let started = vessel::fleet::store::started_ms(pid).started();
+    let body = started.map_or_else(|| format!("{pid} 1\n"), |at| format!("{pid} {at}\n"));
+    fs::write(rr_root(state).join("ref").join(format!("{sha}.pid")), body).expect("印を書ける");
+}
+
+/// 終わって回収した子の pid（今は無い process・印の持ち主が死んだ形）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rr_dead_pid() -> u32 {
+    let mut child = Command::new("true").spawn().expect("子を起こせる");
+    let pid = child.id();
+    child.wait().expect("子を待てる");
+    pid
+}
+
+/// 済んだ ref の記録の本文（`result` の行は呼び手が足す）。
+fn rr_finished(result: Option<&str>) -> String {
+    let rows = "row=docs/design/toy.md#x digest=0000000000000001 id=0000000000000002 verdict=PASS basis=actual\n";
+    let tail = result.map_or_else(String::new, |word| format!("result={word}\n"));
+    format!("schema=1\nbase={}\ntables=docs/design/toy.md,docs/design/other.md\n{rows}{tail}", rr_sha('b'))
+}
+
+/// (a) 口 (A): result=pass は pass と記録の merge-base の sha と契約表の file の列、result=fail は fail、生きた印は pending、死んだ pid の印と
+/// result の行の無い記録は stale、file が無い・schema の違う file・dir で置いた file・result の行も印も無い file と 40 桁でない sha は missing。
+#[test]
+fn pipe_review_record_ref_result_is_one_of_five_values() {
+    let state = rr_state();
+    let (pass, fail, pending, stale) = (rr_sha('1'), rr_sha('2'), rr_sha('3'), rr_sha('4'));
+    rr_ref(&state, &pass, &rr_finished(Some("pass")));
+    rr_ref(&state, &fail, &rr_finished(Some("fail")));
+    rr_ref(&state, &pending, &rr_finished(None));
+    rr_mark(&state, &pending, std::process::id());
+    rr_ref(&state, &stale, &rr_finished(None));
+    rr_mark(&state, &stale, rr_dead_pid());
+    let tables = vec!["docs/design/toy.md".to_owned(), "docs/design/other.md".to_owned()];
+    assert_eq!(row_review::read_ref(&state, &pass), RefResult::Pass { base: rr_sha('b'), tables }, "pass");
+    assert_eq!(row_review::read_ref(&state, &fail), RefResult::Fail, "fail");
+    assert_eq!(row_review::read_ref(&state, &pending), RefResult::Pending, "生きた印は pending");
+    assert_eq!(row_review::read_ref(&state, &stale), RefResult::Stale, "死んだ印で result の行が無い記録は stale");
+    // missing の 4 形（+ sha の形でない字）。
+    let (old_schema, as_dir, bare) = (rr_sha('5'), rr_sha('6'), rr_sha('7'));
+    rr_ref(&state, &old_schema, &rr_finished(Some("pass")).replacen("schema=1", "schema=2", 1));
+    fs::create_dir_all(rr_root(&state).join("ref").join(&as_dir)).expect("dir を置ける");
+    rr_ref(&state, &bare, &rr_finished(None));
+    for (label, sha) in [("file が無い", rr_sha('8')), ("schema の違う file", old_schema), ("dir で置いた file", as_dir), ("result の行も印も無い file", bare), ("sha の形でない字", "../ref".to_owned())] {
+        assert_eq!(row_review::read_ref(&state, &sha), RefResult::Missing, "{label}は missing");
+    }
+    clean(&[&state]);
+}
+
+/// (b) 口 (B): 16 桁の小文字の 16 進。同じ 2 つの字の 2 回は同じ値で、契約 file の字か節の本文の字の 1 byte を変えた 2 形はそれぞれ違い、
+/// 2 つの字の切れ目だけを動かした形（ab と c・a と bc）も違う。
+#[test]
+fn pipe_review_record_row_digest_is_sixteen_hex_and_keeps_the_seam() {
+    let digest = row_review::row_digest("contract text", "section text");
+    assert_eq!(digest.len(), 16, "16 桁: {digest}");
+    assert!(digest.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)), "小文字の 16 進: {digest}");
+    assert_eq!(digest, row_review::row_digest("contract text", "section text"), "同じ入力の 2 回は同じ値");
+    assert_ne!(digest, row_review::row_digest("contract texu", "section text"), "契約 file の 1 byte");
+    assert_ne!(digest, row_review::row_digest("contract text", "section texu"), "節の本文の 1 byte");
+    assert_ne!(row_review::row_digest("ab", "c"), row_review::row_digest("a", "bc"), "切れ目だけを動かした形");
+}
+
+/// (c) 口 (C): toy repo で、契約表の file だけを変えた commit は鍵が動かず、code の file を 1 つ変えた commit は動く。無い sha は理由を持つ Err。
+#[test]
+fn pipe_review_record_tree_key_moves_with_code_and_not_with_the_table() {
+    let (repo, state) = repo_with_state();
+    let first = git(&repo, &["rev-parse", "HEAD"]);
+    let before = row_review::tree_key(&repo, &first).expect("seed の木の鍵を読める");
+    assert_eq!(before.len(), 16, "16 桁: {before}");
+    let moved_table = design_doc(&row_fields("a", &["done"], &["done = \"別の done\""]));
+    write_design(&repo, &moved_table);
+    git(&repo, &["add", DESIGN_FILE]);
+    git(&repo, &["commit", "-q", "-m", "table-only"]);
+    let table_only = git(&repo, &["rev-parse", "HEAD"]);
+    assert_eq!(row_review::tree_key(&repo, &table_only), Ok(before.clone()), "契約表だけを変えた commit は動かない");
+    fs::write(repo.join("src").join("lib.rs"), "// moved\n").expect("code を書ける");
+    git(&repo, &["add", "src/lib.rs"]);
+    git(&repo, &["commit", "-q", "-m", "code"]);
+    let code = git(&repo, &["rev-parse", "HEAD"]);
+    let after = row_review::tree_key(&repo, &code).expect("code の木の鍵を読める");
+    assert_ne!(after, before, "code の file を変えた commit は動く");
+    let missing = row_review::tree_key(&repo, &rr_sha('0')).expect_err("無い sha は Err");
+    assert!(missing.contains(&rr_sha('0')), "理由は sha を名指す: {missing}");
+    clean(&[&repo, &state]);
+}
+
+/// 判定の鍵の 6 材料の基準。
+fn rr_parts<'a>(ancestors: &'a [String]) -> Parts<'a> {
+    Parts { digest: "0000000000000001", materials: "0000000000000002", tree: "0000000000000003", basis: Basis::Actual, ancestors, version: "lens-version model=opus" }
+}
+
+/// (d) 口 (H): 6 つの材料のどれか 1 つを変えた 6 形でそれぞれ判定の鍵と記録の dir の名が変わり、同じ材料の 2 回は同じ対（16 桁）を返す。
+#[test]
+fn pipe_review_record_judgement_key_moves_with_each_of_the_six_materials() {
+    let row = "docs/design/toy.md#x";
+    let none: Vec<String> = Vec::new();
+    let base = row_review::judgement(row, &rr_parts(&none));
+    assert_eq!(base, row_review::judgement(row, &rr_parts(&none)), "同じ材料の 2 回は同じ対");
+    assert!(base.0.len() == 16 && base.1.len() == 16, "16 桁の対: {base:?}");
+    let landed = vec!["docs/design/toy.md#a:landed".to_owned()];
+    let variants = [
+        ("行の digest", Parts { digest: "0000000000000009", ..rr_parts(&none) }),
+        ("材料の鍵", Parts { materials: "0000000000000009", ..rr_parts(&none) }),
+        ("code の木の鍵", Parts { tree: "0000000000000009", ..rr_parts(&none) }),
+        ("basis", Parts { basis: Basis::Forecast, ..rr_parts(&none) }),
+        ("祖先の状態の語", rr_parts(&landed)),
+        ("lens の版", Parts { version: "lens-version model=sonnet", ..rr_parts(&none) }),
+    ];
+    for (label, parts) in variants {
+        let moved = row_review::judgement(row, &parts);
+        assert_ne!(moved.0, base.0, "{label}: 判定の鍵が変わる");
+        assert_ne!(moved.1, base.1, "{label}: 記録の dir の名が変わる");
+    }
+    let declared = vec!["docs/design/toy.md#a:declared".to_owned()];
+    assert_ne!(row_review::judgement(row, &rr_parts(&landed)).0, row_review::judgement(row, &rr_parts(&declared)).0, "祖先の状態の語だけが違う 2 形");
+}
+
+/// 行の記録 1 つ（§9 の key の列を手で書く・dir の名は口 (H) が返す名）。
+struct RrRecord<'a> {
+    /// `<doc>#<行 id>`。
+    row: &'a str,
+    /// 行の digest。
+    digest: &'a str,
+    /// 判定の字。
+    verdict: &'a str,
+    /// 理由の型の字（`-` か 7 語）。
+    kind: &'a str,
+    /// basis。
+    basis: Basis,
+    /// 祖先ごとの `<行>:<状態>`。
+    ancestors: &'a [String],
+    /// 材料の鍵・code の木の鍵・lens の版。
+    keys: [&'a str; 3],
+    /// UTC の秒。
+    at: u64,
+}
+
+/// 行の記録を置き、dir の名を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rr_record(state: &Path, record: &RrRecord<'_>) -> String {
+    let [materials, tree, version] = record.keys;
+    let parts = Parts { digest: record.digest, materials, tree, basis: record.basis, ancestors: record.ancestors, version };
+    let (key, name) = row_review::judgement(record.row, &parts);
+    let (basis, ancestors) = (record.basis.as_str(), row_review::ancestors_word(record.ancestors));
+    let (row, digest, verdict, kind, at) = (record.row, record.digest, record.verdict, record.kind, record.at);
+    let body = format!(
+        "schema=1\nrow={row}\ndigest={digest}\nkey={key}\nbasis={basis}\nancestors={ancestors}\nmech=clean\nverdict={verdict}\nkind={kind}\nmaterials={materials}\ntree={tree}\nversion={version}\nref={}\nat={at}\nusage=-\n",
+        rr_sha('a')
+    );
+    let dir = rr_root(state).join(&name);
+    fs::create_dir_all(&dir).expect("記録の dir を作れる");
+    fs::write(dir.join("record"), body).expect("記録を書ける");
+    name
+}
+
+/// 基準の行の記録（PASS・actual・祖先なし）。
+fn rr_pass<'a>(ancestors: &'a [String]) -> RrRecord<'a> {
+    RrRecord {
+        row: "docs/design/toy.md#x",
+        digest: "0000000000000001",
+        verdict: "PASS",
+        kind: "-",
+        basis: Basis::Actual,
+        ancestors,
+        keys: ["0000000000000002", "0000000000000003", "lens-version model=opus"],
+        at: 1_000,
+    }
+}
+
+/// (e) 口 (D): 行と 4 つの鍵の材料が同じで PASS・actual・祖先が全部 landed か祖先なしの記録の dir の名だけを返す。FAIL・forecast・祖先に tree を
+/// 持つ記録と、行の digest・材料の鍵・code の木の鍵・lens の版の 1 つだけが違う 4 形は `None`。
+#[test]
+fn pipe_review_record_reusable_returns_only_a_landed_actual_pass_of_the_same_keys() {
+    let row = "docs/design/toy.md#x";
+    let (digest, keys) = ("0000000000000001", ["0000000000000002", "0000000000000003", "lens-version model=opus"]);
+    let ask = |state: &Path, digest: &str, keys: [&str; 3]| row_review::reusable(state, row, [digest, keys[0], keys[1], keys[2]]);
+    let landed = vec!["docs/design/toy.md#a:landed".to_owned(), "docs/design/toy.md#b:landed".to_owned()];
+    let none: Vec<String> = Vec::new();
+    // 返す 2 形: 祖先なしと、祖先が全部 landed。
+    for (label, ancestors) in [("祖先なし", &none), ("祖先が全部 landed", &landed)] {
+        let state = rr_state();
+        let name = rr_record(&state, &rr_pass(ancestors));
+        assert_eq!(ask(&state, digest, keys), Some(name), "{label}: 写せる記録の dir の名");
+        clean(&[&state]);
+    }
+    // 返さない 3 形（記録の側が違う）: FAIL・forecast・祖先に tree。
+    let tree = vec!["docs/design/toy.md#a:landed".to_owned(), "docs/design/toy.md#c:tree".to_owned()];
+    let declared = vec!["docs/design/toy.md#a:declared".to_owned()];
+    let fail = RrRecord { verdict: "FAIL", kind: "other", ..rr_pass(&none) };
+    let forecast = RrRecord { basis: Basis::Forecast, ..rr_pass(&declared) };
+    let beneath = rr_pass(&tree);
+    for (label, record) in [("FAIL", fail), ("forecast", forecast), ("祖先に tree", beneath)] {
+        let state = rr_state();
+        rr_record(&state, &record);
+        assert_eq!(ask(&state, digest, keys), None, "{label}の記録は写さない");
+        clean(&[&state]);
+    }
+    // 返さない 4 形（問いの側が違う）: 4 つの鍵の材料の 1 つだけが違う。
+    let state = rr_state();
+    rr_record(&state, &rr_pass(&none));
+    let asked = [
+        ("行の digest", ask(&state, "00000000000000ff", keys)),
+        ("材料の鍵", ask(&state, digest, ["00000000000000ff", keys[1], keys[2]])),
+        ("code の木の鍵", ask(&state, digest, [keys[0], "00000000000000ff", keys[2]])),
+        ("lens の版", ask(&state, digest, [keys[0], keys[1], "lens-version model=sonnet"])),
+    ];
+    for (label, found) in asked {
+        assert_eq!(found, None, "{label}だけが違う問いは None");
+    }
+    clean(&[&state]);
+}
+
+/// 変えた行 `row` を載せた ref の記録の本文（`rows` は (行, digest)）。
+fn rr_with_rows(rows: &[(&str, &str)]) -> String {
+    let listed: String = rows.iter().map(|(row, digest)| format!("row={row} digest={digest} id=0000000000000009 verdict=PASS basis=actual\n")).collect();
+    format!("schema=1\nbase={}\ntables=docs/design/toy.md\n{listed}result=pass\n", rr_sha('b'))
+}
+
+/// (f) 口 (E): その行をその digest で載せた ref の記録の他の行を字の順で重複なく返し、同じ行を違う digest で載せた ref の記録の行は返さず、
+/// 読めない ref の記録の file（dir・schema が違う）の数を別に返す。
+#[test]
+fn pipe_review_record_siblings_union_the_refs_that_carry_the_row_at_its_digest() {
+    let state = rr_state();
+    let (x, y, z, w, q) = ("docs/design/toy.md#x", "docs/design/toy.md#y", "docs/design/toy.md#z", "docs/design/toy.md#w", "docs/design/toy.md#q");
+    rr_ref(&state, &rr_sha('1'), &rr_with_rows(&[(x, "d1"), (z, "d3"), (y, "d2")]));
+    rr_ref(&state, &rr_sha('2'), &rr_with_rows(&[(x, "d1"), (w, "d9"), (y, "d2")]));
+    rr_ref(&state, &rr_sha('3'), &rr_with_rows(&[(x, "dX"), (q, "d4")]));
+    rr_ref(&state, &rr_sha('4'), &rr_with_rows(&[(x, "d1")]).replacen("schema=1", "schema=2", 1));
+    fs::create_dir_all(rr_root(&state).join("ref").join(rr_sha('5'))).expect("dir を置ける");
+    let (found, unreadable) = row_review::siblings(&state, x, "d1");
+    assert_eq!(found, [w, y, z], "d1 で x を載せた 2 本の ref の記録の他の行（字の順・y は 1 回）");
+    assert_eq!(unreadable, 2, "読めない ref の記録: schema の違う file と dir");
+    let (other, _) = row_review::siblings(&state, x, "dX");
+    assert_eq!(other, [q], "違う digest で載せた ref の記録の行はその digest の問いにだけ返る");
+    clean(&[&state]);
+}
+
+/// (g) 口 (F): その行とその digest の行の記録ごとの判定・basis・理由の型・at を at の順に返し、読めない記録は数だけを返す。
+#[test]
+fn pipe_review_record_listed_returns_each_record_of_the_row_and_counts_the_unreadable() {
+    let state = rr_state();
+    let none: Vec<String> = Vec::new();
+    let declared = vec!["docs/design/toy.md#a:declared".to_owned()];
+    rr_record(&state, &RrRecord { at: 200, verdict: "FAIL", kind: "other", basis: Basis::Forecast, ancestors: &declared, ..rr_pass(&none) });
+    rr_record(&state, &RrRecord { at: 100, ..rr_pass(&none) });
+    rr_record(&state, &RrRecord { digest: "00000000000000ff", ..rr_pass(&none) });
+    rr_record(&state, &RrRecord { row: "docs/design/toy.md#other", ..rr_pass(&none) });
+    fs::create_dir_all(rr_root(&state).join("0123456789abcdef")).expect("記録の無い dir を置ける");
+    let broken = rr_root(&state).join("fedcba9876543210");
+    fs::create_dir_all(&broken).expect("dir を置ける");
+    fs::write(broken.join("record"), "schema=2\nrow=docs/design/toy.md#x\n").expect("schema の違う記録を書ける");
+    let (found, unreadable) = row_review::listed(&state, "docs/design/toy.md#x", "0000000000000001");
+    let want = [
+        Listed { verdict: Verdict::Pass, basis: Basis::Actual, kind: None, at: 100 },
+        Listed { verdict: Verdict::Fail, basis: Basis::Forecast, kind: Some(FindingKind::Other), at: 200 },
+    ];
+    assert_eq!(found, want, "行と digest が同じ 2 本（at の順）");
+    assert_eq!(unreadable, 2, "読めない記録は数だけ: file の無い dir と schema の違う記録");
+    clean(&[&state]);
+}

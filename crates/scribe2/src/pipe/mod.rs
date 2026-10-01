@@ -29,6 +29,7 @@ pub(crate) mod notify;
 pub mod refuse;
 pub mod report;
 pub mod review;
+pub mod row_review;
 mod size;
 pub mod spawn;
 pub mod table;
