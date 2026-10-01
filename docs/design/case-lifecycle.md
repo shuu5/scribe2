@@ -951,11 +951,12 @@ done = "(1) 埋め込み manifest に rules 行 lifecycle.full_min_s（kind Life
   - 撃つ周の tick の process は、書き直しの間だけ約 275 MB の RSS と 4〜14 秒の延長を抱える。判定と合図の注入は書き直しの前に済むが、書き手が panic すればその周の tick は判定行を出さずに異常終了する（src は unwrap と expect を lint で持たない）。
   - 1 つの置き場に anchor の違う席が 2 つ以上在ると、tick ごとに違う repo の印と比べ、下限ごとに違う repo で書き直しうる（§12 の限界の multi-anchor と同じ・後の行）。
   - systemd の timer の PATH に bd が無い host では、行 ad が unit に台帳 client を載せるまで記録が `wrote=unreadable` のまま。
+  - 登録 row の anchor の台帳の印か main の印を読めない置き場と、`lifecycle.full_min_s` の行の無い写しでは、tick は全部の書き直しを撃たず、撃った記録も書かない（何もしない側に倒す）。その置き場の出力は、ほかの契機（§12 約束 8）の全部の書き直しでだけ進む。
 - 却下:
   - event log の印も比べる（event は tick の周ごとに伸びうるので、台帳が動かなくても下限ごとに全部を書き直す・event と時刻の部分は部分の書き直しが持つ）。
   - 印を順（git の祖先の関係）で比べる（tick の周ごとに git を撃つ・「動いた」は等しさで足り、順は書き手が lock の中で比べる）。
   - 消費側が口（`fleet lifecycle write`）を周期で撃つ手順にする（散文の手順で器が測れない・N2）。
   - 書き直し専用の timer unit を足す（置き場ごとに 2 本目の unit・ADR-0030 は席ごとに 1 組）。
   - 下限を持たない（台帳が数秒ごとに動く周に毎周 4 秒の CPU）・下限を code の定数にする（裁定を通らない閾値・C5）。
-  - tick が `fleet lifecycle write` の子 process を撃つ（process が 1 つ増えるだけで読みは同じ）。
+  - tick が `fleet lifecycle write` の子 process を撃つ（読みは同じで process が 1 つ増える。口の出力は `Written`・`Unchanged`・`Coalesced`・`Discarded` を同じ show の字で出すので、撃った記録の返りの語を 6 つに分けられず、分けるには口の出力の形を変えることになる）。
   - systemd の user の env（environment.d）で PATH を足す手順にする（器が見えない host の前提で、器は env を読まない・C2.2）。
