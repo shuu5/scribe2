@@ -933,6 +933,51 @@ fn contract_growth_schema_lists_growth_as_an_optional_list() {
     assert_eq!(tracked.matches(block).count(), 1, "growth は任意の list で 1 回: {tracked}");
 }
 
+/// §67 の (a): 欄 `done-teeth` と `code-facts` を持つ行の doc と key 3 つ（`teeth-check` / `index-scip` / `index-roles`）を持つ
+/// 宣言の repo は、2 欄と 3 key を消した同じ repo と判定行が同じ字で rc 0・findings 0（読んで値を捨てる）。
+#[test]
+fn contract_fields_read_only_fields_and_keys_leave_the_verdict_unchanged() {
+    let fielded = table_doc(&table_region(&[table_row(
+        "a",
+        &[("done-teeth", "[\"a_tooth\"]"), ("code-facts", "[\"crate::x::Y\", \"z\"]")],
+    )]));
+    let plain = table_doc(&table_region(&[table_row("a", &[])]));
+    let keyed = format!("{TABLE_VESSEL}teeth-check = true\nindex-scip = [\"a.scip\"]\nindex-roles = [\"def\", \"ref\"]\n");
+    let with = table_repo(&fielded, &[(".vessel.toml", &keyed)]);
+    let without = table_repo(&plain, &[]);
+    let (kept, bare) = (contracts_check(&with), contracts_check(&without));
+    assert_eq!(kept.status.code(), Some(i32::from(RC_OK)), "{}{}", stdout_of(&kept), stderr_of(&kept));
+    assert_eq!(bare.status.code(), Some(i32::from(RC_OK)), "{}{}", stdout_of(&bare), stderr_of(&bare));
+    assert!(findings_of(&kept).is_empty(), "findings 0: {}", stdout_of(&kept));
+    assert_eq!(stdout_of(&kept), stdout_of(&bare), "判定行は 2 欄と 3 key を消した同じ repo と同じ字");
+    clean(&[&with, &without]);
+}
+
+/// §67 の (b): 2 欄に文字列を書いた行は欄の名と「は文字列の配列でなければならない」の字で欄の行番号に名指され rc 2。3 key に
+/// 文字列を書いた宣言は rc 2 で、stderr が key の名と型（`teeth-check` は真偽・他 2 つは配列）の字を持つ。形の違い 5 形。
+#[test]
+fn contract_fields_read_only_wrong_shapes_are_named() {
+    for field in ["done-teeth", "code-facts"] {
+        let doc = table_doc(&table_region(&[table_row("a", &[(field, "\"x\"")])]));
+        let repo = table_repo(&doc, &[]);
+        let out = contracts_check(&repo);
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{field}: {}{}", stdout_of(&out), stderr_of(&out));
+        let at = doc.lines().position(|line| line.starts_with(&format!("{field} = "))).map_or(0, |index| index + 1);
+        let head = format!("contracts: docs/design/toy.md:{at} contract-table:unreadable: {field} は文字列の配列でなければならない");
+        assert!(findings_of(&out).iter().any(|line| line.starts_with(&head)), "{field} を欄の行 {at} で名指す: {}", stdout_of(&out));
+        clean(&[&repo]);
+    }
+    let doc = table_doc(&table_region(&[table_row("a", &[])]));
+    for (key, want) in [("teeth-check", "真偽"), ("index-scip", "配列"), ("index-roles", "配列")] {
+        let repo = table_repo(&doc, &[(".vessel.toml", &format!("{TABLE_VESSEL}{key} = \"x\"\n"))]);
+        let out = contracts_check(&repo);
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{key}: {}{}", stdout_of(&out), stderr_of(&out));
+        let err = stderr_of(&out);
+        assert!(err.contains(key) && err.contains(want), "{key} と {want} を名乗る: {err}");
+        clean(&[&repo]);
+    }
+}
+
 /// (5) 行の数え方（`s2-07l.254`・設計 rules-manifest.md §4・接頭辞 `contract_closure_ext_width_`）: base の `.rs` が短い
 /// 1399 行と 2000 字を詰めた 1 行を持つとき、余地は改行の数（1400 行 → 100）でなく幅（`--rules` の `R-C4.line-width`）で
 /// 正規化した行数で出て、改行の数なら入る size S（100）が `cap-headroom` で断られる（詰め込みで余地が増えない）。

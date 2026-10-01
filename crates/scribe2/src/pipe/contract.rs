@@ -27,7 +27,10 @@ const REQUIRED: &[&str] = &[
 /// 任意の key。`touches` は契約 (b) の生成物が行から写す欄（型の閉包の宣言・受付は読まないが
 /// 写しに残す＝run dir の写しだけで行の宣言が読める）。[`TARGETS`] は検出線の的（gate が [`targets_of`] で読む）。
 /// [`GROWTH`] は file ごとの見込み行数（受付の上限の余地が読む・設計 contract-source.md §46）。
-const OPTIONAL: &[&str] = &["classes", "opens", "touches", TARGETS, GROWTH];
+const OPTIONAL: &[&str] = &["classes", "opens", "touches", TARGETS, GROWTH, DONE_TEETH];
+
+/// 歯の欄の key（文字列の列・設計 contract-source.md §67）。形だけ読んで値は捨てる（[`Contract`] の field にしない）。
+const DONE_TEETH: &str = "done-teeth";
 
 /// 行の file ごとの見込み行数の key（`<path>:<行数>` の列・設計 contract-source.md §46・行 ax）。項目の形は受付が
 /// write-set と突き合わせて読む（契約表の検査と同じ読み手の 1 本）。
@@ -331,6 +334,7 @@ fn build(found: &[(String, Raw, u64)], errors: &mut Vec<ContractError>) -> Optio
             errors.push(ContractError::new(at, format!("{TARGETS} の値 {target} が的の形でない: {reason}")));
         }
     }
+    list_of(found, DONE_TEETH, 0, errors);
     Some(Contract {
         goal: text_of(found, "goal", errors),
         done: text_of(found, "done", errors),
@@ -645,6 +649,20 @@ mod tests {
         let back = Contract::parse(&titled).unwrap_or_else(|errors| panic!("生成した本文を読めない: {errors:?}\n{titled}"));
         assert_eq!(back.goal, plain.title, "goal の無い行は title のまま");
         assert_eq!(keys(&body), keys(&titled), "写しの key 集合は変わらない");
+    }
+
+    /// §67 の 4: 契約 file の任意 key `done-teeth` は文字列の配列として読んで値を捨て（`Contract` に field を持たない）、
+    /// 持つ契約 file は持たない同じ file と等しい `Contract` に読め、文字列は key の名を持つ不備で「未知の key」とは言わない。
+    #[test]
+    fn contract_fields_read_only_contract_file_reads_done_teeth_and_drops_the_value() {
+        let row = row();
+        let base = render(&row, "docs/design/toy.md#b", &row.write_set);
+        let plain = Contract::parse(&base).expect("歯の無い契約 file は読める");
+        let with = Contract::parse(&format!("{base}done-teeth = [\"a_tooth\", \"b_tooth\"]\n")).expect("歯の列を持つ契約 file は読める");
+        assert_eq!(with, plain, "done-teeth を持つ契約 file は持たない同じ file と等しい Contract");
+        let errors = Contract::parse(&format!("{base}done-teeth = \"a_tooth\"\n")).expect_err("文字列は断る");
+        assert!(errors.iter().any(|error| error.reason.contains("done-teeth")), "key の名を持つ: {errors:?}");
+        assert!(errors.iter().all(|error| !error.reason.contains("未知の key")), "未知の key とは言わない: {errors:?}");
     }
 
     // flip-check: s2-07l.512

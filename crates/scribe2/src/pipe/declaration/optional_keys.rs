@@ -28,7 +28,32 @@ pub(super) const DECLARED_KEYS: &[&str] = &[
     crate_roots::KEY,
     RULING_CHECK_KEY,
     RULING_FIXTURES_KEY,
+    TEETH_CHECK_KEY,
+    INDEX_SCIP_KEY,
+    INDEX_ROLES_KEY,
 ];
+
+/// **歯の検査を撃つか**の key（任意・設計 contract-source.md §67）。真偽だけを読んで値は捨てる。
+const TEETH_CHECK_KEY: &str = "teeth-check";
+
+/// **索引の SCIP の列**の key（任意・設計 contract-source.md §67）。文字列の配列だけを読んで値は捨てる。
+const INDEX_SCIP_KEY: &str = "index-scip";
+
+/// **索引の役割の列**の key（任意・設計 contract-source.md §67）。文字列の配列だけを読んで値は捨てる。
+const INDEX_ROLES_KEY: &str = "index-roles";
+
+/// 読んで値を捨てる 3 key（`teeth-check` は真偽・`index-scip` と `index-roles` は文字列の配列）の形だけを確かめる
+/// （`Declared` にも便の写しにも field を持たない）。型違いは key と行番号を名指す不備。
+pub(super) fn read_only_keys_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) {
+    bool_key(found, TEETH_CHECK_KEY, errors);
+    for key in [INDEX_SCIP_KEY, INDEX_ROLES_KEY] {
+        if let Some((_, value, line)) = found.iter().find(|(seen, _, _)| seen == key) {
+            if !matches!(value, Raw::List(_)) {
+                errors.push(DeclError::new(*line, format!("{key} は文字列の配列である")));
+            }
+        }
+    }
+}
 
 /// **裁定 id の引用の実在を確かめるか**の key（任意・設計 dispatcher.md §36・FR83）。値は真偽だけ（既定は持たない＝
 /// 書かない宣言は false）。
@@ -90,6 +115,9 @@ pub(super) const OPTIONAL_KEYS: &[&str] = &[
     crate_roots::KEY,
     RULING_CHECK_KEY,
     RULING_FIXTURES_KEY,
+    TEETH_CHECK_KEY,
+    INDEX_SCIP_KEY,
+    INDEX_ROLES_KEY,
 ];
 
 /// 床の検査の 1 行（任意）。前後の空白を除いて空でない文字列だけを受ける（列・整数・真偽・空・空白だけは key と行番号を名指す不備）。

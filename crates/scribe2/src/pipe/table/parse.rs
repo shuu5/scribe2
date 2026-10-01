@@ -269,6 +269,10 @@ fn typed_promise(raw: &RawPromise, errors: &mut Vec<TableError>) -> Option<Promi
 /// 読めた 1 行を欄の形（[`super::FIELDS`] の `shape`）で型付けする。形の違いは欄の行番号で積む。
 fn typed(raw: &TableRow, offset: u64, errors: &mut Vec<TableError>) -> Option<ContractRow> {
     let before = errors.len();
+    // 歯と code の欄（§67）は形だけ確かめて値を捨てる（`ContractRow` に field を持たない）。
+    for key in ["done-teeth", "code-facts"] {
+        list_of(raw, key, offset, errors);
+    }
     let row = ContractRow {
         line: shift(offset, raw.line()),
         id: text_of(raw, "id", offset, errors),
