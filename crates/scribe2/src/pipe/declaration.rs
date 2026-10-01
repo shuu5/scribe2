@@ -25,7 +25,7 @@ mod write_set;
 pub use crate_roots::{crate_of, fixed_roots, with_fixed, CrateFile, RootsAtHead};
 pub use entrance_flip::{measure_named, EntranceFlip};
 use entrance_flip::{entrance_of, KEY as ENTRANCE_KEY};
-pub use optional_keys::{close_check, floor_check_at, question_route, table_facts, table_facts_named, terminal_facts, CloseCheck, QuestionRoute, TableFacts, TerminalFacts};
+pub use optional_keys::{close_check, close_check_at_sha, requirements_at_sha, floor_check_at, question_route, table_facts, table_facts_named, terminal_facts, CloseCheck, QuestionRoute, TableFacts, TerminalFacts};
 pub use optional_keys::{ruling_keys_at, RulingKeys, CI_SHA_HOLE, DEFAULT_CI_CMD, DEFAULT_REQUIREMENTS};
 use optional_keys::{ci_cmd_of, close_check_of, floor_check_of, question_route_of, remote_of, requirements_of, ruling_check_of, ruling_fixtures_of, DECLARED_KEYS, OPTIONAL_KEYS, RULING_FIXTURES_KEY};
 pub use write_set::{headroom_shortfalls, headroom_shortfalls_under, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};

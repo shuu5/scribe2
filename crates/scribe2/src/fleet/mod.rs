@@ -10,7 +10,9 @@
 pub mod cli;
 pub mod json_lite;
 pub mod json_tree;
+pub mod lifecycle;
 pub mod lifecycle_line;
+pub mod lifecycle_mark;
 pub mod phase;
 pub mod select;
 pub mod store;

@@ -20,15 +20,19 @@ use super::super::review;
 use super::super::table::{self, Pointer};
 use super::super::{contract_path, current, git_bytes};
 use super::{
-    Candidate, Input, Launch, Ledger, Marks, Turn, WaitReason, BLOCKS, DESIGN_KEY, DRIVE, MARK, OPEN, ROW_JOB_MB,
-    ROW_RESERVE_MB, SLOT,
+    measure, Candidate, Input, Launch, Ledger, Marks, Read, Turn, Unmeasured, WaitReason, BLOCKS, DESIGN_KEY, DRIVE, MARK, OPEN,
+    ROW_JOB_MB, ROW_RESERVE_MB, SLOT,
 };
+use crate::fleet::lifecycle::{self, Place, Round, Source};
+use crate::fleet::phase::Judged;
+use crate::fleet::store::LockPolicy;
 use crate::fleet::{Event, EventKind, Mark, Stage};
 use crate::ledger::form::{is_memo, is_question};
 use crate::rules::manifest::Manifest;
 use crate::seat::host_slots_dir;
 use crate::seat::ledger::{Dep, Issue};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 /// 列の入力になる bead か（設計 §2・**ここで落ちた bead は `ls` にも出ない**＝契約が未確定か終わっているか、
 /// memo か台帳の問い＝契約でない・§31）。
@@ -97,7 +101,7 @@ pub(super) fn settle(
     });
     let mut started: Vec<(String, Vec<String>)> = Vec::new();
     let mut turn =
-        Turn { candidates: Vec::new(), launches: Vec::new(), revives: Vec::new(), unmeasured: None, drive: None, vessel: None };
+        Turn { candidates: Vec::new(), launches: Vec::new(), revives: Vec::new(), unmeasured: None, drive: None, vessel: None, lifecycle: None };
     for mut candidate in candidates {
         if let (Some((pointer, contract)), Some(room)) = (ready.get(&candidate.bead), room.as_ref()) {
             match blocker(input, contract, room, &started) {
@@ -336,6 +340,48 @@ pub(super) fn released_after(events: &[Event], run: &str, bead: &str) -> bool {
     events.iter().skip(last + 1).any(|event| {
         event.kind == EventKind::DispatchMark && event.mark == Some(Mark::Release) && event.bead == bead
     })
+}
+
+/// 列の 1 周の判定を局面の出力の材料にする（`dispatch ls` の `reason=` と同じ名と値の字・理由の無い候補は起こす便として `launched`）。
+fn judged_of(turn: &Turn) -> Vec<Judged> {
+    let one = |candidate: &Candidate| {
+        let (name, value) = match &candidate.reason {
+            Some(reason) => {
+                let text = reason.render();
+                (reason.as_str().to_owned(), text.split_once(':').map(|(_, value)| value.to_owned()).unwrap_or_default())
+            }
+            None => ("launched".to_owned(), String::new()),
+        };
+        Judged { bead: candidate.bead.clone(), name, value }
+    };
+    turn.candidates.iter().map(one).collect()
+}
+
+/// 契機 (a): `fire` の 1 回の読み（台帳の全件）と列の判定を借りて局面の出力を全部書き直し、`Written`・`Unchanged`・`Coalesced` の外の語を返す。
+pub(super) fn lifecycle_round(input: &Input<'_>, turn: &Turn, read: &Read) -> Option<&'static str> {
+    let policy = LockPolicy::from_rules(input.manifest).ok()?;
+    let place = Place { state_dir: input.state_dir, repo: input.repo, manifest: input.manifest, bd: input.bd, policy };
+    lifecycle::round(&place, Source::Borrowed(Round { issues: &read.issues, judged: judged_of(turn) }))
+}
+
+/// 観測の 1 周（`dispatch ls` と同じ判定・起こさない）の結果のうち局面の出力が借りる分。
+pub struct Observed {
+    /// 台帳の全件。
+    pub issues: Vec<Issue>,
+    /// 列の 1 周の判定。
+    pub judged: Vec<Judged>,
+}
+
+/// 観測の 1 周を置き場・repo・rules・台帳 client から撃つ（起こさない・契機 (d)(e) の全部の書き直しが列の判定を得る口）。
+/// 台帳を読めない周は理由を返す。
+pub fn observe_round(state_dir: &Path, repo: &Path, manifest: &Manifest, bd: &str) -> Result<Observed, Unmeasured> {
+    let input = Input { state_dir, repo, manifest, bd, bd_flag: None, rules: None, lens: None, curl: None, runner: None, driving: None, driven: None };
+    let (turn, read) = measure(&input);
+    match (turn.unmeasured, read) {
+        (Some(reason), _) => Err(reason),
+        (None, None) => Err(Unmeasured::Ledger),
+        (None, Some(read)) => Ok(Observed { judged: judged_of(&turn), issues: read.issues }),
+    }
 }
 
 /// 受付の枠の式の 2 線（読めない行は 0＝[`admission::has_room`] が `Free::Unmeasured` で待たせない側に倒す）。

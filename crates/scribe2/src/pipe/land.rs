@@ -79,7 +79,7 @@ use verify::{main_red, main_unmeasured, verify_main};
 mod finish;
 
 use finish::{finish, open_pr, squash};
-pub(crate) use finish::source_key;
+pub(crate) use finish::{contract_key, source_key};
 pub(in crate::pipe) use finish::{
     close_reason, land_train, landed_sha, terminal, Car, CloseTail, PushTip, CLOSE_REASON,
 };

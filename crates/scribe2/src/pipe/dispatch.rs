@@ -65,6 +65,9 @@ pub mod unreflected;
 
 use candidates::{entry_of, is_input, marks_of, settle, tools};
 
+/// 観測の 1 周（起こさない）を置き場・repo・rules・台帳 client から撃つ口と、その結果（局面の出力の全部の書き直しが列の判定を得る）。
+pub use candidates::{observe_round, Observed};
+
 /// 台帳の閉じた status の字面（依存が閉じたかの判定が読む）。
 const CLOSED: &str = "closed";
 
@@ -497,6 +500,9 @@ pub struct Turn {
     /// 終端の周の軸を評価した周の値（起こす側の [`fire`] だけ `Some` になりうる・見る側の [`turn`] は常に `None`・
     /// 設計 consumer-sync.md §15 形 2）。
     pub vessel: Option<crate::hook::vessel::Upstream>,
+    /// 局面の出力の全部の書き直し（契機 (a)）の返りのうち `Written`・`Unchanged`・`Coalesced` の外の語（起こす側の [`fire`] だけ
+    /// `Some` になりうる・呼び手が stderr の `lifecycle=<語>` の 1 行にする・設計 case-lifecycle.md §12 約束 8）。
+    pub lifecycle: Option<&'static str>,
 }
 
 /// 列の 1 周に要る材料（すべて永続面から解いたもの・process の記憶を持たない）。
@@ -733,6 +739,8 @@ pub fn fire(input: &Input<'_>) -> Turn {
     // **事前審査は起こし終えた後**（設計 §27 形 4・起こす便を遅らせない）: 同じ周の台帳と材料を借りる（2 度読まない）。
     if let Some(found) = read.as_ref() {
         precheck::round(input, &turn, &found.issues, found.materials.as_ref().ok());
+        // **局面の出力の全部の書き直しは事前審査の後**（設計 case-lifecycle.md §12 約束 8 (a)）: 同じ周の台帳と列の判定を借りる（2 度読まない）。
+        turn.lifecycle = candidates::lifecycle_round(input, &turn, found);
     }
     // **終端の周の軸は起こし終えた後に 1 回**（設計 consumer-sync.md §15 形 2）: この周に起こした便・起こし直した便が
     // 在れば live は 0 でない（子の `RunCreated` を待たずに数える＝走り出した便の下で binary を入れ替えない）。
@@ -903,6 +911,7 @@ fn unmeasured(reason: Unmeasured) -> Turn {
         unmeasured: Some(reason),
         drive: None,
         vessel: None,
+        lifecycle: None,
     }
 }
 

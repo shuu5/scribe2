@@ -285,9 +285,11 @@ fn rules_cli_refuses_rules_flag_without_path() {
 #[test]
 fn rules_kind_parity_every_kind_has_sample() {
     for kind in ALL {
-        let text = one_row(*kind, &sample_value(*kind));
+        // 年齢の閾値の kind だけ id の後ろが語の内でなければ断られる（`lifecycle.age_h.<語>`・設計 case-lifecycle.md §12 約束 10）。
+        let id = if *kind == RuleKind::LifecycleAgeH { "lifecycle.age_h.misfit" } else { "probe" };
+        let text = one_row(*kind, &sample_value(*kind)).replace("\"probe\"", &format!("\"{id}\""));
         let manifest = parsed(&text).expect("受理されるはずの fixture が拒まれた");
-        let row = manifest.get("probe").expect("probe が在る");
+        let row = manifest.get(id).expect("probe が在る");
         assert_eq!(row.kind(), *kind, "kind: {}", kind.as_str());
         assert!(
             row.validate().is_ok(),
@@ -844,10 +846,11 @@ fn rules_floor_timeout_row_precedes_the_drafts_cap_rows() {
     assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-30T04:25Z", "2026-09-30"), "{id} の裁定 id と裁定日");
     assert_eq!(int_row(&manifest, id), Ok(600), "{id} を整数の読み手で引ける");
     assert_eq!(manifest.rows().iter().filter(|found| found.kind == kind).count(), 1, "kind の行は 1 本");
-    let kinds: Vec<&RuleKind> = ALL.iter().rev().take(3).collect();
-    assert_eq!(kinds, [&RuleKind::SeatDraftsBusyS, &RuleKind::SeatDraftsCapMb, &kind], "kind は ALL の末尾から 3 つ目（母集団 {} 種）", ALL.len());
-    let rows: Vec<&str> = manifest.rows().iter().rev().take(3).map(|found| found.id.as_str()).collect();
-    assert_eq!(rows, ["seat.drafts_busy_s", "seat.drafts_cap_mb", id], "行は manifest の末尾から 3 つ目（母集団 {} 行）", manifest.rows().len());
+    // 後ろの 2 kind・14 行は局面の出力（`lifecycle.closed_window_h` の 1 行と `lifecycle.age_h.<語>` の 13 行・`.738.38.7`）。
+    let kinds: Vec<&RuleKind> = ALL.iter().rev().skip(2).take(3).collect();
+    assert_eq!(kinds, [&RuleKind::SeatDraftsBusyS, &RuleKind::SeatDraftsCapMb, &kind], "kind は ALL の末尾の 2 つの前から 3 つ目（母集団 {} 種）", ALL.len());
+    let rows: Vec<&str> = manifest.rows().iter().rev().skip(14).take(3).map(|found| found.id.as_str()).collect();
+    assert_eq!(rows, ["seat.drafts_busy_s", "seat.drafts_cap_mb", id], "行は manifest の末尾の 14 行の前から 3 つ目（母集団 {} 行）", manifest.rows().len());
     let errors = rejected(&one_row(kind, "\"ten\"")).expect("文字列の値の fixture が受理された");
     assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
 }
@@ -874,10 +877,72 @@ fn rules_drafts_cap_rows_are_the_last_two_kinds_and_rows() {
         let errors = rejected(&one_row(kind, "\"big\"")).expect("文字列の値の fixture が受理された");
         assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
     }
-    let tail: Vec<&RuleKind> = ALL.iter().rev().take(2).rev().collect();
-    assert_eq!(tail, [&RuleKind::SeatDraftsCapMb, &RuleKind::SeatDraftsBusyS], "kind は ALL の末尾 2 つ・この順（母集団 {} 種）", ALL.len());
-    let rows: Vec<&str> = manifest.rows().iter().rev().take(2).rev().map(|found| found.id.as_str()).collect();
-    assert_eq!(rows, ["seat.drafts_cap_mb", "seat.drafts_busy_s"], "行は manifest の末尾 2 行・この順（母集団 {} 行）", manifest.rows().len());
+    // 後ろの 2 kind・14 行は局面の出力（`.738.38.7`）。起草の置き場の 2 つはその直前に並ぶ。
+    let tail: Vec<&RuleKind> = ALL.iter().rev().skip(2).take(2).rev().collect();
+    assert_eq!(tail, [&RuleKind::SeatDraftsCapMb, &RuleKind::SeatDraftsBusyS], "kind は ALL の末尾の 2 つの前の 2 つ・この順（母集団 {} 種）", ALL.len());
+    let rows: Vec<&str> = manifest.rows().iter().rev().skip(14).take(2).rev().map(|found| found.id.as_str()).collect();
+    assert_eq!(rows, ["seat.drafts_cap_mb", "seat.drafts_busy_s"], "行は manifest の末尾の 14 行の前の 2 行・この順（母集団 {} 行）", manifest.rows().len());
+}
+
+/// 局面の出力の行（設計 case-lifecycle.md §12 約束 10・行 c・`s2-07l.738.38.7`）の裁定の字（base の行 `floor.timeout_s` の裁定 id に項を足した字）。
+const LIFECYCLE_RULING: &str = "user 2026-09-30T04:25Z 項 lifecycle";
+
+/// 局面の出力の 2 kind と 14 行が埋め込み manifest の末尾に在り（kind は `ALL` の末尾 2 つ・行は末尾の 14 行で窓の行が先）、値が窓 72 と
+/// 年齢 2 / 4 / 24 / 72（語ごと）で、全部が Int・enabled・同じ裁定 id（base の行 `floor.timeout_s` の id と別の字）と裁定日を持つ（base では
+/// 行も kind も無い ＝ RED）。
+#[test]
+fn rules_lifecycle_rows_carry_the_ruled_values_and_the_lifecycle_ruling() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let ages: [(&str, u64); 13] = [
+        ("utterance-open", 2),
+        ("run-landed-open", 2),
+        ("contract-refused", 4),
+        ("run-review-failed", 4),
+        ("run-gate-failed", 4),
+        ("run-stopped", 4),
+        ("run-failed", 4),
+        ("ruling-unreflected", 24),
+        ("memo-actionable", 24),
+        ("contract-queued", 24),
+        ("row-unbeaded", 24),
+        ("misfit", 24),
+        ("epic-closable", 72),
+    ];
+    let mut expected: Vec<(String, RuleKind, u64)> = vec![("lifecycle.closed_window_h".to_owned(), RuleKind::LifecycleClosedWindowH, 72)];
+    expected.extend(ages.iter().map(|(word, hours)| (format!("lifecycle.age_h.{word}"), RuleKind::LifecycleAgeH, *hours)));
+    for (id, kind, hours) in &expected {
+        let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+        assert_eq!((row.kind, row.kind.shape()), (*kind, ValueShape::Int), "{id} の kind と形");
+        assert_eq!(row.value, RuleValue::Int(*hours), "{id} の値");
+        assert!(row.enabled, "{id} は既定で効く");
+        assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), (LIFECYCLE_RULING, "2026-09-30"), "{id} の裁定 id と裁定日");
+        assert_eq!(int_row(&manifest, id), Ok(*hours), "{id} を整数の読み手で引ける");
+    }
+    let floor = manifest.get("floor.timeout_s").expect("floor.timeout_s の行が在る");
+    assert_ne!(floor.ruling, LIFECYCLE_RULING, "base の行の裁定 id を使い回さない（new-row-reuses-ruling）");
+    assert_eq!(RuleKind::parse("LifecycleClosedWindowH"), Some(RuleKind::LifecycleClosedWindowH), "字面から引ける");
+    assert_eq!(RuleKind::parse("LifecycleAgeH"), Some(RuleKind::LifecycleAgeH), "字面から引ける");
+    let kinds: Vec<&RuleKind> = ALL.iter().rev().take(2).rev().collect();
+    assert_eq!(kinds, [&RuleKind::LifecycleClosedWindowH, &RuleKind::LifecycleAgeH], "kind は ALL の末尾 2 つ・この順（母集団 {} 種）", ALL.len());
+    let rows: Vec<&str> = manifest.rows().iter().rev().take(14).rev().map(|found| found.id.as_str()).collect();
+    let want: Vec<&str> = expected.iter().map(|(id, _, _)| id.as_str()).collect();
+    assert_eq!(rows, want, "行は manifest の末尾 14 行・この順（母集団 {} 行）", manifest.rows().len());
+    assert_eq!(manifest.rows().iter().filter(|found| found.kind == RuleKind::LifecycleAgeH).count(), 13, "年齢の行は 13 本");
+}
+
+/// `lifecycle.age_h.<語>` は id の後ろが手番 seat の局面の語のときだけ受理され（行の無い seat の語 `run-asking` は受理・手番が seat でない
+/// 語と語の外は行番号つきで断る）、ほかの kind の行 id は縛らない。
+#[test]
+fn rules_lifecycle_rows_refuse_an_age_word_outside_the_seat_words() {
+    let row = |id: &str| one_row(RuleKind::LifecycleAgeH, "4").replace("\"probe\"", &format!("\"{id}\""));
+    parsed(&row("lifecycle.age_h.run-asking")).expect("手番が seat の語は受理される");
+    for id in ["lifecycle.age_h.run-intake", "lifecycle.age_h.nope", "lifecycle.age_h.", "lifecycle.age_h.memo-waiting", "probe"] {
+        let errors = rejected(&row(id)).unwrap_or_else(|rows| panic!("{id} が受理された（{rows} 行）"));
+        let joined = errors.join("\n");
+        assert!(joined.contains("手番 seat の局面の語でない"), "{id} の断りの字: {joined}");
+        assert!(joined.contains("line="), "{id} の断りは行番号つき: {joined}");
+    }
+    parsed(&one_row(RuleKind::LifecycleClosedWindowH, "72")).expect("窓の行は id を縛らない");
 }
 
 /// 事前審査の先撃ちの 1 周の本数の行（設計 dispatcher.md §27 形 1・行 aa・`s2-07l.718`）が埋め込み manifest に id / kind / 形 Int /
@@ -1121,11 +1186,12 @@ fn class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id() {
     assert!(row.enabled, "既定で効く");
     assert_eq!((row.kind, row.kind.shape()), (RuleKind::RunnerClassCommands, ValueShape::List), "kind と形");
     // `.696` が末尾に公開の見張りの kind を足し、`.738.37.1` が床の検査の待ちの上限の kind を足した（その 2 つ前が RunnerClassCommands）。
-    let tail: Vec<&RuleKind> = ALL.iter().rev().take(5).collect();
+    // 後ろに局面の出力の 2 kind（`.738.38.7`）が続く。
+    let tail: Vec<&RuleKind> = ALL.iter().rev().skip(2).take(5).collect();
     assert_eq!(
         tail,
         [&RuleKind::SeatDraftsBusyS, &RuleKind::SeatDraftsCapMb, &RuleKind::FloorTimeoutS, &RuleKind::HostGuardPublish, &RuleKind::RunnerClassCommands],
-        "kind は ALL の末尾の 5 つ目"
+        "kind は ALL の末尾の 2 つの前の 5 つ目"
     );
     assert_eq!(RuleKind::parse("RunnerClassCommands"), Some(RuleKind::RunnerClassCommands), "kind を字面から引ける");
     let allowed = match manifest.get("runner.allowed_commands").map(|found| &found.value) {

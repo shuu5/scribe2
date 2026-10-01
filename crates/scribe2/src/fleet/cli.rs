@@ -23,7 +23,7 @@ const ROW_SELECTION: &str = "R-C9-1";
 
 /// `fleet` の使い方。
 pub fn usage() -> String {
-    "usage: fleet <record|show|export|usage|select [--anchor DIR]> [--state-dir D] [flags]".to_owned()
+    "usage: fleet <record|show|export|usage|select [--anchor DIR]|lifecycle <write|show>> [--state-dir D] [flags]".to_owned()
 }
 
 /// `fleet` の verb（閉じた列）。置き場を解くのは既知の verb の周だけ（verb の無い周・未知の verb の周は
@@ -40,6 +40,8 @@ enum Verb {
     Usage,
     /// 口座を 1 つ選ぶ。
     Select,
+    /// 局面の出力の書き直しと表示（設計 case-lifecycle.md §12 約束 9）。
+    Lifecycle,
 }
 
 impl Verb {
@@ -51,6 +53,7 @@ impl Verb {
             "export" => Some(Self::Export),
             "usage" => Some(Self::Usage),
             "select" => Some(Self::Select),
+            "lifecycle" => Some(Self::Lifecycle),
             _ => None,
         }
     }
@@ -63,9 +66,19 @@ impl Verb {
             Self::Export => ALLOWED_EXPORT,
             Self::Usage => ALLOWED_USAGE,
             Self::Select => ALLOWED_SELECT,
+            Self::Lifecycle => ALLOWED_LIFECYCLE,
         }
     }
 }
+
+/// `fleet lifecycle <write|show>`（`--repo` と `--bd` と `--wait-ms` は write だけが読む）。
+const ALLOWED_LIFECYCLE: &[cli_args::Allowed] = &[
+    Allowed::value("--state-dir"),
+    Allowed::value("--repo"),
+    Allowed::value("--bd"),
+    Allowed::value("--wait-ms"),
+    Allowed::value("--rules"),
+];
 
 /// `fleet record` が受ける flag（設計 pipeline.md §14 約束 5・以下 verb の宣言順）。
 const ALLOWED_RECORD: &[cli_args::Allowed] = &[
@@ -128,7 +141,31 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Verb::Export => export(dir),
         Verb::Usage => super::usage::run_in(args, &state),
         Verb::Select => select_account(args, dir),
+        Verb::Lifecycle => lifecycle(args, dir),
     }
+}
+
+/// `fleet lifecycle write --state-dir S --repo R [--bd CMD] [--wait-ms N] [--rules PATH]` と `fleet lifecycle show --state-dir S`
+/// （設計 case-lifecycle.md §12 約束 9）。write は観測の 1 周で全部を書き直し（撃った時の印より古くない file が在れば書き直さず
+/// Coalesced・lock は N ms まで待つ）、show は書き直さずに今の組を同じ字で出す。
+fn lifecycle(args: &[String], dir: &Path) -> Outcome {
+    match args.get(1).map(String::as_str) {
+        Some("show") => super::lifecycle::show(dir),
+        Some("write") => lifecycle_write(args, dir).unwrap_or_else(|reason| Outcome::failed(RC_REFUSED, vec![format!("fleet: {reason}"), usage()])),
+        _ => Outcome::failed(RC_REFUSED, vec![usage()]),
+    }
+}
+
+/// `fleet lifecycle write` の本体（引数の不備は理由の 1 行）。
+fn lifecycle_write(args: &[String], dir: &Path) -> Result<Outcome, String> {
+    let repo = required(args, "--repo")?;
+    let wait_ms = optional(args, "--wait-ms")?.map(|text| text.parse::<u64>().map_err(|_| format!("--wait-ms {text} は整数でない"))).transpose()?;
+    let manifest = crate::rules::read(optional(args, "--rules")?.map(Path::new), Some(dir)).map_err(|errors| errors.first().map(ToString::to_string).unwrap_or_default())?;
+    let policy = LockPolicy::from_rules(&manifest).map_err(|error| error.to_string())?;
+    let bd = optional(args, "--bd")?.unwrap_or(crate::seat::ledger::DEFAULT_BD);
+    let place = super::lifecycle::Place { state_dir: dir, repo: Path::new(repo), manifest: &manifest, bd, policy };
+    let request = super::lifecycle::Request { wait_ms, coalesce: true };
+    Ok(super::lifecycle::written(dir, super::lifecycle::full(&place, super::lifecycle::Source::Observe, request)))
 }
 
 /// 置き場を解く（`--state-dir` > git 設定・`seat` と同じ 1 関数・出所付き）。値欠けの flag は黙って落とさず断る

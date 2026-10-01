@@ -5,7 +5,8 @@
 //! 規則の値は rules 行から読む（数値を焼かない・C1 / C5）。
 
 use super::{broken, flag, int_row, list_row, need, refused, resolve, state_dir_of, Extra};
-use crate::cli_outcome::{Outcome, RC_BROKEN};
+use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
+use crate::fleet::lifecycle::{self, Place};
 use crate::fleet::store::{LockPolicy, StoreError};
 use crate::fleet::Stage;
 use crate::pipe::approve::{Approve, RC_BLOCKED};
@@ -107,9 +108,12 @@ fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPol
     };
     let tip = if head == sha { PushTip::Tip } else { PushTip::Behind(&head) };
     let terminal = super::land::terminal(&entry, &sha, tip);
+    // 局面の出力の書き直し（契機 (d)）は終端が close した周（rc 0）だけ・呼び手の rc と stdout は変えない（設計 case-lifecycle.md §12 約束 8）。
+    let place = Place { state_dir: entry.state_dir, repo: entry.repo, manifest, bd: entry.bd, policy };
+    let err = if terminal.rc() == RC_OK { lifecycle::after_close(&place) } else { Vec::new() };
     Outcome {
         out: vec![format!("run={id} terminal={}", terminal.as_token())],
-        err: Vec::new(),
+        err,
         rc: terminal.rc(),
     }
 }

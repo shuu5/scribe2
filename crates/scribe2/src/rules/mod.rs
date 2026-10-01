@@ -13,6 +13,7 @@ pub mod exclusion;
 mod groups;
 pub mod manifest;
 
+use crate::case::{turn_of, Phase, Turn, PHASES};
 use crate::fleet::select::{Model, MODELS};
 use crate::headless::{Effort, EFFORTS};
 use crate::hook::host_guard::{publish, Protected, PROTECTED};
@@ -20,6 +21,9 @@ use crate::pipe::contract::{class_element, ClassElement, CLASSES};
 use crate::seat::role::{Capability, Role, ALL as ROLES, CAPABILITIES};
 use manifest::{HostManifest, Manifest};
 use std::path::{Path, PathBuf};
+
+/// `lifecycle.age_h.<語>` の行 id の頭（[`RuleKind::LifecycleAgeH`]）。
+pub const AGE_ID_PREFIX: &str = "lifecycle.age_h.";
 
 /// host の面の file 名（`<state_dir>/host.toml`・設計 account-lifecycle.md §2・ADR-0026 §2.1）。
 pub const HOST_MANIFEST: &str = "host.toml";
@@ -387,6 +391,12 @@ pub enum RuleKind {
     SeatDraftsCapMb,
     /// 量の線が消さない組み立て中の窓（秒・設計 dispatcher.md §39 形 5）。新しさがこの秒数以内の候補は上限を越えても消さない。0 は窓無し。
     SeatDraftsBusyS,
+    /// 局面の出力の終わりの局面の閉じた部品を載せる窓（時間・設計 case-lifecycle.md §12 約束 10・ADR-0088）。書き手が窓の秒に直して
+    /// 部品の判定へ渡す。id は `lifecycle.closed_window_h` の 1 行。
+    LifecycleClosedWindowH,
+    /// 手番が seat の局面が滞ったとみなす年齢の閾値（時間・§12 約束 10）。**1 kind で行が 13 本**で、id は `lifecycle.age_h.<語>`
+    /// （語は手番が seat の局面の語・`age_word_is_known` が語の外の後ろを断る）。行の無い seat の語は `owned.unset` に数える。
+    LifecycleAgeH,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -474,6 +484,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::FloorTimeoutS,
     RuleKind::SeatDraftsCapMb,
     RuleKind::SeatDraftsBusyS,
+    RuleKind::LifecycleClosedWindowH,
+    RuleKind::LifecycleAgeH,
 ];
 
 impl RuleKind {
@@ -486,8 +498,7 @@ impl RuleKind {
             Self::FnLines => "FnLines", Self::FnComplexity => "FnComplexity", Self::FnArgs => "FnArgs",
             Self::LineWidth => "LineWidth", Self::BoundaryLines => "BoundaryLines",
             Self::DialogueSurface => "DialogueSurface",
-            Self::MaturityCondition => "MaturityCondition",
-            Self::AccountSelection => "AccountSelection",
+            Self::MaturityCondition => "MaturityCondition", Self::AccountSelection => "AccountSelection",
             Self::MutationSurvivalLine => "MutationSurvivalLine",
             Self::DepBudget => "DepBudget",
             Self::DepPerPr => "DepPerPr",
@@ -540,6 +551,7 @@ impl RuleKind {
             // 管理 tick の 3 kind と席の箱も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
             Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS", Self::SeatMemoryMaxMb => "SeatMemoryMaxMb",
             Self::SeatPrecheckAlarmS => "SeatPrecheckAlarmS", Self::FloorTimeoutS => "FloorTimeoutS",
+            Self::LifecycleClosedWindowH => "LifecycleClosedWindowH", Self::LifecycleAgeH => "LifecycleAgeH",
             Self::SeatPointerLadderS => "SeatPointerLadderS", Self::SeatMoveGraceS => "SeatMoveGraceS", Self::SeatIdleAlarmS => "SeatIdleAlarmS",
         }
     }
@@ -560,8 +572,7 @@ impl RuleKind {
             | Self::GateLensCount | Self::PipePrecheckLensPerRound
             | Self::GateTokenCap | Self::RunTokenCeiling
             | Self::HookBudgetMs | Self::HostGuardPublishDeadlineMs | Self::HostGuardPublishReadBytes
-            | Self::StopGraceMs
-            | Self::LockRetryMs
+            | Self::StopGraceMs | Self::LockRetryMs
             | Self::LockStaleMs
             | Self::HookTimeoutS
             | Self::SeatCycleSettleS
@@ -589,7 +600,8 @@ impl RuleKind {
             | Self::PipeMaxLive
             | Self::FlipMarksPerPr | Self::LedgerOpenChildrenMax
             | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS | Self::SeatMemoryMaxMb | Self::SeatIdleAlarmS
-            | Self::SeatPrecheckAlarmS | Self::AccountSelection | Self::FloorTimeoutS => ValueShape::Int,
+            | Self::SeatPrecheckAlarmS | Self::AccountSelection | Self::FloorTimeoutS
+            | Self::LifecycleClosedWindowH | Self::LifecycleAgeH => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
             | Self::RunnerEffort | Self::LensModel | Self::PipePrecheckLensModel
@@ -760,9 +772,25 @@ impl RuleRow {
                 }
             }
             (RuleKind::RunnerClassCommands, RuleValue::List(elements)) => self.class_elements_are_read(elements),
+            (RuleKind::LifecycleAgeH, _) => self.age_word_is_known(),
             (RuleKind::HostGuardPublish, RuleValue::List(found)) => publish::elements(found).map(drop).map_err(|why| RuleError::new(self.line, format!("{} の value の{why}", self.id))),
             _ => Ok(()),
         }
+    }
+
+    /// `lifecycle.age_h.<語>` の語の検査（設計 case-lifecycle.md §12 約束 10）: id が `lifecycle.age_h.` で始まり、後ろが手番が seat の局面の語
+    /// （`contract-queued` は理由で手番が決まるので語として取る）であること。語の外の後ろは行番号つきで断る。
+    fn age_word_is_known(&self) -> Result<(), RuleError> {
+        let word = self.id.strip_prefix(AGE_ID_PREFIX).unwrap_or("");
+        let seat = |word: &str| word == Phase::ContractQueued.as_str() || turn_of(word, None) == Some(Turn::Seat);
+        if seat(word) {
+            return Ok(());
+        }
+        let taken: Vec<&str> = PHASES.iter().copied().filter(|found| seat(found)).collect();
+        Err(RuleError::new(
+            self.line,
+            format!("{} の id の後ろが手番 seat の局面の語でない（{AGE_ID_PREFIX}<語>・取るのは {}）", self.id, taken.join(" / ")),
+        ))
     }
 
     /// クラスの語列表の要素の形（設計 contract-source.md §48 の 3 の (a)(b)・読み手は [`class_element`] の 1 本）: 先頭語が

@@ -7,6 +7,7 @@ use super::land::{broken, close_reason, refused, retire_worktree, CloseTail, Wor
 use super::{branch_name, emit, git_bytes, git_ok, verdict_path, worktree_path, worktrees_dir, Emit};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::json_lite;
+use crate::fleet::lifecycle::{self, Place};
 use crate::fleet::store::{self, LockPolicy};
 use crate::fleet::{ci_read, pr_merge, CiRead, EventKind, PrMerge, Stage};
 use crate::rules::manifest::Manifest;
@@ -293,6 +294,17 @@ fn close_and_fold(entry: &Retire<'_>, worktree: &Path, proof: &Proof) -> Outcome
     if crate::ledger::close(entry.bd, entry.repo, entry.bead, &reason).is_err() {
         return declined(entry, Refusal::Unwritten);
     }
+    // **局面の出力の書き直し（契機 (d)）は close の Ok の後**（設計 case-lifecycle.md §12 約束 8）: 呼び手の rc と stdout は変えず、
+    // `Written`・`Unchanged`・`Coalesced` の外の語だけ stderr の 1 行にする。
+    let place = Place { state_dir: entry.state_dir, repo: entry.repo, manifest: entry.manifest, bd: entry.bd, policy: entry.policy };
+    let lifecycle_lines = lifecycle::after_close(&place);
+    let mut outcome = fold_after_close(entry, worktree);
+    outcome.err.extend(lifecycle_lines);
+    outcome
+}
+
+/// close の後に `terminal:close:ok` を記して worktree を畳む（[`close_and_fold`] の後半）。
+fn fold_after_close(entry: &Retire<'_>, worktree: &Path) -> Outcome {
     if let Err(reason) = record(entry, EventKind::RunDone, CLOSE_OK) {
         return broken(reason);
     }
