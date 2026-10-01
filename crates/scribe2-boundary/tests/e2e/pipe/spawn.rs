@@ -974,6 +974,90 @@ fn resume_dead_runner(repo: &Path, state: &Path, id: &str, runner: &str) -> Outp
     ])
 }
 
+// ───── 終わりの門の間の印の読み手（設計 pipeline.md §66 形 9・行 bk・接頭辞 `endgate_mark_`） ─────
+//
+// 書き手（行 bj）が着地するまで印を置く者は居ないので、歯は runner が死んだ `Spawned` の便の run dir へ印を手で置く。
+
+/// 便の run dir の印の path。
+fn end_gate_mark_path(state: &Path, id: &str) -> PathBuf {
+    state.join("pipe").join(id).join("end-gate.pid")
+}
+
+/// 便の event の本数（kind を問わない・「event 0 件」の測り）。
+fn event_total(state: &Path, id: &str) -> usize {
+    events(state).iter().filter(|found| found.run == id).count()
+}
+
+/// 印を置いて `resume --runner` を撃った周（出力・撃つ前の event と `SeatSpawned` の本数・便の材料）。
+struct Marked {
+    out: Output,
+    events_before: usize,
+    seats_before: usize,
+    id: String,
+    repo: PathBuf,
+    state: PathBuf,
+}
+
+/// 印の本文 `body` を置いて `resume --runner` を撃つ。
+fn resume_with_mark(body: &str) -> Marked {
+    let (repo, state) = repo_with_state();
+    let (id, _runner_pid, runner) = killed_at_spawned(&repo, &state, &[IMPLEMENT.to_owned()]);
+    fs::write(end_gate_mark_path(&state, &id), body).unwrap_or_default();
+    let events_before = event_total(&state, &id);
+    let seats_before = kind_count(&state, &id, EventKind::SeatSpawned);
+    let out = resume_dead_runner(&repo, &state, &id, &runner);
+    Marked { out, events_before, seats_before, id, repo, state }
+}
+
+/// (a) 生きている process の pid を本文にした印の便は、rc 1・判定行 `end-gate=alive pid=<pid>`・event 0 件・runner 起こさず。
+#[test]
+fn endgate_mark_alive_owner_refuses_without_waking_a_runner() {
+    let mut sleeper = Command::new("sleep").arg("300").spawn().unwrap_or_else(|err| panic!("sleep を起こせる: {err}"));
+    let pid = sleeper.id();
+    let Marked { out, events_before, seats_before, id, repo, state } = resume_with_mark(&format!("{pid}\n"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={id} end-gate=alive pid={pid}")), "{}", stdout_of(&out));
+    assert_eq!(event_total(&state, &id), events_before, "event を足さない");
+    assert_eq!(runner_dead_count(&state, &id), 0, "SeatStopped runner-dead を足さない");
+    assert_eq!(kind_count(&state, &id, EventKind::SeatSpawned), seats_before, "SeatSpawned を足さない");
+    assert_eq!(stub_calls(&state), 1, "偽 runner は起きない（turn 1 の 1 回のまま）");
+    sleeper.kill().ok();
+    sleeper.wait().ok();
+    clean(&[&repo, &state]);
+}
+
+/// (b) 読めない本文（10 進でない字）の印の便も、rc 1・判定行 `end-gate=unreadable`・event 0 件・runner 起こさず。
+#[test]
+fn endgate_mark_unreadable_body_refuses_without_waking_a_runner() {
+    let Marked { out, events_before, seats_before, id, repo, state } = resume_with_mark("not-a-pid\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={id} end-gate=unreadable")), "{}", stdout_of(&out));
+    assert_eq!(event_total(&state, &id), events_before, "event を足さない");
+    assert_eq!(kind_count(&state, &id, EventKind::SeatSpawned), seats_before, "SeatSpawned を足さない");
+    assert_eq!(stub_calls(&state), 1, "偽 runner は起きない");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 持ち主の死んだ印の便と印の無い便の resume は、今どおり `runner-dead` を 1 件記帳して runner を起こし直す。
+#[test]
+fn endgate_mark_dead_owner_and_absent_mark_resume_as_before() {
+    let mut gone = Command::new("true").spawn().unwrap_or_else(|err| panic!("true を起こせる: {err}"));
+    let pid = gone.id();
+    gone.wait().ok();
+    for body in [Some(format!("{pid}\n")), None] {
+        let (repo, state) = repo_with_state();
+        let (id, _runner_pid, runner) = killed_at_spawned(&repo, &state, &[IMPLEMENT.to_owned()]);
+        if let Some(body) = body {
+            fs::write(end_gate_mark_path(&state, &id), body).unwrap_or_default();
+        }
+        let out = resume_dead_runner(&repo, &state, &id, &runner);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+        assert_eq!(runner_dead_count(&state, &id), 1, "runner-dead を 1 件記帳する");
+        assert_eq!(stub_calls(&state), 2, "runner を起こし直す");
+        clean(&[&repo, &state]);
+    }
+}
+
 // ───── API に届かず止まった runner（`s2-07l.301`・設計 account-autonomy.md §17・SRS FR37 / FR14・接頭辞 `pipe_unreachable_`） ─────
 //
 // turn 1 は**実 runner**（`<bin> runner`）を偽 claude で撃つ: 偽 claude が `result` record に `is_error` と本文を書いて rc 1 で

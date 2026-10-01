@@ -17,6 +17,7 @@ use crate::pipe::follow;
 use crate::pipe::gate::{Verdict, RC_INCONCLUSIVE};
 use crate::pipe::land::verdict_of;
 use crate::pipe::ratelimit::ride_out_rate_limit;
+use crate::pipe::spawn::{end_gate_mark, EndGateMark, Held};
 use crate::pipe::{contract_path, current, emit, gate_is_open, last_stage_detail, runner_is_idle, Emit};
 use crate::rules::manifest::Manifest;
 use std::path::{Path, PathBuf};
@@ -148,6 +149,10 @@ fn revive(args: &[String], id: &str, runner: &str, manifest: &Manifest, policy: 
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
+    // **終わりの門の間は起こさない**（設計 pipeline.md §66 形 9）: API に届かない周の枝より前に断る。
+    if let EndGateMark::Held(held) = end_gate_mark(&state_dir, id) {
+        return end_gate_held(id, held);
+    }
     let events = match store::read_all(&state_dir) {
         Ok(found) => found,
         Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()),
@@ -198,6 +203,21 @@ fn revive(args: &[String], id: &str, runner: &str, manifest: &Manifest, policy: 
         return broken(err.to_string());
     }
     ride_out_rate_limit(args, id, runner, manifest, policy)
+}
+
+/// 終わりの門の印の持ち主が生きている周と印を読めない周の断り（門の隣に runner の 2 本目を起こさない・rc 1・event 0 件）。
+fn end_gate_held(id: &str, held: Held) -> Outcome {
+    let (line, reason) = match held {
+        Held::Alive(pid) => (
+            format!("run={id} end-gate=alive pid={pid}"),
+            format!("pipe: run {id} は終わりの門を撃っている（pid {pid}・門の隣に runner を起こさない）"),
+        ),
+        Held::Unreadable => (
+            format!("run={id} end-gate=unreadable"),
+            format!("pipe: run {id} の終わりの門の印を読めない（読めない印は断る）"),
+        ),
+    };
+    Outcome { out: vec![line], err: vec![reason], rc: RC_REFUSED }
 }
 
 /// `--runner` を読んで、その段の便を起こし直す（`resume` の各段が共有する形・`--runner` 欠けは rc 1）。

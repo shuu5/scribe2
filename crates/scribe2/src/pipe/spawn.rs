@@ -19,7 +19,7 @@ use super::{
     runner_stdout_path, vessel_path, worktree_path, Budget, Emit, Question, RC_QUESTION,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
-use crate::fleet::store::LockPolicy;
+use crate::fleet::store::{lock_owner, owner_pid, started_ms, LockPolicy, Owner};
 use crate::fleet::{Cost, CostSource, EventKind, Stage};
 use crate::headless::runner::{stop_status, summary_usage, top_level_string};
 use crate::headless::{NO_VALUE, RC_RATE_LIMIT, RC_UNREACHABLE};
@@ -57,6 +57,43 @@ const CONSUMER_DIR: &str = "consumer";
 /// runner の写しの印の file の名の尾（名は [`NAME`] + この尾・中身は空・器は読まない・consumer-sync.md §19 形 3・
 /// ADR-0082）。消費側の hook は `$CLAUDE_PLUGIN_ROOT` の下にこの名の file が在るかで runner の写しかを判じる。
 const RUNNER_MARK_SUFFIX: &str = "-runner";
+
+/// 終わりの門の間の印の名（run dir の直下・本文は driver の札と同じ `<pid> <起動時刻>`・設計 pipeline.md §66 形 9）。
+pub(crate) const END_GATE_MARK: &str = "end-gate.pid";
+
+/// 終わりの門の間の印の読み（[`end_gate_mark`] の返り・閉じた 3 値）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EndGateMark {
+    /// 印が無い。
+    Absent,
+    /// 印は在るが持ち主が死んでいる（門を撃っていた process は居ない）。
+    Dead,
+    /// 断る周（持ち主が生きているか、印を読めない）。
+    Held(Held),
+}
+
+/// [`EndGateMark::Held`] の中身（断る理由）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Held {
+    /// 持ち主が生きている（その pid）。
+    Alive(u32),
+    /// 印を読めない（読めない本文・読めない probe・file の読み損ない）。fail-closed で断る側。
+    Unreadable,
+}
+
+/// run dir の印 [`END_GATE_MARK`] の持ち主を読む（持ち主の生死は `lock_owner` と `started_ms`・読めない印は断る側）。
+pub(crate) fn end_gate_mark(state_dir: &Path, id: &str) -> EndGateMark {
+    let body = match std::fs::read_to_string(super::run_dir(state_dir, id).join(END_GATE_MARK)) {
+        Ok(body) => body,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return EndGateMark::Absent,
+        Err(_) => return EndGateMark::Held(Held::Unreadable),
+    };
+    match (lock_owner(&body, started_ms), owner_pid(&body)) {
+        (Owner::Dead, _) => EndGateMark::Dead,
+        (Owner::Live, Some(pid)) => EndGateMark::Held(Held::Alive(pid)),
+        (Owner::Live | Owner::Unreadable, _) => EndGateMark::Held(Held::Unreadable),
+    }
+}
 
 /// 起動 1 回の材料。
 pub struct Launch<'a> {
