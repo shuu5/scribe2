@@ -298,11 +298,11 @@ terms:
     relationships: [対話面, 契約, 設計 doc, runner, lens]
   - canonical: 契約
     domain: consumer
-    definition: 何を作り・何ができたら終わりかを表す 1 単位。 正本は設計 doc の契約表 1 行で、 器が便の契約 file を生成する (C15・SRS FR2 / FR47・ADR-0023 §2.1 / §2.2)。 台帳の 1 bead に対応し、 SRS の要件 id と設計 doc を pointer で持つ。
+    definition: 何を作り・何ができたら終わりかを表す 1 単位。 正本は契約表の置き場の契約表 1 行で、 器が便の契約 file を生成する (C15・SRS FR2 / FR47・ADR-0023 §2.1 / §2.2)。 台帳の 1 bead に対応し、 SRS の要件 id と設計 pointer (契約表の置き場の file と契約 id) を持つ。
     relationships: [台帳, 設計 doc, write-set, 便, 契約表]
   - canonical: 設計 doc
     domain: consumer
-    definition: 要望を SRS の要件に結び、 契約が複数出る元になる tracked markdown (docs/design/)。 末尾に契約表の区間を 0 か 1 つ持つ (SRS FR47・ADR-0023 §2.1)。 契約表は表だけを持つ tracked な toml にも置け、 器が表を数える file の集合は契約表の置き場が決める (ADR-0109)。
+    definition: 要望を SRS の要件に結び、 契約が複数出る元になる tracked markdown (docs/design/)。 末尾に契約表の区間を 0 か 1 つ持つ (SRS FR47・ADR-0023 §2.1)。 契約表は vessel 宣言の contract-tables で名乗れば表だけを持つ tracked な toml にも置け、 器が表を数える file の集合は契約表の置き場が決める (ADR-0109)。
     relationships: [契約, SRS, 契約表の置き場]
   - canonical: SRS
     domain: consumer
@@ -511,7 +511,7 @@ terms:
     relationships: [管理 tick, 席, 打刻の合図, 開発 session]
   - canonical: 管理 tick
     domain: consumer
-    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。 ADR-0066 の後は、 自席の anchor が群に属する周に群の移動の判定を群ごとに鮮度の窓 (fleet.usage_fresh_s) に 1 回まで host の lock の内側で撃ち (lock を取れない周は撃たず今の列へ)、 判定の周だけ計測を起こしてよい (退避と起こし直しは自席の移動の門のまま)。 管理 tick の周は局面の出力の部分の書き直しの契機でもある (SRS FR27 / FR90・ADR-0088)。 ADR-0098 (proposed) の後は、 登録 row の口座が口座の墓標の席に合図を送らず判定行の理由を account-dead とし (heartbeat の実効の値が off の席は理由 heartbeat-off が先)、 打刻を読まずに群の移動の判定へ進み、 窓が shell の群の席は群の今の口座が墓標なら起こす前に判定を撃つ。 ADR-0108 (proposed) の後は、 台帳の印か main の sha が局面の出力の印と違い、 書き直しの下限を過ぎた周に全部の書き直しも撃つ (撃った記録を書く・tick の rc と字は変えない)。
+    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。 ADR-0066 の後は、 自席の anchor が群に属する周に群の移動の判定を群ごとに鮮度の窓 (fleet.usage_fresh_s) に 1 回まで host の lock の内側で撃ち (lock を取れない周は撃たず今の列へ)、 判定の周だけ計測を起こしてよい (退避と起こし直しは自席の移動の門のまま)。 管理 tick の周は局面の出力の部分の書き直しの契機でもある (SRS FR27 / FR90・ADR-0088)。 ADR-0098 (proposed) の後は、 登録 row の口座が口座の墓標の席に合図を送らず判定行の理由を account-dead とし (heartbeat の実効の値が off の席は理由 heartbeat-off が先)、 打刻を読まずに群の移動の判定へ進み、 窓が shell の群の席は群の今の口座が墓標なら起こす前に判定を撃つ。 ADR-0108 の後は、 台帳の印か main の sha が局面の出力の印と違い、 書き直しの下限を過ぎた周に全部の書き直しも撃つ (撃った記録を書く・tick の rc と字は変えない)。
     relationships: [開発 session, 打刻の合図, backoff, 変化の digest, tick の unit, 群の移動の判定, 判定の打刻, 移動の門, 局面の出力, alarm, 口座の墓標, 口座の門]
   - canonical: 口座の門
     domain: consumer
@@ -524,12 +524,12 @@ terms:
     relationships: [管理 tick, 開発 session, 口座, doctor]
   - canonical: tick の unit
     domain: consumer
-    definition: 管理 tick を席ごとに周期で撃つ host の systemd user unit (service と timer の対)。 器の口 (seat tick install) が NAME・target・置き場・binary・rules 行の間隔から 1 関数で導出して書き、 有効化まで撃つ (ADR-0030 §2.1〜§2.4)。 撤去は退役 dir への移動で、 doctor が席ごとに有無と一致を名指す (ADR-0030 §2.5)。 ADR-0064 (proposed) の後は、 席の起動が席を立てた周に tick の宣言の値で同じ 1 本を撃つ。 ADR-0108 (proposed) の後は、 tick の宣言か口の flag が台帳 client の場所を名乗った導出だけ ExecStart の末尾に --bd を載せ、 名乗らない unit は今と同じ bytes (ADR-0058 が戻した unit の形の部分 supersede)。
+    definition: 管理 tick を席ごとに周期で撃つ host の systemd user unit (service と timer の対)。 器の口 (seat tick install) が NAME・target・置き場・binary・rules 行の間隔から 1 関数で導出して書き、 有効化まで撃つ (ADR-0030 §2.1〜§2.4)。 撤去は退役 dir への移動で、 doctor が席ごとに有無と一致を名指す (ADR-0030 §2.5)。 ADR-0064 (proposed) の後は、 席の起動が席を立てた周に tick の宣言の値で同じ 1 本を撃つ。 ADR-0108 の後は、 tick の宣言か口の flag が台帳 client の場所を名乗った導出だけ ExecStart の末尾に --bd を載せ、 名乗らない unit は今と同じ bytes (ADR-0058 が戻した unit の形の部分 supersede)。
     relationships: [管理 tick, 席の登録, doctor, manifest, tick の宣言, 席の起動]
   - canonical: tick の宣言
     domain: consumer
     aliases: [tick declaration]
-    definition: host の manifest の表 [[tick]] (ADR-0064・proposed)。 unit を置く dir の絶対 path (unit-dir) と unit が撃つ器の絶対 path (binary) の 2 欄を持つ 0 か 1 行の表で、 vessel 宣言と同じ形。 席の起動と doctor と init が読み、 器は書かない (人が雛形の置き場の面に 1 度だけ書く)。 ADR-0108 (proposed) の後は、 任意の key bd (台帳 client の絶対 path) を持てる (必須は unit-dir と binary の 2 欄のまま・ADR-0064 の閉じた欄の列を部分 supersede)。
+    definition: host の manifest の表 [[tick]] (ADR-0064・proposed)。 unit を置く dir の絶対 path (unit-dir) と unit が撃つ器の絶対 path (binary) の 2 欄を持つ 0 か 1 行の表で、 vessel 宣言と同じ形。 席の起動と doctor と init が読み、 器は書かない (人が雛形の置き場の面に 1 度だけ書く)。 ADR-0108 の後は、 任意の key bd (台帳 client の絶対 path) を持てる (必須は unit-dir と binary の 2 欄のまま・ADR-0064 の閉じた欄の列を部分 supersede)。
     relationships: [host の manifest, tick の unit, 席の起動, doctor, init, 雛形の置き場]
   - canonical: 席の状態
     domain: consumer
@@ -812,10 +812,10 @@ terms:
     relationships: [契約, 設計 doc, 設計 pointer, write-set の閉包, 契約 id, 契約表の置き場]
   - canonical: 契約表の置き場
     domain: consumer
-    aliases: [contract table place]
-    definition: 契約表を持つ tracked file の集合。 既定は設計 doc の dir (docs/design/) の直下の markdown で、 vessel 宣言の任意 key contract-tables が dir (その直下の、 区間の markdown か表だけの toml) か file を足す (置き換えない)。 契約表の検査・局面の出力・live-row の門・台帳の形の検査・受付は、 1 つの列挙の関数でこの集合を読み、 宣言を読めない周は既定に倒さない (ADR-0109・contract-source.md §69)。
+    aliases: [contract table place, 表の置き場]
+    definition: 契約表を置いてよい tracked file の集合 (表を持たない file も含む)。 既定は設計 doc の dir (docs/design/) の直下の markdown で、 vessel 宣言の任意 key contract-tables が dir (その直下の、 拡張子が .md か .toml の file) か file を足す (置き換えない・SRS FR47)。 器の中で契約表を数える読み手と受付は全部、 この集合を 1 つの列挙で読み (読み手の一覧は ADR-0109・contract-source.md §69)、 宣言を読めない周は既定に倒さない。
     relationships: [契約表, vessel 宣言, 設計 doc, 設計 pointer]
-    flagged_ambiguities: [素の「置き場」は state dir の意味で使う。 契約表のある file の集合は合成語の契約表の置き場で書く]
+    flagged_ambiguities: [素の「置き場」は多くが state dir の意味で、 write-set の置き場だけの印 (=) とも別。 契約表のある file の集合は合成語の契約表の置き場で書く, SRS の用語集の見出しは表の置き場で、 本文は合成語の契約表の置き場で書く]
   - canonical: 見込み行数
     domain: consumer
     aliases: [growth]
@@ -828,8 +828,8 @@ terms:
     relationships: [受付, 見込み行数, write-set, 便]
   - canonical: 設計 pointer
     domain: consumer
-    definition: 設計 doc の path と契約 id の対。 intake の入力 (SRS FR53) で、 台帳の bead の受入条件が持つ 1 行でもある (SRS FR2)。
-    relationships: [契約表, 台帳, 契約 id]
+    definition: 契約表の file の path と行の id の対で、 その file が契約表の置き場に在るときだけ解決する (SRS FR54)。 intake の入力 (SRS FR53) で、 台帳の bead の受入条件が持つ 1 行でもある (SRS FR2)。
+    relationships: [契約表, 台帳, 契約 id, 契約表の置き場]
   - canonical: write-set の閉包
     domain: consumer
     definition: 契約の行が宣言した閉じた型を、 網羅 match・literal 構築・件数 pin で持つ source file の集合 (SRS FR48)。 write-set に足りなければ intake が契約を断る。 字の照合で求めるため下界であり、 限界は歯が固定する (ADR-0023 §2.3)。
@@ -888,7 +888,7 @@ terms:
     relationships: [散文の門, 設計 doc]
   - canonical: 契約 id
     domain: consumer
-    definition: "設計 doc の file 名の stem と行の id の対 (doc id # row id) で表す契約の識別子 (ADR-0023 §2.1)。 doc id は append-only で、 台帳の pointer 行・commit の trailer・外部の道具の追跡表が同じ形を鍵にする。"
+    definition: "契約表の置き場の file 名の stem と行の id の対 (doc id # row id) で表す契約の識別子 (ADR-0023 §2.1)。 doc id は append-only で、 台帳の pointer 行・commit の trailer・外部の道具の追跡表が同じ形を鍵にする。"
     relationships: [契約表, 設計 pointer, trailer, 台帳]
   - canonical: trailer
     domain: consumer
@@ -1672,7 +1672,7 @@ terms:
   - canonical: 書き直しの契機
     domain: consumer
     aliases: [rewrite triggers]
-    definition: 局面の出力を書き直す時の 2 層 (SRS FR90・ADR-0088)。 全部の書き直しは dispatch の周・器が台帳を書いた直後 (bind・答えの口・land の終端の close・memo の自動の close)・全部を書き直す口の周で、 event log と時刻で決まる部分 (発話・仕分けで結んだ発端・便の局面・年齢と席の手番の閾値越え・期日の引き金の満ち) だけの書き直しは管理 tick の周と発話 event か仕分けの event の記帳の直後 (台帳も git も撃たず event log の大きさに依らない読み・SRS NFR5)。 席の台帳の書きと器の便でない merge は書き直さず古さの印を置くだけ。 ADR-0108 (proposed) の後は、 台帳の印か main の sha が出力の印と違い書き直しの下限を過ぎた管理 tick の周も全部の書き直しの契機で、 それ以外の管理 tick の周は部分の書き直しのまま。
+    definition: 局面の出力を書き直す時の 2 層 (SRS FR90・ADR-0088)。 全部の書き直しは dispatch の周・器が台帳を書いた直後 (bind・答えの口・land の終端の close・memo の自動の close)・全部を書き直す口の周で、 event log と時刻で決まる部分 (発話・仕分けで結んだ発端・便の局面・年齢と席の手番の閾値越え・期日の引き金の満ち) だけの書き直しは管理 tick の周と発話 event か仕分けの event の記帳の直後 (台帳も git も撃たず event log の大きさに依らない読み・SRS NFR5)。 席の台帳の書きと器の便でない merge は書き直さず古さの印を置くだけ。 ADR-0108 の後は、 台帳の印か main の sha が出力の印と違い書き直しの下限を過ぎた管理 tick の周も全部の書き直しの契機で、 それ以外の管理 tick の周は部分の書き直しのまま。
     relationships: [局面の出力, 古さの印, 管理 tick, dispatcher, land の終端, 答えの口]
   - canonical: misfit
     domain: consumer
@@ -2043,16 +2043,16 @@ terms:
   - canonical: 書き直しの下限
     domain: consumer
     aliases: [rewrite floor, lifecycle.full_min_s]
-    definition: 管理 tick が全部の書き直しを撃つ間の最短の秒数で、 rules 行 lifecycle.full_min_s (値 300・裁定の字 user 2026-10-01T15:27Z) が持つ (ADR-0108・proposed)。 局面の出力の full_at と撃った記録の ts の新しい方から測る。 行の無い rules の写しでは管理 tick は全部の書き直しを撃たない。
+    definition: 管理 tick が全部の書き直しを撃つ間の最短の秒数で、 rules 行 lifecycle.full_min_s (値 300・裁定の字 user 2026-10-01T15:27Z) が持つ (ADR-0108)。 局面の出力の full_at と撃った記録の ts の新しい方から測る。 行の無い rules の写しでは管理 tick は全部の書き直しを撃たない。
     relationships: [管理 tick, 撃った記録, 局面の出力, 書き直しの契機]
   - canonical: 撃った記録
     domain: consumer
     aliases: [attempt record, lifecycle.tick]
-    definition: 管理 tick が全部の書き直しを撃った周に、 返りに依らず置き場の fleet/lifecycle.tick へ書く 1 行 ts=<epoch 秒> wrote=<返りの語> (ADR-0108・proposed)。 読むのは書き直しの下限の判定だけで、 無いか読めない周は数えない。
+    definition: 管理 tick が全部の書き直しを撃った周に、 返りに依らず置き場の fleet/lifecycle.tick へ書く 1 行 ts=<epoch 秒> wrote=<返りの語> (ADR-0108)。 読むのは書き直しの下限の判定だけで、 無いか読めない周は数えない。
     relationships: [書き直しの下限, 管理 tick, 局面の出力]
     flagged_ambiguities: [撃った記録 (管理 tick の全部の書き直しの試みの時刻) と、 最後の周の打刻 tick-last (席の tick の判定の時刻) は別の file]
   - canonical: 台帳 client
     domain: consumer
     aliases: [ledger client, bd]
-    definition: 台帳 (beads) を読み書きする command bd。 器は既定で素の名 bd を子 process の PATH で解く。 ADR-0108 (proposed) の後は、 seat tick が flag --bd でその場所を受け、 tick の宣言の任意の key bd か unit を入れる口の flag が絶対 path を名乗った unit だけが ExecStart で渡す (器は env・home・PATH の探索で解かない・C2.2)。
+    definition: 台帳 (beads) を読み書きする command bd。 器は既定で素の名 bd を子 process の PATH で解く。 ADR-0108 の後は、 seat tick が flag --bd でその場所を受け、 tick の宣言の任意の key bd か unit を入れる口の flag が絶対 path を名乗った unit だけが ExecStart で渡す (器は env・home・PATH の探索で解かない・C2.2)。
     relationships: [管理 tick, tick の unit, tick の宣言, 台帳の印, 書き直しの契機]
