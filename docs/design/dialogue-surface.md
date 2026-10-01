@@ -264,7 +264,7 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
     - (b) request・chat・答え（裁定 event の発話の ts の key）で仕分けた発話だけの session は止まらない。
     - (c) 独立 socket の登録された席で、止めた周の state.jsonl の最終行が busy・差し込みの記録が 0 行増、続く再入の Stop で idle、止めていない再入は黙る。
     - (d) 5 語の各 fixture で rc 0・`TurnEndUnjudged` 1 件（reason が一致）。同じ fixture で Stop をもう 1 度撃つと、控えを持てる 2 語（no-start・log-unreadable）は増えず、控えを持てない・読めない・書けない 3 語（no-session・told-unreadable・told-unwritable）は 1 件増える（約束 8）。
-    - (e) session の前に 10 MB と 20 MB の埋め草の event を置いた 2 つの log で、どちらも止まり、`sh -c` で起こした子の読みの byte（親の /proc の io の rchar・wait の後に子の分が親へ積まれる）が等しく、`--bd` の偽の client の記録が 0 行（台帳の読み 0）。
+    - (e) session の前に 10 MB と 20 MB の埋め草の event を置いた 2 つの log で、どちらも止まり、`sh -c` で起こした子の読みの byte（親の /proc の io の rchar・wait の後に子の分が親へ積まれる）の差が 4096 byte 未満（§14・行 m）で、`--bd` の偽の client の記録が 0 行（台帳の読み 0）。
     - (f) marker の無い repo と、発話の無い session（runner の形の payload）は、止めず event も書かず、その session の置き場に控えの file が無い（約束 3 の控えも書かない・発話の無い session に控えを作る実装を落とす）。同じ歯で対象の session が止まることも確かめる。
     - (g) 1 度目の SessionStart の後に未仕分けの発話を 1 つ書き、2 度目の SessionStart（resume の形）を撃つ。開始の位置は上書きされず、次の Stop がその発話で止まる（上書きする実装は 2 度目の位置から読んで止めない）。
     - (h) session_id の無い SessionStart の後、state dir の session の置き場の下に file が 0 本（約束 2 の書かない）。同じ歯で session_id を持つ SessionStart が開始の位置を 1 つ書くことも確かめる。
@@ -312,6 +312,43 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
 - 却下: 発話の ts と question_ts を字面で比べる（秒より下の桁と桁の数で順が崩れる）／境界の crate に行を組む（R-C4-5）／行を常に出す（数えるものの無い置き場の doctor の外形が動く・既存の先例と逆）。
 - 自分を締め出す順: fleet-event-log の行 h と本 doc の行 j の着地の後に走る（depends と台帳の依存）。
 - 跨版の面: doctor の text の新しい key 7 つ（binds・after-seat・after-seat-ids・after-user・after-user-ids・asked-none・asked-none-ids）と unreadable=。着地の前に doctor の key を読む消費側の面へ 1 行知らせる。
+
+## 14. turn の終わりの止めの歯 (e) の読みの比べを「差が 4096 byte 未満」にする — 子の起動の読みの 49 byte の揺れを許し、log に比例する読みは落とす（契約表の行 m・NFR5・memo `s2-07l.744`）
+
+やさしく言うと: 「log が 10 MB でも 20 MB でも、turn の終わりの hook が読む量は同じ」を確かめる歯が、まれに 49 byte だけずれて落ち、main を赤にした。ずれの元は log ではない。プログラムが起動するときに自分のメモリの地図（/proc/self/maps）を読む量で、地図の行の数が起動ごとの配置の乱数で 1 行（49 byte）変わる。比べを「ぴったり同じ」から「差が 4096 byte 未満」に替える。log を丸ごと読む実装なら差は 10 MiB（4096 byte の 2560 倍）なので、歯は今までどおり落とせる。
+
+- 何が起きているか（2026-10-01・main 71610086）:
+  - CI で 2 回（verified・memo `s2-07l.744` の観測と notes）: main 68d57fe9 の insta の job と PR #949 の nextest の job で、§12 の歯 (e)（`crates/scribe2-boundary/tests/e2e/hook/session.rs` の、名が hook_unsorted_stop_reads_the_same_bytes_ で始まる歯）が 10 MB: 31059 / 20 MB: 31010 の 49 byte の差で落ちた。memo の昇格条件（再発 2）を満たした。
+  - 手元（verified）: nextest で 10 回撃って 10 回緑。同じ test binary を 2000 回撃つと 10 回赤（0.5%）で、10 回とも差はちょうど 49 byte、向きは両方（10 MB の側が多い 4 回・20 MB の側が多い 6 回）。差が 0 でも 49 でもない周は 0 回。
+  - 歯の測り方: helper の rchar_of_hook_via_sh が hook を sh -c の子として撃ち、待った後の sh の /proc の io の rchar を読む。rchar は子の木（hook の binary と、hook が repo を解くために起こす git 2 本）の読みの全部を数える。
+- 根:
+  1. 起動の読み（verified・strace のスタック）: Rust の binary は main に入る前に、std の起動が glibc の pthread_getattr_np を呼び、glibc が /proc/self/maps を 1024 byte ずつ、[stack] の行を含む塊まで読む。Stop の hook は binary の起動 1 回なので、この読みも 1 回。git は C の binary で、この読みを持たない（strace で 0 回）。
+  2. 49 byte の 1 行（verified・揺れた周の maps の写し）: 揺れた周は、無名の写像の行（12 桁の番地 2 つ・権限 rw-p・offset 0・device 00:00・inode 0 と改行で 49 byte）が 1 本少ない。libc の bss の無名の写像と、その上に置かれた lib の下の無名の写像が隙間 0 で並び、kernel が 1 本の写像に結んだ。
+  3. 隙間が 0 になる確率（回数は verified・機序は inferred）: libc は 2 MiB の境に置かれ、その上の lib は境に置かれない。そのため両者の隙間は、起動ごとの配置の乱数（ASLR）で決まる。hook の binary だけを 3000 回起こすと 6 回（0.2%）で 1 行少なかった。これは、隙間が 2 MiB の中の 4 KiB の位置 512 通りの 1 つに当たる確率（約 0.2%）と合う。
+  4. rchar に出るかどうか（verified）: maps の読みの最後の塊が file の終わりで切れる（1024 byte に満たない）ときだけ、1 行の増減が読みの量にそのまま出る。最後の塊の長さは、binary の path の長さで決まる。
+     - 短い path では出る（上の 2000 回の 10 回）。
+     - 長い path では、[stack] の行を含む塊で読みが止まり、揺れを塊が飲む（1500 回で赤 0）。
+     - gate の worktree の path でも最後の塊は 1024 byte に満たず、揺れは出うる（gate では未観測）。
+  5. log の読みは正しい（verified）: 2 周の差は 0 か 49 の 2 値だけで、log の大きさに比例する成分は無い。src（`crates/scribe2/src/hook/turn_end.rs` の read_from）は開始の位置から末尾までを読み、§12 の約束 3 と NFR5 のとおりに有界である。直すのは歯の比べで、src は直さない。
+- 形（番号は done と 1:1）:
+  1. **比べを差の上限にする**: 歯 (e) の 2 周の rchar の比べを、等号から「差の絶対値が 4096 byte 未満」へ替える。
+     - 4096 は名の付いた定数 1 つで持ち、その doc が根拠の数を持つ。揺れの単位は maps の 1 行 49 byte。行の増減が読みの塊の境を跨いだときの動きは、1 塊 1024 byte まで（4096 はその上に 3 塊ぶんの余り）。log を丸ごと読む実装の 2 周の差は、埋め草の差 10,485,760 byte（4096 の 2560 倍）。
+     - 2 周の止め・台帳の読み 0・rchar が 0 でないことの 3 つの assert は変えない。
+  2. **名を改める**: 歯の名は「同じ byte」を名乗るので、hook_unsorted_stop_read_bytes_differ_under_4_kib_for_a_10_mb_and_a_20_mb_log_and_never_the_ledger に改める。doc comment の (e) の「等しく」は「差が 4096 byte 未満で」に直す。接頭辞 hook_unsorted_stop_ は保つ（module doc の接頭辞の列と、§12 の行 k の verify の filter は変わらない）。
+- 札: src を変えないので、歯の file を base に重ねると、改めた歯は緑になる。そのため改めた歯の fn の本文の先頭の行に、retroactive の札（本行の契約 bead の id）を 1 行置く（dispatcher.md §28・行 ab と同じ逃がし）。札の欠けは gate の flip-check が赤で落とすので、done の項目にしない（器の門が測る）。変異の証は、起票のときに契約 bead の notes へ記帳する。
+- 設計の線（歯を持たない・審査が読む）: 定数の doc が上の根拠の数を持つこと。helper 2 本（rchar_of_hook_via_sh・rchar_with_filler）の本文と、§12 のほかの歯を変えないこと。src を変えないことは、write-set（session.rs の 1 file）が門で縛る。
+- 歯（新しい歯は足さない）: verify の 1 行は、接頭辞 hook_unsorted_stop_read_bytes_differ_ を撃つ。main では該当 0 本で、改めた歯 1 本だけに当たり、ほかの歯の名の途中に無い。
+- 実測（2026-10-01・本 § の形を main 71610086 の写しに当てた木・verified）:
+  - 改めた歯を、main の木と同じ長さの path の target で 2000 回撃って 2000 回緑。そのうち 9 回は、2 周の差が 49 byte の周（今の歯なら赤）。clippy（-D warnings）は通る。
+  - 変異 2 つ: read_from の seek を開始の位置でなく log の頭からにすると、改めた歯が 10 MB: 10511361 / 20 MB: 20997121 で赤（rc 100・差 10,485,760 byte）。開始の位置の 0.1% 手前から読むと、35958 / 46444 で赤。どちらも、ほかの hook_unsorted_stop_ の e2e 8 本は緑（読みの量を測る歯はこの 1 本だけ）。
+- base で RED の理由: verify の filter に当たる歯が base に 0 本（名を改めるので・nextest は rc 4）。歯の file を base に重ねた flip-check は緑（src 不変）なので、札で通す。
+- 限界: 2 周の差が 4096 byte に届かない、log に比例する読み（log の 0.04% 未満）は落とせない（揺れの下に隠れる）。上限は、起動の読みが塊の境を跨ぐ動きまでを見込んだ値である。子の木に Rust の binary が増える（hook が器の binary を子として起こす）と、揺れの源も増える。その時は本 § の数を測り直す。
+- 却下:
+  - 読みを hook の log の読みだけに絞って測る（memo の候補 (b)）: 子の file ごとの読みを外から測るには、strace や bpftrace が要る（CI と container で使えるとは限らず、ptrace が塞がれうる）。そうでなければ、src に読みの数えの口（product に test の縫い目）が要る。
+  - setarch -R で配置の乱数を外して撃つ: container の既定の seccomp は personality のこの flag を断る（inferred）ので、手元の container で落ちうる。
+  - 各周を 3 回撃って最頻値で比べる: 揺れは両向きなので最小値は使えない。最頻値は 10 MB と 20 MB の書きを 3 倍にし、環境に依る量の等号も残る。
+  - binary の path を伸ばして、揺れを塊に飲ませる: path の長さと lib の並びに依る偶然で、gate の worktree の path では飲まない（上の実測）。
+  - 比べをやめる: NFR5 の「event log の大きさに依らない読みだけを持つ」を測る歯を失う。
 
 <!-- contracts:begin -->
 schema = 1
@@ -383,4 +420,15 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail doct
 growth = ["crates/scribe2/src/seat/ruling.rs:110", "crates/scribe2-boundary/tests/e2e/seat/ruling.rs:130"]
 size = "S"
 done = "(1) 母集団は utterance を持つ裁定 event で、古い裁定 event を数えない (2) 後の結びは question_ts が発話の ts より新しい結びで、question_ts を fleet::epoch_of・発話の ts を行 g のミリ秒の形の読みで読み、秒へ切り捨てて比べ同じ秒は数えない (3) doctor の行が binds・after-seat・after-seat-ids・after-user・after-user-ids・asked-none・asked-none-ids の順の 1 行で、asked-none は前後に依らず数え、id は log の順・無ければ - (4) 母集団 0 の周は行を出さず、log を読めない周は binds=unreadable、時刻を読めない結びは binds に数えて after-* に入れず unreadable=<n> を足す 歯: doctor_asked_after_ の e2e が 7 件の fixture の行の一致（asked-none の id を字の順と逆の log の順に置いた形）・母集団 0 の不出力・読めない log の unreadable・読めない question_ts と読めない utterance の unreadable=1・無い id の列の - を、lib が秒より下の桁の比べと同じ秒の不算入と読めない時刻を測る。base は binds= の行が無いので RED (5) seat/ruling.rs は EventKind の match の arm を書かず（== で比べる）、verify の最終行の contracts check が便の木で findings 0"
+
+[[contract]]
+id = "m"
+title = "turn の終わりの止めの歯 (e) の 2 周の読みの比べを等号から差 4096 byte 未満へ替えて名を改める — 子の起動の /proc/self/maps の読みの 49 byte の揺れを許し、log を丸ごと読む実装は 2560 倍の差で落とす（test だけの差分・札 retroactive・§14・memo s2-07l.744）"
+req = ["NFR5", "FR88"]
+section = "14"
+write-set = ["crates/scribe2-boundary/tests/e2e/hook/session.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_unsorted_stop_read_bytes_differ_"]
+growth = ["crates/scribe2-boundary/tests/e2e/hook/session.rs:12"]
+size = "S"
+done = "(1) session.rs の歯 (e) の名を hook_unsorted_stop_read_bytes_differ_under_4_kib_for_a_10_mb_and_a_20_mb_log_and_never_the_ledger に改め、10 MB と 20 MB の 2 周の子の rchar の比べを、等号から差の絶対値が 4096 byte 未満へ替える。doc comment の (e) を差の比べに直す。2 周の止め・台帳の読み 0・rchar が 0 でないことの assert は残す 歯: verify の 1 行が改めた歯 1 本を撃って緑。base は verify の filter に当たる歯が 0 本で rc 4"
 <!-- contracts:end -->
