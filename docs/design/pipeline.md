@@ -1328,12 +1328,22 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   - gate の verify の撃ちと記録は `gate/record.rs` の `record_verify` の 1 本で、`Gate` の材料（便 id・置き場・契約・線・lock の待ち方）から便の写しの共通 verify を読み、受付の材料と `Checks` を組んで `run_checks_admitted` を撃ち、`records_of` と `diagnose` で `verify.jsonl` と `verify.stderr.log` に書き、赤と測れなかった行を数える。着地の主実測も `records_of` と `diagnose` を同じ形で使い、別の file 名（`verify-main.jsonl`）に書く。
   - verify の行の scope の unit 名は pid と process の中の通し番号を持つ（同じ引数でも別の名）。門の行と gate の行の名は衝突しない。
   - e2e の spawn の経路の多く（helper `implemented` と `resume`）は `--rules` を渡さず、埋め込みの manifest を読む。着地の後は、それらの便も門を撃つ。
+- 測り直し（main ff924036・2026-10-01・census の監査の後・verified）:
+  - runner の stdin の節は、契約 → 共通 verify → ほかの行の touches（行 f）→ 回答 → 途中再開 → 追随 の順。
+  - `follow.rs` の `settle` は、`spawn` が返った後に `advanced` で記録済みの base と実測の merge-base を比べ、進んだ周だけ `rebase:<old>..<new>` を記帳する。spawn の中の門は、この記帳より前に撃たれる。
+  - land の契約表の行の起こし直しは、写しの write-set を `widen_write_set` で広げた後も、広げる前に読んだ `Turn` の契約のまま `spawn_selected` を呼ぶ（stdin の契約の本文は写しの file から読むので広がっている）。
+  - `record_verify` の最初の 1 手は便の写しの共通 verify の読み（`frozen_copy`）で、写しを読めない周と record を書けない周は Err を返す。
+  - toy の repo は Cargo.toml を持たず、spawn の PATH（道具箱）に偽 cargo は無い。偽 cargo を積むのは gate の歯の helper（`landed_path`・`gate_with_cargo_stub`）が撃つ gate の PATH だけ。
 - 形（番号は行 bk・bj の done と 1:1）:
   1. **撃つ時**: runner の turn が rc 0 かつ commit 1 本以上で終わった周（`settle` の Implemented の枝）だけ撃つ。rules 行の値に依らず撃つ（値は起こし直しの回数だけを決める・FR98）。
      - 停止・上限・質問・API に届かない周・Failed の周は今の枝が勝ち、門を撃たない。
      - 門の線が読めない周（形 8）は撃たずに Implemented にする（要約の語 unmeasured・FR98 の「測れなかった行が在る周」と同じ扱い）。
   2. **撃つ行と撃ち手**: gate の verify と同じ列（gate の write-set を照らす段 → 共通 verify → 契約の検証行・gate の `gate_checks` の 3 段）を、同じ撃ち手 `run_checks_admitted` で、同じ受付・箱・遮断器を通して便の worktree に撃つ。
      - `record_verify` の本体を 1 本に割る。本体が受けるのは、置き場・便 id・契約・gate の線・lock の待ち方と、record と診断の file の名の対。本体がするのは、便の写しの共通 verify の読み・受付の材料と `Checks` の組み・撃ち・`records_of` と `diagnose` での記録・赤と測れなかった行の数え。gate と門はその 1 本を呼ぶ（撃ち手も数え方も 2 本にしない）。gate が書く file の名と record の字は変えない。
+     - **門が測る base**: `follow.rs` の `advanced` を（置き場・repo・便 id）を受ける 1 本に割り、follow の `settle` と門が同じ 1 本を呼ぶ。進んだ周（記録済みの base が実測の merge-base の祖先の周と、`--onto` で運ばれた木の周）は実測の merge-base を、進んでいない周は記録済みの base（`base_of_run`）を門の base にする。gate の write-set を照らす段の diff の起点と、共通 verify の `{base}` の穴をこの値で埋める（follow の `settle` が後で記帳し、gate が読む base と同じ値）。base を読めない周は測れなかった周にする。
+     - **門が使う契約**: 門は撃つ時に便の写しを `Contract::load(&contract_path(..))` で読み直す（gate と同じ読み）。`Launch` の契約は使わない（land の契約表の行の起こし直しは、写しを広げる前に読んだ契約で `Launch` を組む）。
+     - **本体の Err**: 本体が Err を返す周（便の写しの共通 verify か契約を読めない・record か診断を書けない）は、測れなかった周にする（要約の語 unmeasured・key `reason` に Err の 1 行・起こし直さずに Implemented）。要約の行も書けない周は、書かずに Implemented にする。
+     - 門は stdout と stderr に何も書かない（結果は run dir の file と段の記帳だけ）。既存の歯の stdout と stderr の全文の比較を動かさない。
      - 門の record は run dir の `end-gate.jsonl` に書く。1 行の形は `verify.jsonl` と同じで、周ごとに `n` は 1 から振る。赤い行の診断は `end-gate.stderr.log` に書く。
      - 周の終わりに、要約の 1 行 `{"end_gate":<周>,"result":"<語>"}` を `end-gate.jsonl` に足す。語は閉じた 4 つ（green・red・exhausted・unmeasured）で、unmeasured は key `reason` に理由を足す。撃たない周（形 1）は要約の 1 行だけを書く。
   3. **全行 rc 0**: Implemented にする（要約の語 green）。
@@ -1348,11 +1358,12 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   7. **輪の持ち主**: 門は `spawn.rs` の `settle` の Implemented の枝に置く（spawn の内側・起動口は 1 本のまま）。起こし直しの輪は `follow.rs` の `spawn_turn` が持つ。
      - `spawn` が rc 0 で返り、便の最新の `RunStage` が門の赤なら（event log から読む・spawn の戻りの字は読まない）、`Precheck::measure` で Budget を測り直し、`Launch` に門の赤の節を足して `spawn` を呼び直す。口座は同じ turn の値のまま。
      - 輪は回数を数えない（止めるのは形 4 と形 5 の数え）。追随の後始末（`follow.rs` の `settle`）は、輪を抜けた後に 1 回だけ撃つ。
+     - 輪が返すのは最後の周の `spawn` の戻り（rc と行）だけで、門の赤の周の戻りの行は足さない（stdout の字は 1 周の便と同じ形）。
   8. **門の線と Launch**:
      - 門の線は、gate の線と周の上限の値の対で、読めない周は理由の 1 行を持つ（閉じた 2 値の型を `spawn.rs` に新しく置く）。manifest から組む 1 本は、gate と同じ `Limits::of`（8 行）と、rules 行 `runner.end_gate_rounds` の `int_row` を読む。
      - 線は `Runner` に参照の field で載せる。`Runner` を組む 5 か所が、組む周の manifest から同じ 1 本で組む。`Turn` と `Land` には field を足さない（組む場所が多く、門が要るのは `--runner` の在る周だけ）。
      - `Launch` に 2 つの field を足す: 門の線（`spawn_turn` が `Runner` から写す）と、門の赤の節（前の周の赤い行の列・任意）。
-     - stdin は、§65 の共通 verify の節の後・回答の節の前に「## 門の赤」節を足す。1 行目は周の番号と「器が撃った次の行が赤い。直して commit してから終える」の 1 文。続けて赤い行ごとに、撃った行の字・rc・診断の抜粋（撃った段の stderr の写しの末尾）を並べる。
+     - stdin は、ほかの行の touches の節（行 f）の後・回答の節の前に「## 門の赤」節を足す。1 行目は周の番号と「器が撃った次の行が赤い。直して commit してから終える」の 1 文。続けて赤い行ごとに、撃った行の字・rc・診断の抜粋（撃った段の stderr の写しの末尾）を並べる。
      - 抜粋は行ごとに 40 行・合計で 16000 字まで。落とした行は数の 1 行を残す。これは窓の大きさで判定の閾値ではないので、rules 行にしない（`STDERR_TAIL_LINES` と同じ読み）。
      - `prepare_worktree` は、回答・追随・途中再開・門の赤のどれかが在る周に、同じ worktree と記録済みの base を使う。
      - 起こし直しの `Spawned` の detail は `end-gate:<周>` で、器が選んだ口座の在る周は `,account:<label>` を足す。`base:` で始めない（途中再開と同じく、base の読み手が飛ばす形）。
@@ -1368,15 +1379,26 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 行の割り方と順: 行 bi（§67）→ 行 bk（形 9 の読み手と resume の断り）→ 行 bj（形 1〜8・形 9 の書き手・形 10）→ 行 bl（§68）。
   - 読み手を先に着地させるので、書き手が入った時には手の resume がもう断られる（隙が無い）。
   - 行 bi と行 bj は、どちらも埋め込み manifest の行数の pin と外形の snapshot `rules_external_form` を 1 つ増やす。行 bj は行 bi の後になる。
-- 門で向きが変わる既存の歯（census・main a526f825・`crates/scribe2-boundary/tests/e2e` の中・行 bj が直す）:
-  - 撃たれた回数を数える stub（`verify-count.sh`）を共通 verify か契約の verify に置く歯: `pipe/gate.rs` の遮断器の歯の fixture（「gate の前は印が無い」を測る）と、印を数える歯。
+- 門で向きが変わる既存の歯（census・main ff924036 で測り直し、orchestrator の読むだけの監査の名指しを足した・`crates/scribe2-boundary/tests/e2e` の中と lib の in-file の歯・行 bj が直す）:
+  - 撃たれた回数を数える stub（`verify-count.sh`）を共通 verify か契約の verify に置く歯: `pipe/gate.rs` の遮断器の歯の fixture（「gate の前は印が無い」を測る）と、印を始めから数える歯（`pipe/gate.rs`・`pipe/gate/detection.rs`・`pipe/land.rs`）。門の分の印が gate の前に積まれる。
   - 1 回目だけ緑の stub（`verify-once.sh`）を置く歯: `pipe/land.rs`（契約の verify と共通 verify）・`pipe/land/retire.rs`・`pipe/gate/detection.rs`。門が 1 回目の緑を使うので、gate が赤になる。
   - 撃ち始めの印を置いて眠る stub（`verify-slow.sh`）の歯: `pipe/stop.rs`。印が spawn の門で先に立つ。
   - 箱の中で死ぬ形の stub（`verify-oom.sh`）と、偽 `systemd-run` の記録を読む歯: `pipe/gate/confine.rs`。門の行の scope の記録が、gate の行の記録より前に積まれる。
-  - 赤い行（`verify-red.sh`・`verify-noisy.sh`・赤い共通 verify・write-set の外を書く runner）を持つ便の歯: `pipe/gate.rs`・`pipe/land.rs`。runner が 2 回多く起き、段の記帳の列と commit の数と diff が変わる。同じ字を書く runner は 2 回目の commit が空で Failed に倒れる。
-  - toy の crate を `cargo nextest` で撃つ行（`pipe/gate.rs`・`pipe/spawn.rs`・`pipe/land.rs`）は、門の分だけ時間が延びる（向きは変わらない）。
+  - 道具箱の記録の数を測る歯: `pipe.rs` の `e2e_toolbox_run_pipe_confines_the_common_verify_line`。門の共通 verify も道具箱の偽 `systemd-run` で包まれるので `-common-` の記録が 2 件になり、「ちょうど 1 件」を求める `toolbox_record` で落ちる。
+  - 赤い行（`verify-red.sh`・`verify-noisy.sh`・赤い共通 verify・write-set の外を書く runner）を持つ便の歯: `pipe/gate.rs`・`pipe/land.rs`。runner が 2 回多く起き、段の記帳の列と commit の数と diff が変わる。同じ字を書く runner は 2 回目の commit が空で Failed に倒れる。`pipe/spawn.rs` の五便の歯（`pipe_five_contracts_land_with_fake_runner_in_toy_repo`）の断りの便も、`sh verify-out.sh` が赤で空 commit の runner が 3 回起きる（assert は通る）。
+  - toy の crate を `cargo nextest` で撃つ契約の行は、門で赤になる（toy の repo に Cargo.toml が無く、偽 cargo は gate の PATH にだけ在る）:
+    - `pipe/spawn.rs` の共通 verify の節の歯 (a)（`runner_common_section_lists_the_filled_lines_between_contract_and_answer`）: runner が 3 回起き、stdin の写しは門の赤の節を持つ 3 回目で上書きされる。assert は通るが、測る stdin が 1 回目でなくなる。
+    - `pipe/gate.rs` の helper `landed_gated` を通る `pipe/gate/detection.rs` の歯 11 本: runner が 3 回起き、着地の diff が 3 行になる。純移動の便（`cp` で同じ中身を写す runner）は 2 回目の commit が空で Failed に倒れ、helper の spawn の assert で落ちる。
+    - `pipe/gate/promised.rs` の `pipe_gate_promised_new_name_not_declared_fails_stage_one`: 前半は段①（宣言しない名）も門で赤、後半は契約の `cargo nextest` が門で赤。どちらも同じ字を書く runner の 2 回目の commit が空で Failed に倒れ、gate が段違いで断る。
+  - 門の本体の Err の周（形 2）に当たる歯: `pipe/spawn.rs` の共通 verify の節の歯 (b)（`runner_common_section_says_why_when_the_copy_is_unreadable`・便の写しを壊す）と、lib の `crates/scribe2/src/pipe/follow.rs` の in-file の歯 `mutant_in_pipe_spawn_turn_returns_spawn_or_settle_rc`（"dirty" の便は写しを持たない・形 8 の `Runner` の構築点の 2 つもこの歯に在る）。Err を測れなかった周にするので、どちらも本文を直さずに通る（Err で rc 2 にすると「段は Implemented まで進む」が落ちる）。
+  - 形 2 の base と契約の読みで向きが変わらない歯（読んで確かめた）: `pipe/land/follow.rs` の自分で rebase した便（`pipe_follow_self_rebase_advances_the_base_without_a_follow_section`）と契約表の行の起こし直し（`pipe_follow_stale_rows_restarts_the_runner_and_appends_the_design_doc`）、`pipe/land/rebase.rs` の `--onto` で解いた便（`pipe_land_onto_conflict_restarts_the_runner_with_two_shas_and_lands`）。門が記録済みの base か `Launch` の契約で測ると、main 側の file か足した設計 doc を write-set の外と数えて runner が多く起き、`stub_calls` の assert で落ちる。この 3 本は形 2 の回帰の歯になる。
   - `--rules` の fixture（`write_rules_capped` の系）はこの行を持たないので、その便の門は撃たれず（要約の語 unmeasured）、段の記帳の列は変わらない。
-  - 直し方: 歯の関心が門でない歯は、行を持たない `--rules` の fixture（門を撃たない）で起こすか、門の後に印や数えを始める形にする（値 0 も門を撃つので、門を避ける口にはならない）。直すのは歯の本文で、retroactive の札を付ける（helper だけを直す test file を作らない・flip-check）。census の外で落ちる歯が write-set の外の file に在れば、行を止めて orchestrator へ返す。起票の前に、この census を読むだけの監査で 1 周洗い直す（orchestrator が回す）。
+  - 直し方: 歯の関心が門でない歯は、行を持たない `--rules` の fixture（門を撃たない）で起こすか、門の後に印や数えを始める形にする（値 0 も門を撃つので、門を避ける口にはならない）。
+    - `pipe.rs` の道具箱の歯は、gate の前の記録の名の列からの差で `-common-` の 1 件を測る。
+    - `pipe/gate/promised.rs` の歯は、spawn を行の無い `--rules` で起こす（偽 cargo を spawn の PATH に積むだけでは、前半の段①の赤が残る）。
+    - 共通 verify の節の歯 (a) と helper `landed_gated` は、spawn の PATH に偽 cargo を積む（`landed_path` と同じ形・門が緑で runner は 1 回）。
+    - 五便の断りの便は直さない（門が赤を 2 回渡すのは仕様どおりで、assert は通る）。
+    - 直すのは歯の本文で、retroactive の札を付ける（helper だけを直す test file を作らない・flip-check）。census の外で落ちる歯が write-set の外の file に在れば、行を止めて orchestrator へ返す。
 - 歯（接頭辞 `endgate_mark_`・行 bk・crates と docs で 0 件・2026-10-01）: e2e（`crates/scribe2-boundary/tests/e2e/pipe/spawn.rs`）で、runner が死んだ `Spawned` の便の fixture（`killed_at_spawned`・`resume_dead_runner` と同じ形）の run dir に、印を手で置く。
   - (a) 生きている process（歯が起こして後で殺す `sleep`）の pid を本文にした印を置いた便の `resume --runner` は、rc 1 で判定行 `run=<id> end-gate=alive pid=<pid>` を持ち、`SeatStopped detail=runner-dead` も `SeatSpawned` も足さず、偽 runner が起きない。
   - (b) 読めない本文の印（10 進でない字）を置いた便の `resume --runner` も、rc 1 で判定行 `run=<id> end-gate=unreadable` を持ち、event が増えず、偽 runner が起きない。
@@ -1384,14 +1406,16 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 歯（接頭辞 `end_gate_`・行 bj・crates と docs で 0 件・2026-10-01）: e2e（`crates/scribe2-boundary/tests/e2e/pipe/spawn.rs`）で、stdin と回数を file に積む偽 runner と、`src/lib.rs` の中身で赤と緑が決まる stub の契約の verify 行を使う（stub は赤い周に cmd の字に無い語を stderr に出して rc 1）。stub の script は歯の file の中で書く。
   - (a) 1 周目に赤い中身を commit し、stdin に「## 門の赤」節の在る周に直す runner の便を 1 回 spawn する。runner が 2 回起き、2 回目の stdin に節と赤い行の字と `rc=1` と stub の語が在り、1 回目の stdin には節が無い。段の記帳の列が Spawned（`base:`）・Spawned（`end-gate:red:1:1`）・Spawned（`end-gate:1`）・Implemented（detail なし）の順。2 回目の runner の木の HEAD の祖先に 1 回目の commit が在る。`end-gate.jsonl` の要約の語が red・green の順。
   - (b) 直さない runner の便は、runner が 3 回起き、門の赤の記帳が 2 件で Implemented（要約の語 exhausted）。その便の gate（偽 lens は PASS）は FAIL で、`verify.jsonl` の record の数が、同じ契約を行の値 0 の manifest で通した便と同じ。値 0 の便は runner が 1 回で、門の赤の記帳が 0 件、`end-gate.jsonl` は 1 周分の record と要約の語 exhausted を持つ。
-  - (c) 赤い行と一緒に、箱の中で死ぬ行（偽 `systemd-run` の PATH と `verify-oom.sh`）を持つ便と、遮断器の閉じる manifest（走行可能と待ちの倍率 0・待ちの上限 1 秒・gate の遮断器の歯と同じ形）で起こす赤い行を持つ便は、runner が 1 回で、門の赤の記帳が無く Implemented（要約の語 unmeasured）。
+  - (c) 赤い行と一緒に、箱の中で死ぬ行（偽 `systemd-run` の PATH と `verify-oom.sh`）を持つ便と、遮断器の閉じる manifest（走行可能と待ちの倍率 0・待ちの上限 1 秒・gate の遮断器の歯と同じ形）で起こす赤い行を持つ便は、runner が 1 回で、門の赤の記帳が無く Implemented（要約の語 unmeasured）。spawn の前に便の写しの共通 verify を読めない字に書き替えた便（共通 verify の節の歯 (b) と同じ形）も、runner が 1 回で Implemented（要約の語 unmeasured・reason が写しの file を名指す）。
   - (d) 全行が緑の便は、runner が 1 回で Implemented の detail が無く、要約の語が green で、門の record の数が gate の段の数（write-set の段 1・共通 verify の行・契約の verify の行）と同じ。
   - (e) 埋め込み manifest の `runner.end_gate_rounds` の行（e2e `crates/scribe2-boundary/tests/e2e/rules/embedded.rs`）が、値 2・kind・発効・裁定 id と裁定日・形 Int を持ち、kind は `FollowRetries` の直後。行の無い manifest で起こす赤い行を持つ便（spawn.rs）は、runner が 1 回で、要約の語が unmeasured、理由が行の id を名指す。
   - (f) 撃ち始めに git の共通 dir へ印を置き、解放の file が在るまで待つ（上限 60 秒）stub の契約の verify 行の便を子 process で spawn し、印を待つ。門の間は run dir に `end-gate.pid` が在り、その間に撃った `resume --runner` は rc 1 で判定行に `end-gate=alive` を持ち、偽 runner の回数が 1 のまま。解放の後の spawn は Implemented で、`end-gate.pid` が無い。
-  - 直す既存の歯: 埋め込み manifest の行数の pin と外形の snapshot `rules_external_form` の rows と kinds を 1 つ増やす。上の census の歯。
+  - (g) runner が turn の中で、write-set の外の file を足す commit で main を進め、自分の木をその main へ rebase してから write-set の内を commit する便（`pipe/land/follow.rs` の自分で rebase する歯と同じ形）は、runner が 1 回で、要約の語が green で、門の record の write-set の段が rc 0（門が記録済みの base で測ると main の file を外れと数えて赤になり、runner が多く起きる）。
+  - (h) `crates/scribe2-boundary/tests/e2e/pipe/land/follow.rs` で、契約表の行の起こし直しの便（`stale_rows_run` と `FIX_ROW` の形）は、runner の回数が 2 のまま、`end-gate.jsonl` の最後の要約の語が green（門が `Launch` の契約で測ると、足した設計 doc を write-set の外と数えて赤になり、runner が多く起きるか Failed に倒れる）。
+  - 直す既存の歯: 埋め込み manifest の行数の pin と外形の snapshot `rules_external_form` の rows と kinds を 1 つ増やす。上の census の歯（直し方の列のとおり）。
 - base で RED の理由:
   - 行 bk: base の resume は印を読まず、(a) と (b) で死んだ runner の pid を読んで runner を起こし直すので落ちる（機能不在）。(c) は今の向きの回帰の歯で、同じ file に base で赤い (a) と (b) を持つ。
-  - 行 bj: base（行 bk の後）は門を撃たない。(a) と (b) は runner が 1 回で落ちる。(c) と (d) は `end-gate.jsonl` が無くて落ちる。(e) は kind が無く compile されない。(f) は印が置かれず、resume が runner を起こし直すので落ちる（機能不在）。行数の pin と snapshot は、base の manifest が 1 行少ないので落ちる。
+  - 行 bj: base（行 bk の後）は門を撃たない。(a) と (b) は runner が 1 回で落ちる。(c) と (d) は `end-gate.jsonl` が無くて落ちる。(e) は kind が無く compile されない。(f) は印が置かれず、resume が runner を起こし直すので落ちる（機能不在）。(g) と (h) は `end-gate.jsonl` が無くて落ちる（機能不在）。行数の pin と snapshot は、base の manifest が 1 行少ないので落ちる。
 - SRS: 門の赤で runner を起こし直す周は SRS 0.33 の FR98 と FR6（門を経て Implemented）が定め、周の上限の値は rules 行の裁定（user 2026-09-30T22:13Z 項 end-gate・値 2）が持つ。
 - 却下（[ADR-0102](../../design-intent/decisions/ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.html) §4）:
   - **gate の verify の赤を自動で runner へ戻す**: §49 の却下と同じ（判定の段の後に戻すと、着地の列と終端の数えが動く）。門は判定の前で、runner の turn の延長として置く。
@@ -1464,7 +1488,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
      - 直前の便は、置き場の replay で同じ bead の便のうち、run id がこの便より小さい最大の 1 本（`settled` と同じたどり方）。それより前の便は見ない。
      - 節を足すのは、次の 3 つが揃う周だけ: 直前の便の段が `Gated`・その便の最後の `Gated` の detail が `verdict:FAIL` で始まる・直前の便の契約 file の字がこの便の契約 file の字と同じ。
      - 直前の便が無い・段が Gated でない（Failed・Stopped・Reviewed 等）・判定が FAIL でない・契約の字が違う（どちらかの契約 file が読めない周を含む）周は、節を足さない（今の stdin のまま）。
-  2. **節の中身**: `Launch` に任意の field を 1 つ足す。`prompt` は「## 前の便の gate の FAIL」節を、§65 の共通 verify の節の後・門の赤の節（§66）の前に足す。
+  2. **節の中身**: `Launch` に任意の field を 1 つ足す。`prompt` は「## 前の便の gate の FAIL」節を、ほかの行の touches の節（行 f）の後・門の赤の節（§66）の前に足す。
      - 1 行目は、直前の便の run id と「同じ契約の前の便は gate で次の理由で落ちた。同じ穴を作らない」の 1 文。
      - 続けて `evidence` の 1 行。改行と tab は空白に畳み、2000 字まで写す。超えた周は切った字数の 1 行を足す。
      - 続けて `findings` の件数が 0 でない語を、宣言順に `<語>:<件数>` で並べる。8 観点で閉じるので、節の合計の上限は evidence の 2000 字で決まる。`findings` の無い判定（lens を呼ばなかった FAIL）と、全部 0 の判定は `findings: なし` の 1 行にする。
@@ -1478,7 +1502,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   - **直前より前の便の FAIL も写す**: 節が伸び、古い判定は今の木に当たらない。撃ち直すたびに直前が更新されるので、直前の 1 本で足りる。
 - 限界: evidence の場所は lens の自由文で、器は形を測らない。findings の語は件数だけで、どの歯が空虚かは evidence に頼る。
 - 歯（接頭辞 `prior_fail_`・crates と docs で 0 件・2026-10-01）: e2e（`crates/scribe2-boundary/tests/e2e/pipe/spawn.rs`）で、stdin を file に写す偽 runner と、判定の行を返す偽 lens を使う。同じ bead の 2 本目の便は、1 本目の終端の後に同じ bead で受付を撃ち直して作る（release の後の受付と同じ形）。
-  - (a) 1 本目を gate の FAIL で終端させる（偽 lens の evidence に cmd と契約に無い語・findings は `teeth-nonvacuous:2` で他の 7 観点は 0）。同じ契約の 2 本目の stdin に節が在り、1 本目の run id・evidence の語・`teeth-nonvacuous:2` が在り、`contract-fit:0` が無く、節は共通 verify の節の後に在る。
+  - (a) 1 本目を gate の FAIL で終端させる（偽 lens の evidence に cmd と契約に無い語・findings は `teeth-nonvacuous:2` で他の 7 観点は 0）。同じ契約の 2 本目の stdin に節が在り、1 本目の run id・evidence の語・`teeth-nonvacuous:2` が在り、`contract-fit:0` が無く、節はほかの行の touches の節の後に在る。
   - (b) 1 本目と契約の字が違う（行の title を変えた）2 本目の stdin に節が無い。
   - (c) 1 本目が gate の FAIL、同じ契約の 2 本目が runner の rc 非 0 で Failed の後、同じ契約の 3 本目の stdin に節が無い（直前の 1 本だけを見る）。
   - (d) 1 本目の gate の FAIL の後に `verdict.json` を読めない字に書き替えた便の 2 本目の節は、`verdict.json` を名指す理由の 1 行で、evidence の語を持たない。
@@ -2150,11 +2174,11 @@ req = ["FR98", "FR6", "FR8"]
 section = "66"
 touches = ["crate::rules::RuleKind", "crate::pipe::follow::Runner", "crate::pipe::spawn::Launch"]
 depends = ["bk"]
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs", "crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate/detection.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate/confine.rs", "crates/scribe2-boundary/tests/e2e/pipe/stop.rs", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs", "crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs", "crates/scribe2-boundary/tests/e2e/pipe/land/follow.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate/detection.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate/confine.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate/promised.rs", "crates/scribe2-boundary/tests/e2e/pipe/stop.rs", "crates/scribe2-boundary/tests/e2e/pipe.rs", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail end_gate_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_is_valid_and_covers_all_kinds"]
 size = "L"
-growth = ["crates/scribe2/src/pipe/spawn.rs:190", "crates/scribe2/src/pipe/follow.rs:40", "crates/scribe2/src/pipe/gate/record.rs:25", "crates/scribe2/src/rules/mod.rs:6", "crates/scribe2/src/pipe/gate.rs:3", "crates/scribe2/src/pipe/cli/run.rs:3", "crates/scribe2/src/pipe/cli/step.rs:3", "crates/scribe2/src/pipe/ratelimit.rs:3"]
-done = "(1) 1 周目に赤い中身を commit し「## 門の赤」節の在る周に直す runner の便は、spawn の 1 回で runner が 2 回起き、2 回目の stdin に節と赤い行の字と rc=1 と stub の語が在り（1 回目には節が無い）、段の記帳の列が Spawned（base:）・Spawned（end-gate:red:1:1）・Spawned（end-gate:1）・Implemented（detail なし）の順で、2 回目の木の HEAD の祖先に 1 回目の commit が在り、end-gate.jsonl の要約の語が red・green の順〔end_gate_ の (a)〕 (2) 直さない runner の便は runner が 3 回・門の赤の記帳 2 件で Implemented（要約 exhausted）、その便の gate は FAIL で verify.jsonl の record の数が行の値 0 の manifest で通した便と同じで、値 0 の便は runner が 1 回・門の赤の記帳 0 件で、end-gate.jsonl が 1 周分の record と要約 exhausted を持つ〔(b)〕 (3) 赤い行と一緒に箱の中で死ぬ行を持つ便と、遮断器の閉じる manifest で起こす赤い行を持つ便は、runner が 1 回・門の赤の記帳 0 件で Implemented（要約 unmeasured）〔(c)〕 (4) 全行が緑の便は runner が 1 回で Implemented の detail が無く、要約 green で、門の record の数が gate の段の数と同じ〔(d)〕 (5) 埋め込み manifest の runner.end_gate_rounds の行は値 2・kind RunnerEndGateRounds・発効・裁定 id user 2026-09-30T22:13Z 項 end-gate・裁定日 2026-09-30・形 Int で kind は FollowRetries の直後、行の無い manifest で起こす赤い行を持つ便は runner が 1 回で要約 unmeasured の理由が行の id を名指す〔(e)〕 (6) 門の間は run dir に end-gate.pid が在り、その間の resume --runner は rc 1 で end-gate=alive を持ち runner が 1 回のまま、門を抜けた spawn は Implemented で end-gate.pid が無い〔(f)〕 (7) 埋め込み manifest の行数の pin と外形の snapshot rules_external_form の rows と kinds が base より 1 つ多い〔rules_embedded_manifest_is_valid_and_covers_all_kinds・rules_external_form〕"
+growth = ["crates/scribe2/src/pipe/spawn.rs:205", "crates/scribe2/src/pipe/follow.rs:55", "crates/scribe2/src/pipe/gate/record.rs:25", "crates/scribe2/src/rules/mod.rs:6", "crates/scribe2/src/pipe/gate.rs:3", "crates/scribe2/src/pipe/cli/run.rs:3", "crates/scribe2/src/pipe/cli/step.rs:3", "crates/scribe2/src/pipe/ratelimit.rs:3"]
+done = "(1) 1 周目に赤い中身を commit し「## 門の赤」節の在る周に直す runner の便は、spawn の 1 回で runner が 2 回起き、2 回目の stdin に節と赤い行の字と rc=1 と stub の語が在り（1 回目には節が無い）、段の記帳の列が Spawned（base:）・Spawned（end-gate:red:1:1）・Spawned（end-gate:1）・Implemented（detail なし）の順で、2 回目の木の HEAD の祖先に 1 回目の commit が在り、end-gate.jsonl の要約の語が red・green の順〔end_gate_ の (a)〕 (2) 直さない runner の便は runner が 3 回・門の赤の記帳 2 件で Implemented（要約 exhausted）、その便の gate は FAIL で verify.jsonl の record の数が行の値 0 の manifest で通した便と同じで、値 0 の便は runner が 1 回・門の赤の記帳 0 件で、end-gate.jsonl が 1 周分の record と要約 exhausted を持つ〔(b)〕 (3) 赤い行と一緒に箱の中で死ぬ行を持つ便と、遮断器の閉じる manifest で起こす赤い行を持つ便と、spawn の前に便の写しの共通 verify を読めない字に書き替えた便は、runner が 1 回・門の赤の記帳 0 件で Implemented（要約 unmeasured・写しの便の reason は写しの file を名指す）〔(c)〕 (4) 全行が緑の便は runner が 1 回で Implemented の detail が無く、要約 green で、門の record の数が gate の段の数と同じ〔(d)〕 (5) 埋め込み manifest の runner.end_gate_rounds の行は値 2・kind RunnerEndGateRounds・発効・裁定 id user 2026-09-30T22:13Z 項 end-gate・裁定日 2026-09-30・形 Int で kind は FollowRetries の直後、行の無い manifest で起こす赤い行を持つ便は runner が 1 回で要約 unmeasured の理由が行の id を名指す〔(e)〕 (6) 門の間は run dir に end-gate.pid が在り、その間の resume --runner は rc 1 で end-gate=alive を持ち runner が 1 回のまま、門を抜けた spawn は Implemented で end-gate.pid が無い〔(f)〕 (7) runner が turn の中で write-set の外の file を足す commit で main を進め、自分の木をその main へ rebase してから write-set の内を commit する便は、runner が 1 回で要約 green、門の record の write-set の段が rc 0〔(g)〕 (8) land の契約表の行の起こし直しの便は、runner の回数が 2 のまま end-gate.jsonl の最後の要約が green〔(h)〕 (9) 埋め込み manifest の行数の pin と外形の snapshot rules_external_form の rows と kinds が base より 1 つ多い〔rules_embedded_manifest_is_valid_and_covers_all_kinds・rules_external_form〕"
 
 [[contract]]
 id = "bk"
@@ -2170,7 +2194,7 @@ done = "(1) runner が死んだ Spawned の便の run dir に、生きている 
 
 [[contract]]
 id = "bl"
-title = "前の便の gate の FAIL を runner に写す — 同じ bead の直前の便が gate の FAIL で終端し契約 file の字が同じ便の runner の stdin に、共通 verify の節の後で「## 前の便の gate の FAIL」節を足し、直前の便の verdict.json の evidence の 1 行（2000 字まで）と 0 でない findings の語を分類せずに写し、読めない判定は理由の 1 行にする（§68）"
+title = "前の便の gate の FAIL を runner に写す — 同じ bead の直前の便が gate の FAIL で終端し契約 file の字が同じ便の runner の stdin に、ほかの行の touches の節の後で「## 前の便の gate の FAIL」節を足し、直前の便の verdict.json の evidence の 1 行（2000 字まで）と 0 でない findings の語を分類せずに写し、読めない判定は理由の 1 行にする（§68）"
 req = ["FR4", "FR8"]
 section = "68"
 touches = ["crate::pipe::spawn::Launch"]
@@ -2179,5 +2203,5 @@ write-set = ["crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/follow
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail prior_fail_"]
 size = "M"
 growth = ["crates/scribe2/src/pipe/follow.rs:60", "crates/scribe2/src/pipe/spawn.rs:30"]
-done = "(1) 1 本目が gate の FAIL（evidence に固有の語・findings が teeth-nonvacuous:2 で他は 0）で終端した後、同じ契約の 2 本目の runner の stdin に「## 前の便の gate の FAIL」節が共通 verify の節の後に在り、1 本目の run id・evidence の語・teeth-nonvacuous:2 を持ち、contract-fit:0 を持たない〔prior_fail_ の (a)〕 (2) 1 本目と契約の字が違う 2 本目の stdin に節が無い〔(b)〕 (3) 1 本目が gate の FAIL・2 本目が runner の rc 非 0 で Failed の後の、同じ契約の 3 本目の stdin に節が無い〔(c)〕 (4) 1 本目の verdict.json を読めない字に書き替えた後の 2 本目の節は verdict.json を名指す理由の 1 行で、evidence の語を持たない〔(d)〕 (5) evidence が 3000 字の判定の後の 2 本目の節の evidence は 2000 字で切れて切った字数の 1 行を持ち、findings の無い判定の後の 2 本目の節は findings: なし の 1 行を持つ〔(e)〕"
+done = "(1) 1 本目が gate の FAIL（evidence に固有の語・findings が teeth-nonvacuous:2 で他は 0）で終端した後、同じ契約の 2 本目の runner の stdin に「## 前の便の gate の FAIL」節がほかの行の touches の節の後に在り、1 本目の run id・evidence の語・teeth-nonvacuous:2 を持ち、contract-fit:0 を持たない〔prior_fail_ の (a)〕 (2) 1 本目と契約の字が違う 2 本目の stdin に節が無い〔(b)〕 (3) 1 本目が gate の FAIL・2 本目が runner の rc 非 0 で Failed の後の、同じ契約の 3 本目の stdin に節が無い〔(c)〕 (4) 1 本目の verdict.json を読めない字に書き替えた後の 2 本目の節は verdict.json を名指す理由の 1 行で、evidence の語を持たない〔(d)〕 (5) evidence が 3000 字の判定の後の 2 本目の節の evidence は 2000 字で切れて切った字数の 1 行を持ち、findings の無い判定の後の 2 本目の節は findings: なし の 1 行を持つ〔(e)〕"
 <!-- contracts:end -->
