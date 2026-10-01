@@ -190,7 +190,7 @@ lifecycle.stale
 - `links` の 8 key:
   - `source`＝発端・`questions`＝子の問い・`rulings`＝問いに結んだ裁定 id・`promoted`＝昇格した契約・`runs`＝便・`commits`＝着地の commit
   - `destination`＝仕分け済みの発話の行き先（`[{"to":"memo"|"ruling"|"chat","id":"<id>"|null}]`・字の形から推さない）
-  - `on`＝契約の待ちの理由が dependency か overlap のときの相手の bead id
+  - `on`＝契約の待ちの理由が dependency・overlap・reserved のときの相手の bead id（reserved は行を予約した bead・§18）
   - 結びの先が部品として載っているとは限らない（窓の外・裁定 id）。読み手は無いことを誤りと読まない。
 - 種類ごとの欄:
 
@@ -862,4 +862,29 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail unreflected_questi
 size = "M"
 growth = ["crates/scribe2/src/fleet/lifecycle.rs:15", "crates/scribe2/src/fleet/lifecycle_mark.rs:190", "crates/scribe2/src/pipe/dispatch/unreflected.rs:30", "crates/scribe2/src/seat/ledger.rs:15", "crates/scribe2/src/hook/graph_guard.rs:1", "crates/scribe2/src/ledger/form.rs:1", "crates/scribe2/src/pipe/dispatch/precheck.rs:1", "crates/scribe2-boundary/tests/e2e/fleet.rs:150"]
 done = "(1) 全部の書き直しが、未反映の裁定の置き場（state dir の pipe/unreflected）の裁定 id の列を、閉じた台帳の問い（label の問い）のうち notes の裁定の行にその id を持つ問いの id の列へ unreflected.rs に足す読み 1 本で引いて行 a1 の導出に渡し、その問いが ruling-unreflected・手番 seat で出る（窓より古く閉じた問いも載る）。置き場に無い id の問い・notes の散文にだけ id を書く問い・開いた問いは渡さず、置き場の無い周は空の列で、契機 (a) は同じ周の fire が書いた置き場を、(d)(e) は前の起こす側の周の置き場を読む (2) 置き場が在って読めない周は書き直しを止めず問いの列を空で渡し、unmeasured に question と unreflected-unreadable を 1 件名指し、置き場が読める周は名指さない (3) 開いた memo のうち event log の最後の判定の行（本体が Case の判定・bead がその memo）の語が promote か close で、台帳の updated_at がその行の ts より後でない memo の id の列を行 a1 の導出に渡し、その memo が memo-actionable・理由 verdict・手番 seat で出る。最後の判定が keep か unparsed の memo・判定の後に台帳が書いた memo・閉じた memo・判定の行の無い memo は渡さず、updated_at の無い memo は渡す (4) Issue が updated_at を字の Option で持ち、issues_of が読み、無い要素は None で、組みの 4 か所（issues_of・graph_guard.rs・form.rs と precheck.rs の歯の fixture・便の始めに数え直す）を直す 歯: unreflected_questions_（lifecycle_mark.rs の test 区間・無い置き場の空・読めない置き場・未反映の id の行を持つ閉じた問いだけの列を全体の等しさで比べ、写った id の問い・散文だけの問い・開いた問い・問いの label の無い bead を外す）・verdict_unhandled_（同じ test 区間・promote と close の在りと keep と unparsed の無し・判定の順の 2 通り・updated_at が ts と同じ memo の在りと 1 秒後の無しの対・updated_at の無い memo の在り・閉じた memo と memo でない bead の無し）・issue_updated_at_（seat/ledger.rs の test 区間・在る bead と無い bead の対とほかの欄の不変）が base で 0 本（rc 4・機能不在）、fleet_lifecycle_feeds_（e2e 2 本: 契機 (e) を先に撃つと置き場が無く document の問いの部品は無く promote の memo が verdict・pipe dispatch の後に document の問いが窓より古くても ruling-unreflected で operation の問いは question-closed・keep と処置の後の memo は memo-waiting・出力を消した後の契機 (e) が前の置き場から同じ局面を出す／読めない置き場で出力を消した後の契機 (e) が unmeasured に unreflected-unreadable を持ち、次の dispatch の後に名指しが消えて ruling-unreflected に戻る）は base の書き手が 2 つの列を空で渡すので RED（機能不在）"
+
+[[contract]]
+id = "h"
+title = "局面の出力の contract-queued の部品で、列の理由が reserved のとき links.on に行を予約した bead を載せる（§18）"
+req = ["FR90"]
+section = "18"
+write-set = ["crates/scribe2/src/fleet/phase.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_event_links_on_"]
+size = "S"
+growth = ["crates/scribe2/src/fleet/phase.rs:4"]
+done = "(1) 列の理由が reserved の契約の部品の links.on は、理由の値（<予約した bead>/<file 数>・読めない周は末尾に /unset）の最初の / より前の bead 1 つで、値に / が無い周も値の全体を 1 つ載せる (2) dependency と overlap の links.on は今のまま 歯: phase.rs の既存の mod tests に置く lib の歯（接頭辞 phase_event_links_on_）の (a)〔(1)〕値 b-6/2 の reserved の契約の links.on が b-6 だけ・値 b-6/2/unset の契約も b-6 だけ・値 b-6 の契約も b-6 だけ、(2) は既存の歯 phase_event_links_on_follows_dependency_and_overlap_partner が本文を変えずに緑 base は reserved の links.on が空なので (a) が RED"
 <!-- contracts:end -->
+
+## 18. 列の理由 reserved の links.on に行を予約した bead を載せる（契約表の行 h）
+
+やさしく言うと: 落ちた便の bead が write-set を先に取っている（予約している）ので待つ契約は、局面の出力に「reserved で待つ」とだけ出て、誰が取っているかが出ない。依存や重なりで待つ契約と同じく、相手の bead を links.on に載せる。
+
+- 何が起きているか（main 04eec3cf・verified）:
+  - 局面の導出の `links_on`（`crates/scribe2/src/fleet/phase.rs`）は、列の理由が dependency なら値の bead の列、overlap なら相手の便の bead を links.on に載せる。そのほかの理由は空。
+  - 列の理由 reserved の値は `<予約した bead>/<file 数>` で、読めない周は末尾に `/unset` が付く（`crates/scribe2/src/pipe/dispatch/reserve.rs` の `Held` の値）。dispatch ls の行（reason=reserved:<値>）には相手が出るが、局面の出力には出ない。
+  - 局面の出力を読む面（隣の project の板）が、待つ相手を名指すのに links.on を読む。
+- 約束（番号は done と 1:1）:
+  1. 列の理由が reserved の契約の部品の links.on は、値の最初の / より前の bead 1 つ。値に / が無い周は値の全体を 1 つ載せる（値を捨てない）。
+  2. dependency と overlap の links.on は今のまま。
+- 歯: phase.rs の既存の mod tests に lib の歯を 1 本置く（接頭辞 phase_event_links_on_）。(a) 値 b-6/2・b-6/2/unset・b-6 の reserved の 3 契約の links.on が、どれも b-6 だけ。既存の歯 phase_event_links_on_follows_dependency_and_overlap_partner は本文を変えずに緑。
+- 触らない: 列の理由の語と値の字（dispatch の `WaitReason`）・手番の表（§3）・links の 8 key の名・dispatch ls の行。
