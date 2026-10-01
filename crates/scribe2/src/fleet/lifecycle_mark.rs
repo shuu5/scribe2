@@ -22,6 +22,8 @@ use crate::hook::vessel::digest::fnv1a_64;
 use crate::ledger::form::{is_memo, is_question, pointer_text};
 use crate::ledger::phase_main::{Commit, Row};
 use crate::pipe::declaration::requirements_at_sha;
+use crate::pipe::dispatch::memo::Word;
+use crate::pipe::dispatch::unreflected::{asked, Asked, Question};
 use crate::pipe::land::{contract_key, source_key, RUN_TRAILER, TERMINAL_TOKENS};
 use crate::pipe::table::{read_table as table_rows, requirement_ids, DESIGN_DIR};
 use crate::pipe::{git_bytes, live_driver};
@@ -798,13 +800,46 @@ pub fn secs_of(ts: &str) -> Option<u64> {
     epoch_of(ts).or_else(|| super::epoch_ms_of(ts).map(|ms| ms / 1_000))
 }
 
+/// `unmeasured` の理由: 未反映の裁定の置き場が在って読めない（部品の種類は問い）。
+pub const UNMEASURED_UNREFLECTED: &str = "unreflected-unreadable";
+
+/// 閉じて未反映の裁定を持つ問いの bead id（置き場・台帳の接頭辞・台帳の全件から引く・置き場の無い周は空・読めない周は `Unreadable`）。
+pub(crate) fn unreflected_questions(state_dir: &Path, prefix: Option<&str>, issues: &[Issue]) -> Asked {
+    let closed: Vec<Question<'_>> =
+        issues.iter().filter(|issue| issue.status == "closed" && is_question(issue)).map(|issue| Question { id: &issue.id, notes: &issue.notes }).collect();
+    asked(state_dir, prefix, &closed)
+}
+
+/// 処置の無い判定を持つ memo の bead id（台帳の順）: 開いた memo のうち、event log の最後の判定の語が promote か close で、
+/// 台帳の updated_at がその判定の ts より後でないもの（updated_at か ts が読めない memo は渡す）。
+pub(crate) fn verdict_unhandled(issues: &[Issue], events: &[Event]) -> Vec<String> {
+    let mut last: BTreeMap<&str, (&str, &str)> = BTreeMap::new();
+    for event in events.iter().filter(|event| matches!(event.case, Some(Case::Judged))) {
+        last.insert(&event.bead, (event.detail.as_deref().unwrap_or_default(), &event.ts));
+    }
+    let handled = |issue: &Issue, ts: &str| match (issue.updated_at.as_deref().and_then(secs_of), secs_of(ts)) {
+        (Some(updated), Some(judged)) => updated > judged,
+        _ => false,
+    };
+    issues
+        .iter()
+        .filter(|issue| issue.status != "closed" && is_memo(issue))
+        .filter(|issue| last.get(issue.id.as_str()).is_some_and(|(word, ts)| [Word::Promote, Word::Close].iter().any(|actionable| actionable.as_str() == *word) && !handled(issue, ts)))
+        .map(|issue| issue.id.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         add_mark, events_order, ledger_is_newer, ledger_order, main_is_descendant, main_order, read_events, read_ledger, read_main, read_marks,
-        read_stale, settle, Added, Events, Kind, Ledger, Mark, Settled, Stale, Value, JSON_FILE, MAIN_REF, STALE_FILE,
+        read_stale, settle, unreflected_questions, verdict_unhandled, Added, Events, Kind, Ledger, Mark, Settled, Stale, Value, JSON_FILE, MAIN_REF,
+        STALE_FILE,
     };
     use crate::fleet::store::LockPolicy;
+    use crate::fleet::Event;
+    use crate::pipe::dispatch::unreflected::Asked;
+    use crate::seat::ledger::{issues_of, Issue};
     use std::cmp::Ordering;
     use std::path::{Path, PathBuf};
 
@@ -1093,5 +1128,119 @@ mod tests {
         put(&lock, "4194300 1\n");
         assert_eq!(add_mark(&state, &mark, policy), Added::Added, "死んだ所有者の lock は外して取る");
         assert!(!lock.exists(), "取った lock は外される");
+    }
+
+    /// bd の JSON の字から台帳を読む（歯の fixture は `Issue` を literal で組まない）。
+    fn ledger_of_text(text: &str) -> Vec<Issue> {
+        issues_of(text).unwrap_or_else(|| panic!("台帳を読める: {text}"))
+    }
+
+    /// 台帳の bead 1 本の JSON（`label` は空なら無し・`updated` は無ければ欄ごと無い）。
+    fn bead_json(id: &str, status: &str, label: &str, notes: &str, updated: Option<&str>) -> String {
+        let labels = if label.is_empty() { String::new() } else { format!(",\"labels\":[\"{label}\"]") };
+        let updated = updated.map(|at| format!(",\"updated_at\":\"{at}\"")).unwrap_or_default();
+        format!("{{\"id\":\"{id}\",\"status\":\"{status}\"{labels},\"notes\":\"{notes}\"{updated}}}")
+    }
+
+    /// 台帳の JSON の配列。
+    fn ledger_json(beads: &[String]) -> Vec<Issue> {
+        ledger_of_text(&format!("[{}]", beads.join(",")))
+    }
+
+    /// 裁定の行 1 本（notes の字・行の区切りは `\n`）。
+    fn ruling(id: &str) -> String {
+        format!("{id} | s2-q | 2026-09-30T00:00Z | chat | 逐語")
+    }
+
+    /// 未反映の置き場の file（`unreflected` の id だけ・母集団は `population`）。
+    fn put_store(state: &Path, population: &[&str], unreflected: &[&str]) {
+        let list = |ids: &[&str]| format!("[{}]", ids.iter().map(|id| format!("\"{id}\"")).collect::<Vec<_>>().join(","));
+        let body = format!("{{\"schema\":1,\"sha\":\"{SHA_A}\",\"population\":{},\"unreflected\":{},\"table\":{{}}}}\n", list(population), list(unreflected));
+        put(&state.join("pipe").join("unreflected"), &body);
+    }
+
+    /// 閉じた問いと散文だけの問いと開いた問いと label の無い bead の台帳で、置き場の無い周は空・読めない周は `Unreadable`・
+    /// 読める周は未反映の id の行を持つ閉じた問いだけが入力の順で載る。
+    #[test]
+    fn unreflected_questions_pick_only_closed_questions_with_an_unreflected_ruling_row() {
+        let question = "intake:question";
+        let issues = ledger_json(&[
+            bead_json("s2-open", "closed", question, &format!("{}\\n{}", ruling("batch:old"), ruling("batch:new")), None),
+            bead_json("s2-written", "closed", question, &ruling("batch:old"), None),
+            bead_json("s2-prose", "closed", question, "batch:new を後で写す", None),
+            bead_json("s2-live", "open", question, &ruling("batch:new"), None),
+            bead_json("s2-plain", "closed", "", &ruling("batch:new"), None),
+            bead_json("s2-second", "closed", question, &ruling("batch:new"), None),
+        ]);
+        let state = scratch("unreflected-questions");
+        assert_eq!(unreflected_questions(&state, Some("s2"), &issues), Asked::Ids(Vec::new()), "置き場の無い周は空");
+        put(&state.join("pipe").join("unreflected"), "これは JSON でない");
+        assert_eq!(unreflected_questions(&state, Some("s2"), &issues), Asked::Unreadable, "読めない置き場");
+        put_store(&state, &["batch:new", "batch:old"], &["batch:new"]);
+        assert_eq!(
+            unreflected_questions(&state, Some("s2"), &issues),
+            Asked::Ids(vec!["s2-open".to_owned(), "s2-second".to_owned()]),
+            "写った id の問い・散文だけの問い・開いた問い・label の無い bead は載らない"
+        );
+        put_store(&state, &["batch:old"], &[]);
+        assert_eq!(unreflected_questions(&state, Some("s2"), &issues), Asked::Ids(Vec::new()), "未反映が 0 件の置き場は空");
+    }
+
+    /// event の 1 行（MemoJudged・bead は memo の id・detail は判定の語）。
+    fn judged_line(ts: &str, memo: &str, word: &str) -> Event {
+        let line = format!("{{\"schema\":1,\"ts\":\"{ts}\",\"kind\":\"MemoJudged\",\"bead\":\"{memo}\",\"detail\":\"{word}\",\"host\":\"h\",\"actor\":\"machine\"}}");
+        Event::from_line(&line).unwrap_or_else(|why| panic!("{line}: {why}"))
+    }
+
+    /// 最後の判定が promote か close の開いた memo だけが載り、keep と unparsed と判定の行の無い memo と閉じた memo と memo でない bead は載らない。
+    #[test]
+    fn verdict_unhandled_takes_the_last_word_of_an_open_memo() {
+        let memo = "intake:memo";
+        let issues = ledger_json(&[
+            bead_json("m-promote", "open", memo, "", None),
+            bead_json("m-close", "open", memo, "", None),
+            bead_json("m-keep", "open", memo, "", None),
+            bead_json("m-unparsed", "open", memo, "", None),
+            bead_json("m-none", "open", memo, "", None),
+            bead_json("m-closed", "closed", memo, "", None),
+            bead_json("c-plain", "open", "", "", None),
+        ]);
+        let ts = "2026-10-01T00:00:00Z";
+        let events: Vec<Event> = [("m-promote", "promote"), ("m-close", "close"), ("m-keep", "keep"), ("m-unparsed", "unparsed"), ("m-closed", "promote"), ("c-plain", "promote")]
+            .iter()
+            .map(|(bead, word)| judged_line(ts, bead, word))
+            .collect();
+        assert_eq!(verdict_unhandled(&issues, &events), ["m-promote".to_owned(), "m-close".to_owned()]);
+    }
+
+    /// 同じ memo の判定は最後の行が勝つ（promote → keep は無く、keep → promote は在る）。
+    #[test]
+    fn verdict_unhandled_follows_the_order_of_the_judgements() {
+        let issues = ledger_json(&[bead_json("m-a", "open", "intake:memo", "", None), bead_json("m-b", "open", "intake:memo", "", None)]);
+        let ts = "2026-10-01T00:00:00Z";
+        let events = [
+            judged_line(ts, "m-a", "promote"),
+            judged_line(ts, "m-b", "keep"),
+            judged_line(ts, "m-a", "keep"),
+            judged_line(ts, "m-b", "promote"),
+        ];
+        assert_eq!(verdict_unhandled(&issues, &events), ["m-b".to_owned()], "後の行が勝つ");
+    }
+
+    /// updated_at が判定の ts と同じ memo は載り、1 秒後の memo は載らない（対）。updated_at の無い memo と読めない memo は載る。
+    #[test]
+    fn verdict_unhandled_drops_a_memo_written_after_the_judgement() {
+        let memo = "intake:memo";
+        let issues = ledger_json(&[
+            bead_json("m-same", "open", memo, "", Some("2026-10-01T00:00:00Z")),
+            bead_json("m-after", "open", memo, "", Some("2026-10-01T00:00:01Z")),
+            bead_json("m-before", "open", memo, "", Some("2026-09-30T23:59:59Z")),
+            bead_json("m-absent", "open", memo, "", None),
+            bead_json("m-garbled", "open", memo, "", Some("昨日")),
+        ]);
+        let ts = "2026-10-01T00:00:00Z";
+        let events: Vec<Event> = ["m-same", "m-after", "m-before", "m-absent", "m-garbled"].iter().map(|bead| judged_line(ts, bead, "close")).collect();
+        let expected = ["m-same", "m-before", "m-absent", "m-garbled"].map(str::to_owned);
+        assert_eq!(verdict_unhandled(&issues, &events), expected);
     }
 }

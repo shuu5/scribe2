@@ -354,7 +354,7 @@ mod tests {
     fn open_task(id: &str, labels: &[&str], acceptance: &str) -> Issue {
         let (labels, kind) = (labels.iter().map(|label| (*label).to_owned()).collect(), "task".to_owned());
         let (id, status, acceptance) = (id.to_owned(), "open".to_owned(), acceptance.to_owned());
-        Issue { id, status, priority: None, labels, acceptance, deps: Vec::new(), kind, description: String::new(), notes: String::new(), close_reason: String::new(), created_at: None, closed_at: None, effect: String::new() }
+        Issue { id, status, priority: None, labels, acceptance, deps: Vec::new(), kind, description: String::new(), notes: String::new(), close_reason: String::new(), created_at: None, closed_at: None, updated_at: None, effect: String::new() }
     }
 
     /// 台帳の問い（label intake:question・型 task）は 4 象限の母集団から外れ、どの欄にも名指されない（§13）。

@@ -91,6 +91,8 @@ pub struct Issue {
     pub created_at: Option<String>,
     /// 閉じた時刻の字（`closed_at`・閉じていない bead は `None`）。
     pub closed_at: Option<String>,
+    /// 最後に書かれた時刻の字（`updated_at`・無ければ `None`・処置の無い判定の memo が判定の後の書きを測る・設計 case-lifecycle.md §17）。
+    pub updated_at: Option<String>,
     /// metadata の `effect` の字（無ければ空・閉じた問いの裁定が文書へ写すべきかを未反映の数えが読む）。
     pub effect: String,
 }
@@ -131,6 +133,7 @@ pub fn issues_of(text: &str) -> Option<Vec<Issue>> {
                 close_reason: text_of("close_reason").unwrap_or_default(),
                 created_at: text_of("created_at"),
                 closed_at: text_of("closed_at"),
+                updated_at: text_of("updated_at"),
                 effect: node.get("metadata").and_then(|meta| meta.get("effect")).and_then(Tree::as_str).map(str::to_owned).unwrap_or_default(),
             })
         })
@@ -329,5 +332,22 @@ mod tests {
         let [issue] = issues.as_slice() else { panic!("1 件") };
         assert_eq!((issue.created_at.as_deref(), issue.closed_at.as_deref()), (None, None));
         assert_eq!((issue.id.as_str(), issue.status.as_str(), issue.priority, issue.labels.as_slice(), issue.close_reason.as_str()), ("s2-a", "open", Some(1), ["x".to_owned()].as_slice(), "r"));
+    }
+
+    /// `updated_at` を字のまま読み、要素の無い bead は `None`で、同じ bead の id・status・created_at・closed_at の読みは変わらない。
+    #[test]
+    fn issue_updated_at_reads_the_text_and_leaves_the_other_fields() {
+        let text = r#"[{"id":"s2-a","status":"closed","created_at":"2026-09-29T01:02:03Z","closed_at":"2026-09-30T04:05:06Z","updated_at":"2026-10-01T07:08:09Z"},{"id":"s2-b","status":"open","created_at":"2026-09-30T00:00:00Z"}]"#;
+        let read: Option<Vec<_>> = super::issues_of(text).map(|issues| {
+            issues.into_iter().map(|issue| (issue.id, issue.status, issue.created_at, issue.closed_at, issue.updated_at)).collect()
+        });
+        let some = |text: &str| Some(text.to_owned());
+        assert_eq!(
+            read,
+            Some(vec![
+                ("s2-a".to_owned(), "closed".to_owned(), some("2026-09-29T01:02:03Z"), some("2026-09-30T04:05:06Z"), some("2026-10-01T07:08:09Z")),
+                ("s2-b".to_owned(), "open".to_owned(), some("2026-09-30T00:00:00Z"), None, None),
+            ])
+        );
     }
 }

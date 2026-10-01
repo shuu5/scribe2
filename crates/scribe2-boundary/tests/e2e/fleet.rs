@@ -3590,3 +3590,126 @@ fn fleet_lifecycle_unreadable_ledger_writes_nothing_and_marks_the_reason() {
     assert!(life.shown().contains("stale=unreadable"), "頭の行の stale に出る");
     super::pipe::clean(&[&life.repo, &life.state]);
 }
+
+// ───── 局面の導出へ渡す 2 つの列（設計 docs/design/case-lifecycle.md §17・接頭辞 `fleet_lifecycle_feeds_`） ─────
+
+/// 部品 1 つの (局面, 手番, 理由)。
+type Shape = (String, String, Option<String>);
+
+/// 閉じた問い（metadata の effect と裁定の行の id・閉じた時刻を持つ）。
+fn feeds_question(id: &str, effect: &str, ruling: &str, closed: &str) -> String {
+    format!(
+        "{{\"id\":\"{id}\",\"status\":\"closed\",\"priority\":2,\"labels\":[\"intake:question\"],\"acceptance_criteria\":\"\",\"dependencies\":[],\"notes\":\"{ruling} | {id} | 2026-01-01T00:00Z | chat | 逐語\",\"created_at\":\"2025-12-31T00:00:00Z\",\"closed_at\":\"{closed}\",\"metadata\":{{\"effect\":\"{effect}\"}}}}"
+    )
+}
+
+/// 満ちない期日の引き金の行を持つ開いた memo（`updated` は台帳の updated_at）。
+fn feeds_memo(id: &str, updated: &str) -> String {
+    format!(
+        "{{\"id\":\"{id}\",\"status\":\"open\",\"priority\":2,\"labels\":[\"intake:memo\"],\"acceptance_criteria\":\"\",\"dependencies\":[],\"description\":\"### 出所\\n### 観測\\n### 候補\\n### 昇格条件\\n- 引き金: 期日 2099-01-01T00:00Z\\n\",\"created_at\":\"2026-09-01T00:00:00Z\",\"updated_at\":\"{updated}\"}}"
+    )
+}
+
+/// event log の MemoJudged の 1 行（bead は memo の id・detail は判定の語）。
+fn feeds_judged(memo: &str, word: &str) -> String {
+    format!("{{\"schema\":1,\"ts\":\"2026-10-01T00:00:00Z\",\"kind\":\"MemoJudged\",\"bead\":\"{memo}\",\"detail\":\"{word}\",\"host\":\"h\",\"actor\":\"machine\"}}")
+}
+
+impl Life {
+    /// 出力の木（無いか読めない周は `None`）。
+    fn tree(&self) -> Option<Tree> {
+        parse(&fs::read_to_string(self.json_path()).ok()?).ok()
+    }
+
+    /// 出力の部品 1 つの (局面, 手番, 理由)（部品が無ければ `None`）。
+    fn shape(&self, id: &str) -> Option<Shape> {
+        let tree = self.tree()?;
+        let part = tree.get("parts")?.as_array()?.iter().find(|part| part.get("id").and_then(Tree::as_str) == Some(id))?;
+        let word = |key: &str| part.get(key).and_then(Tree::as_str).map(str::to_owned);
+        Some((word("phase")?, word("turn")?, word("reason")))
+    }
+
+    /// 出力の `unmeasured` の (部品の種類, 理由)。
+    fn named(&self) -> Vec<(String, String)> {
+        let tree = self.tree();
+        let items = tree.as_ref().and_then(|found| found.get("unmeasured")).and_then(Tree::as_array).unwrap_or_default();
+        let word = |item: &Tree, key: &str| item.get(key).and_then(Tree::as_str).unwrap_or_default().to_owned();
+        items.iter().map(|item| (word(item, "part"), word(item, "reason"))).collect()
+    }
+}
+
+/// 2 つの列を渡す: 置き場が無い周（契機 (e)）は問いの部品が無く promote の memo が verdict、`pipe dispatch`（契機 (a)）の後は窓より古い
+/// document の問いが ruling-unreflected・operation の問いは question-closed・keep と処置の後の memo は memo-waiting、出力を消した後の (e) は
+/// 前の周の置き場から同じ局面を出す。
+#[test]
+fn fleet_lifecycle_feeds_the_unreflected_question_and_the_unhandled_verdict() {
+    let life = Life::new();
+    let (old, recent) = ("2026-01-01T00:00:00Z", format_utc(SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs()).saturating_sub(3_600)));
+    let waiting = fs::read_to_string(life.dir.join("ledger")).expect("台帳を読める");
+    let base = waiting.trim_end().trim_end_matches(']');
+    let added = [
+        feeds_question("toy-qd", "document", "batch:doc1", old),
+        feeds_question("toy-qo", "operation", "batch:op1", &recent),
+        feeds_memo("toy-m1", "2026-09-30T00:00:00Z"),
+        feeds_memo("toy-m2", "2026-09-30T00:00:00Z"),
+        feeds_memo("toy-m3", "2099-01-01T00:00:00Z"),
+    ];
+    life.put("ledger", &format!("{base},{}]\n", added.join(",")));
+    write_raw(&life.state, &[&feeds_judged("toy-m1", "promote"), &feeds_judged("toy-m2", "keep"), &feeds_judged("toy-m3", "promote")]);
+    let seat = |phase: &str, reason: Option<&str>| Some((phase.to_owned(), "seat".to_owned(), reason.map(str::to_owned)));
+    let nobody = |phase: &str, reason: Option<&str>| Some((phase.to_owned(), "none".to_owned(), reason.map(str::to_owned)));
+
+    let first = life.write(&[]);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "契機 (e) は rc 0: {}", super::pipe::stderr_of(&first));
+    assert_eq!(life.shape("toy-qd"), None, "置き場が無いので窓より古い問いの部品は無い");
+    assert_eq!(life.shape("toy-m1"), seat("memo-actionable", Some("verdict")), "最後の判定が promote の memo");
+    assert_eq!(life.named(), Vec::<(String, String)>::new(), "置き場の無い周は名指さない");
+
+    let round = life.dispatch(&[]);
+    assert_eq!(round.status.code(), Some(i32::from(RC_OK)), "dispatch は rc 0: {}", super::pipe::stderr_of(&round));
+    assert!(life.state.join("pipe").join("unreflected").exists(), "起こす側の周が置き場を書く");
+    let after = [
+        ("toy-qd", seat("ruling-unreflected", None)),
+        ("toy-qo", nobody("question-closed", None)),
+        ("toy-m1", seat("memo-actionable", Some("verdict"))),
+        ("toy-m2", nobody("memo-waiting", None)),
+        ("toy-m3", nobody("memo-waiting", None)),
+    ];
+    for (id, want) in &after {
+        assert_eq!(&life.shape(id), want, "(a) の周の {id}");
+    }
+    fs::remove_file(life.json_path()).expect("出力を消せる");
+    assert_eq!(life.write(&[]).status.code(), Some(i32::from(RC_OK)));
+    for (id, want) in &after {
+        assert_eq!(&life.shape(id), want, "出力を消した後の (e) の {id}");
+    }
+    super::pipe::clean(&[&life.repo, &life.state]);
+}
+
+/// 置き場が読めない周は rc 0 で書き、`unmeasured` に question と unreflected-unreadable を持ち問いの部品は無い。次の `pipe dispatch` の後は
+/// 名指しが消えて ruling-unreflected に戻る（同じ歯の中の対）。
+#[test]
+fn fleet_lifecycle_feeds_name_an_unreadable_store_and_recover_after_the_next_dispatch() {
+    let life = Life::new();
+    let waiting = fs::read_to_string(life.dir.join("ledger")).expect("台帳を読める");
+    let base = waiting.trim_end().trim_end_matches(']');
+    life.put("ledger", &format!("{base},{}]\n", feeds_question("toy-qd", "document", "batch:doc1", "2026-01-01T00:00:00Z")));
+    let round = life.dispatch(&[]);
+    assert_eq!(round.status.code(), Some(i32::from(RC_OK)), "dispatch は rc 0: {}", super::pipe::stderr_of(&round));
+    let unreflected = ("ruling-unreflected".to_owned(), "seat".to_owned(), None);
+    assert_eq!(life.shape("toy-qd"), Some(unreflected.clone()), "読める置き場の周");
+    assert_eq!(life.named(), Vec::<(String, String)>::new(), "読める置き場は名指さない");
+
+    fs::write(life.state.join("pipe").join("unreflected"), "{ not json").expect("置き場を壊せる");
+    fs::remove_file(life.json_path()).expect("出力を消せる");
+    let broken = life.write(&[]);
+    assert_eq!(broken.status.code(), Some(i32::from(RC_OK)), "読めない置き場でも rc 0: {}", super::pipe::stderr_of(&broken));
+    assert_eq!(life.named(), [("question".to_owned(), "unreflected-unreadable".to_owned())], "読めない置き場を名指す");
+    assert_eq!(life.shape("toy-qd"), None, "問いの部品は無い");
+
+    let again = life.dispatch(&[]);
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "dispatch は rc 0: {}", super::pipe::stderr_of(&again));
+    assert_eq!(life.named(), Vec::<(String, String)>::new(), "次の dispatch の後は名指しが消える");
+    assert_eq!(life.shape("toy-qd"), Some(unreflected), "ruling-unreflected に戻る");
+    super::pipe::clean(&[&life.repo, &life.state]);
+}

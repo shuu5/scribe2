@@ -17,7 +17,8 @@ use super::lifecycle_line::{book_lines, read_lines, Lines as EventLines};
 use super::lifecycle_mark::{
     self as mark, bindings_of, events_of, events_order, events_tree, fleet_dir, hold, is_open_contract, ledger_is_newer, ledger_of, ledger_order,
     ledger_tree, latest_runs, main_is_descendant, main_of, main_order, num, num_of, open_write_set, publish, read_commits, read_marks, read_rows,
-    read_srs, read_stale, refusals_of, secs_of, Face, Kind as MarkKind, Ledger, Marks, Stale, JSON_FILE, JSON_LOCK,
+    read_srs, read_stale, refusals_of, secs_of, unreflected_questions, verdict_unhandled, Face, Kind as MarkKind, Ledger, Marks, Stale,
+    JSON_FILE, JSON_LOCK, UNMEASURED_UNREFLECTED,
 };
 use super::phase::{self as run_phase, Judged, OpenContract};
 use super::store::{self, LockPolicy};
@@ -31,6 +32,7 @@ use crate::ledger::form::pointer_text;
 use crate::ledger::phase::{self as ledger_phase, Lines as LineTimes};
 use crate::ledger::phase_main::{self, Commit, Row};
 use crate::ledger::phase_ruling;
+use crate::pipe::dispatch::unreflected::Asked;
 use crate::pipe::declaration::{close_check_at_sha, CloseCheck};
 use crate::rules::int_row;
 use crate::rules::manifest::Manifest;
@@ -614,6 +616,12 @@ struct World {
     close_check: bool,
     /// 台帳の接頭辞。
     prefix: Option<String>,
+    /// 閉じて未反映の裁定を持つ問いの bead id（置き場が無いか読めない周は空）。
+    unreflected: Vec<String>,
+    /// 処置の無い判定を持つ memo の bead id。
+    unjudged: Vec<String>,
+    /// 測れなかった種類と理由（読めない置き場）。
+    unmeasured: Vec<(Kind, &'static str)>,
 }
 
 /// 台帳と列の判定の出所を読む（読めなければ `ledger`）。
@@ -652,9 +660,17 @@ fn gather(place: &Place<'_>, source: Source<'_>) -> Result<World, &'static str> 
         Face::Found(found) => (Some(found.0), found.1),
         Face::Missing | Face::Fault => (None, Vec::new()),
     };
+    let prefix = prefix_of(place.repo);
+    let (unreflected, unmeasured) = match unreflected_questions(place.state_dir, prefix.as_deref(), &issues) {
+        Asked::Ids(ids) => (ids, Vec::new()),
+        Asked::Unreadable => (Vec::new(), vec![(Kind::Question, UNMEASURED_UNREFLECTED)]),
+    };
     Ok(World {
         write_set: open_write_set(&issues, &write_sets),
-        prefix: prefix_of(place.repo),
+        unjudged: verdict_unhandled(&issues, &events),
+        unreflected,
+        unmeasured,
+        prefix,
         marks: Marks { ledger, events: events_mark, main },
         issues,
         events,
@@ -694,12 +710,12 @@ fn derive(place: &Place<'_>, world: &World, now: u64) -> Output {
         now,
         window_s: conf.window_s,
         lines: times,
-        unreflected: &[],
-        unjudged: &[],
+        unreflected: &world.unreflected,
+        unjudged: &world.unjudged,
         write_set: &world.write_set,
     });
     let mut parts = base.parts;
-    let mut unmeasured = base.unmeasured;
+    let mut unmeasured = [base.unmeasured, world.unmeasured.clone()].concat();
     let bound = bindings_of(&world.events);
     let misfits = phase_ruling::derive(&phase_ruling::Input { issues: &world.issues, prefix, lines: times, bound: &bound });
     replace_with_misfits(&mut parts, &misfits);

@@ -22,11 +22,16 @@ const FILE: [&str; 2] = ["pipe", "unreflected"];
 const SCHEMA: &str = "1";
 
 /// 閉じた問い（effect = document）の id と notes（親が台帳から渡す）。
-pub(super) struct Question<'a> {
+pub struct Question<'a> {
     /// 問いの bead id。
-    pub(super) id: &'a str,
+    pub id: &'a str,
     /// 問いの notes（裁定の行を持つ）。
-    pub(super) notes: &'a str,
+    pub notes: &'a str,
+}
+
+/// 問いの notes の裁定の行の id（行の順・判定と置き場の引きが読む 1 か所）。
+fn rulings_of(notes: &str, prefix: Option<&str>) -> Vec<String> {
+    notes.lines().filter_map(|line| ruling_row(line, prefix)).map(|row| row.id).collect()
 }
 
 /// 関わりを測る bead（閉じていない問い以外の 1 件・親が台帳から渡す）。
@@ -137,8 +142,7 @@ fn table_of(prefix: Option<&str>, unreflected: &[String], asked: &[(&str, Vec<St
 pub(super) fn judge(repo: &Path, state_dir: &Path, sha: &str, questions: &[Question<'_>], beads: &[Bead<'_>]) -> Option<Judged> {
     let prefix = prefix_of(repo);
     let prefix = prefix.as_deref();
-    let asked: Vec<(&str, Vec<String>)> =
-        questions.iter().map(|question| (question.id, question.notes.lines().filter_map(|line| ruling_row(line, prefix)).map(|row| row.id).collect())).collect();
+    let asked: Vec<(&str, Vec<String>)> = questions.iter().map(|question| (question.id, rulings_of(question.notes, prefix))).collect();
     let population: Vec<String> = asked.iter().flat_map(|(_, ids)| ids.iter().cloned()).collect::<BTreeSet<_>>().into_iter().collect();
     let unreflected = match stored(state_dir) {
         Stored::File(old) if old.sha == sha && old.population == population => old.unreflected,
@@ -177,6 +181,30 @@ pub fn involved(state_dir: &Path) -> Table {
         Stored::Absent => Table::Absent,
         Stored::Unreadable => Table::Unreadable,
         Stored::File(found) => Table::Rows(found.table),
+    }
+}
+
+/// 置き場の裁定 id を問いへ引いた読み（局面の書き手が呼ぶ）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asked {
+    /// 置き場の file が在って読めない。
+    Unreadable,
+    /// 未反映の裁定 id の行を notes に持つ問いの id（入力の順・置き場の無い周は空）。
+    Ids(Vec<String>),
+}
+
+/// 置き場の未反映の裁定 id を、`questions`（閉じた問い）のうち notes の裁定の行にその id を持つ問いの id へ引く（file だけを読む・撃たない）。
+pub fn asked(state_dir: &Path, prefix: Option<&str>, questions: &[Question<'_>]) -> Asked {
+    match stored(state_dir) {
+        Stored::Absent => Asked::Ids(Vec::new()),
+        Stored::Unreadable => Asked::Unreadable,
+        Stored::File(found) => Asked::Ids(
+            questions
+                .iter()
+                .filter(|question| rulings_of(question.notes, prefix).iter().any(|id| found.unreflected.contains(id)))
+                .map(|question| question.id.to_owned())
+                .collect(),
+        ),
     }
 }
 

@@ -600,7 +600,7 @@ mod tests {
         let labels = labels.iter().map(|label| (*label).to_owned()).collect();
         let deps = blocked_by.iter().map(|on| Dep { on: (*on).to_owned(), kind: "blocks".to_owned() }).collect();
         let (id, status, acceptance, kind) = (id.to_owned(), "open".to_owned(), acceptance.to_owned(), "task".to_owned());
-        Issue { id, status, priority: None, labels, acceptance, deps, kind, description: String::new(), notes: String::new(), close_reason: String::new(), created_at: None, closed_at: None, effect: String::new() }
+        Issue { id, status, priority: None, labels, acceptance, deps, kind, description: String::new(), notes: String::new(), close_reason: String::new(), created_at: None, closed_at: None, updated_at: None, effect: String::new() }
     }
 
     /// 契約 c（q に blocks される）・label `label` と設計 pointer を持つ q・label の無い同じ pointer の p の (契約の行, c の到達)。
