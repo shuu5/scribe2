@@ -179,7 +179,7 @@ mod tests {
     fn utterance_tail_every_injected_line_maker_is_read_as_injected() {
         use crate::pipe::dispatch::facts::{Fact, Facts};
         use crate::pipe::dispatch::{Candidate, Turn};
-        use crate::pipe::notify::{idle_line, precheck_line, terminal_line, Terminal};
+        use crate::pipe::notify::{idle_line, precheck_line, terminal_line, Memos, Terminal};
         let dir = scratch("tail-makers");
         std::fs::write(dir.join("host.toml"), "schema = 1\n\n[[account]]\nlabel = \"l1\"\n\n[[account-group]]\nname = \"Tier1\"\nanchors = [\"/g\"]\naccounts = [\"l1\"]\n")
             .expect("host の面を書ける");
@@ -192,7 +192,7 @@ mod tests {
         let pressed = crate::hook::group::Pressed { window: crate::fleet::WindowKind::FiveHour, used: 90, cap: 85 };
         let made = [
             ("notify::terminal_line", terminal_line(&Terminal { bead: "b", run: "r", stage: "Landed", word: "ok" })),
-            ("notify::idle_line", idle_line(&turn, &facts, Some(&[])).expect("候補が在る周は idle の行")),
+            ("notify::idle_line", idle_line(&turn, &facts, Some(&[]), &Memos::default()).expect("候補が在る周は idle の行")),
             ("notify::precheck_line", precheck_line(&(vec![("x".to_owned(), PathBuf::from("/p"))], 1))),
             ("deliver::line", crate::seat::deliver::line("r-1")),
             ("signal::signal", crate::seat::tick::signal::signal(0, &pace)),

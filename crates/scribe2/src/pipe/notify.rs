@@ -59,20 +59,33 @@ pub(crate) fn terminal_line(terminal: &Terminal<'_>) -> String {
     )
 }
 
-/// idle の 1 行（§19 形 3 (b)）。列の結果が「起こした便 0 ∧ 候補 1 本以上」の周だけ `Some`。
+/// idle の行に載せる memo の要約（字面だけ・数えと語は呼び手が済ませている・設計 §43 行 au）。
+#[derive(Debug, Default)]
+pub(crate) struct Memos {
+    /// ` reason=` の直後に足す字面（先頭の空白を含む・key を出さない周は空）。
+    pub(crate) line: String,
+    /// memo-actionable が 1 以上か（候補 0 の周に idle の行を送る引き金）。
+    pub(crate) actionable: bool,
+}
+
+/// idle の 1 行（§19 形 3 (b)）。列の結果が「起こした便 0 ∧ 候補 1 本以上」の周と、「起こした便 0 ∧ 候補 0 ∧ 列を測れた ∧ memo-actionable」の周だけ `Some`。
 ///
-/// `Turn` から**読むだけ**で組む: 候補の本数 = `candidates` の長さ・先頭の候補の理由 = その `reason` の `render`。
-/// 既存の key と順は変えず、末尾に同じ周の並列の実測の字面（[`facts::line`]・設計 §26 形 4）を足す。
+/// `Turn` から**読むだけ**で組む: 候補の本数 = `candidates` の長さ・先頭の候補の理由 = その `reason` の `render`
+/// （候補 0 の周は `ready=0 reason=-`）。既存の key と順は変えず、` reason=` の直後に memo の要約（`memos`・設計 §43 行 au）、
+/// 末尾に同じ周の並列の実測の字面（[`facts::line`]・設計 §26 形 4）を足す。
 ///
 /// その後ろに未処置の終端（`pending`・呼び手が候補の順に判じた字面・`run` は載せない）を
 /// ` pending=<k>:<bead>/<段>=<語>,…` で足す。0 本の周は key を出さない（設計 §29 形 2）。`None` は局面の出力を読めない周で、
 /// 呼び手が候補を 1 本以上数えた周だけ渡し ` pending=unreadable` を足す（設計 §43 行 ar）。
-pub(crate) fn idle_line(turn: &Turn, facts: &Facts, pending: Option<&[Terminal<'_>]>) -> Option<String> {
+pub(crate) fn idle_line(turn: &Turn, facts: &Facts, pending: Option<&[Terminal<'_>]>, memos: &Memos) -> Option<String> {
     if !turn.launches.is_empty() {
         return None;
     }
-    let top = turn.candidates.first()?;
-    let reason = top.reason.as_ref().map_or_else(|| DASH.to_owned(), WaitReason::render);
+    let reason = match turn.candidates.first() {
+        Some(top) => top.reason.as_ref().map_or_else(|| DASH.to_owned(), WaitReason::render),
+        None if turn.unmeasured.is_none() && memos.actionable => DASH.to_owned(),
+        None => return None,
+    };
     let tail = facts::line(facts);
     let pending = match pending {
         None => " pending=unreadable".to_owned(),
@@ -82,7 +95,7 @@ pub(crate) fn idle_line(turn: &Turn, facts: &Facts, pending: Option<&[Terminal<'
             format!(" pending={}:{}", listed.len(), listed.join(","))
         }
     };
-    Some(format!("{NAME} pipe: idle ready={} launched=0 reason={reason}{tail}{pending}", turn.candidates.len()))
+    Some(format!("{NAME} pipe: idle ready={} launched=0 reason={reason}{}{tail}{pending}", turn.candidates.len(), memos.line))
 }
 
 /// 直しの束の 1 行（設計 dispatcher.md §27 形 2・行 y）: `precheck bundles=<n> rows=<m>` の後ろに束ごとの ` <束の id>=<束の file の
