@@ -58,6 +58,7 @@ use super::contract::Contract;
 use super::gate::{last_json_object, lens_usage, Verdict};
 use super::lens_record::LensSource;
 use super::dispatch::floor::Worktree;
+use super::row_review::{self, Basis};
 use super::{confine, contract_path, emit, git_line, record_cost, run_dir, table, Emit};
 use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::json_lite::{self, Value};
@@ -227,6 +228,9 @@ const VERDICT_HEAD: &str = "verdict:";
 /// 先撃ちの判定を使い回した周の detail の末尾の語（[`read_detail`] は語で読むので `pipe report` は変わらない・形 ac 1）。
 const REUSED: &str = " prelens:reused";
 
+/// 行の審査の記録を使い回した周の detail の末尾の語（先撃ちの [`REUSED`] とは別の語・設計 row-review.md §5）。
+const ROW_REUSED: &str = " row-review:reused";
+
 /// `RunStage stage=Reviewed` の detail の字面: `verdict:<V>`（PASS）か `verdict:<V> kind:<k>`（PASS でない）。
 /// **`at` は載せない**——`,` 区切りの語の列を空白区切りの detail に置くと [`read_detail`] の token の読みと衝突する。
 fn detail_of(verdict: Verdict, kind: Option<FindingKind>) -> String {
@@ -314,14 +318,20 @@ pub fn review(entry: &Review<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    // 先撃ちの判定を使い回せる周（材料の鍵・判定・lens の字・model の行が同じ・置き場の木が審査の木・設計 dispatcher.md §27 形 ac 1・
-    // pipeline.md §61 形 5・§64 形 5）は lens を撃たない（木も作らない）。
-    let reused = match (entry.lens, head.as_deref()) {
+    // 行の審査の記録を写せる周（行の digest・材料の鍵・code の木の鍵・lens の版が同じ actual の PASS・設計 row-review.md §5）と、先撃ちの
+    // 判定を使い回せる周（材料の鍵・判定・lens の字・model の行が同じ・置き場の木が審査の木・設計 dispatcher.md §27 形 ac 1・pipeline.md
+    // §61 形 5・§64 形 5）は lens を撃たない（木も作らない）。行の審査の読み口が先で、先撃ちの読み口は行 e まで残す。
+    let rowed = match (entry.lens, head.as_deref()) {
+        (LensSource::Cmd(cmd), Some(sha)) => row_reused(entry, (&source, &dir), cmd, sha),
+        _ => None,
+    };
+    let word = if rowed.is_some() { ROW_REUSED } else { REUSED };
+    let reused = rowed.or_else(|| match (entry.lens, head.as_deref()) {
         (LensSource::Cmd(cmd), Some(sha)) if entry.same_model => {
             super::dispatch::prelens::reusable(entry.state_dir, entry.bead, (&dir, sha), cmd)
         }
         _ => None,
-    };
+    });
     // done の項目の数（Promised の行は 0・材料の書き手 `materials` と同じ読み手 `done_items`・§64 形 5）。
     let items = if promised { 0 } else { items::done_items(&entry.contract.done).len() };
     let (finding, scope, usage, tree) = match &reused {
@@ -334,7 +344,7 @@ pub fn review(entry: &Review<'_>) -> Outcome {
     // 書けない周も判定と rc は変えない。使い回した周は lens を撃っていないので書かない（形 ac 2）。
     let cost = usage.map(|found| Cost { source: CostSource::Review, usage: found });
     let noted = record_cost(entry.state_dir, (entry.run, entry.bead), cost, entry.policy);
-    match settle(entry, &finding, scope, reused.is_some(), tree.as_deref()) {
+    match settle(entry, &finding, scope, reused.as_ref().map(|_| word), tree.as_deref()) {
         Err(reason) => broken(reason),
         Ok(()) => Outcome {
             out: vec![format!("run={} stage={} verdict={}", entry.run, Stage::Reviewed.as_str(), verdict.as_str())],
@@ -732,13 +742,41 @@ fn parse_lens(text: &str) -> Finding {
     }
 }
 
+/// 末尾の改行を 1 つ除く（行の digest を便の置き場の写しから求める形・口 (B) の入力）。
+fn trimmed(text: &str) -> &str {
+    text.strip_suffix('\n').unwrap_or(text)
+}
+
+/// 行の審査の記録を写せる周の lens の rc と stdout（設計 row-review.md §5・`at` は run dir の契約 file と材料の dir の対）。
+/// 口 (B) の digest で口 (F) を引き、同じ行と digest の PASS・actual の記録が在る周だけ、残りの 3 つの鍵（材料の鍵・口 (C) の code の木の鍵・
+/// 口 (J) の lens の版）を求めて口 (D) で引く。写す判定は記録の dir の `rc` と `out` を撃った周と同じ読みに通す（呼び手が [`read_outcome`]）。
+/// 設計 pointer でない契約・読めない・求められない周は `None`（使い回しを諦めるだけで判定は変えない）。
+fn row_reused(entry: &Review<'_>, at: (&Path, &Path), cmd: &str, sha: &str) -> Option<(Option<i32>, String)> {
+    let (source, dir) = at;
+    let pointer = table::parse_pointer(&entry.contract.design).ok()?;
+    let row = format!("{}#{}", pointer.path, pointer.id);
+    let (contract, design) = (std::fs::read_to_string(source).ok()?, std::fs::read_to_string(dir.join(DESIGN_FILE)).ok()?);
+    let digest = row_review::row_digest(trimmed(&contract), trimmed(&design));
+    let (listed, _) = row_review::listed(entry.state_dir, &row, &digest);
+    if !listed.iter().any(|found| found.verdict == Verdict::Pass && found.basis == Basis::Actual) {
+        return None;
+    }
+    let tree = Worktree::place(&run_dir(entry.state_dir, entry.run), sha).display().to_string();
+    let line = crate::headless::fill(cmd, &[("{contract}", &dir.join(super::CONTRACT_FILE).display().to_string()), ("{worktree}", &tree)]);
+    let (materials, code) = (tree::digest(dir).ok()?, row_review::tree_key(entry.repo, sha).ok()?);
+    let name = row_review::reusable(entry.state_dir, &row, [&digest, &materials, &code, &lens_version(&line).ok()?])?;
+    let place = row_review::root_of(entry.state_dir).join(name);
+    let rc = std::fs::read_to_string(place.join("rc")).ok()?.trim().parse().ok()?;
+    Some((Some(rc), std::fs::read_to_string(place.join("out")).ok()?))
+}
+
 /// 判定を `review.json` へ atomic に書き、`Reviewed` を 1 件追記する。`kind` と `at` は任意 field（schema 1 のまま・
-/// 古い読み手は無視・PASS の周は無い）。先撃ちを使い回した周は detail の末尾に [`REUSED`] を足す。
+/// 古い読み手は無視・PASS の周は無い）。使い回した周は detail の末尾に [`ROW_REUSED`] か [`REUSED`] を足す。
 fn settle(
     entry: &Review<'_>,
     finding: &Finding,
     scope: Option<confine::Released>,
-    reused: bool,
+    reused: Option<&str>,
     tree: Option<&str>,
 ) -> Result<(), String> {
     let mut fields = vec![
@@ -772,7 +810,7 @@ fn settle(
             stage: Some(Stage::Reviewed),
             seat: None,
             pid: None,
-            detail: Some(format!("{}{}", detail_of(finding.verdict, finding.kind), if reused { REUSED } else { "" })),
+            detail: Some(format!("{}{}", detail_of(finding.verdict, finding.kind), reused.unwrap_or_default())),
         },
         entry.policy,
     )
