@@ -221,7 +221,7 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
   2. **読む値**: payload を `json_tree::parse` で読み、`prompt`（逐語・escape を解いた字）と `session_id` を取る。prompt の key が無い・空白だけの周は何も書かず、何も出さない（既存の歯の payload はこの形なので、出力が変わらない）。
   3. **除外（閉じた 4 つ）**。当たる周は記帳も出力もしない。
      - (a) 差し込みの行: prompt の頭が `<NAME> <語>:` で、語が閉じた 4 語（pipe・seat・group・tick）のどれか。
-     - (b) 別の session と harness からの包み: prompt の頭（先頭の空白を除く）が閉じた一覧の字（const slice 1 本・5 つ）のどれかで始まる。
+     - (b) 別の session と harness からの包み: prompt の頭（先頭の空白を除く）が閉じた一覧の字（const slice 1 本・5 つ・§16 の行 j が `<agent-message` を足して 6 つにする）のどれかで始まる。
        - `Another Claude session sent a message:`（別の session と teammate の message の包みの 1 行目）
        - `<cross-session-message`・`<teammate-message`（包みの 2 行目が頭に来る形）
        - `<task-notification>`（背景の task と subagent の完了の知らせ）
@@ -407,6 +407,27 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
   - `Judge` に渡された値の欄を足す: literal を持つ 3 file（doctor・管理 tick・列の群の段）が全部動き、tick と列の file まで write-set が広がる。
   - doctor の関数ごとに私的な cache を持つ: 読みの口が 6 つのまま残り、1 本（C2）にならない。
 
+## 16. 発話の記帳の包みの頭に `<agent-message` を足す — 同じ session の係（subagent）の知らせを user の発話として書かない（契約表の行 j・§13 約束 3 (b) の続き・FR82 / AC52）
+
+やさしく言うと: 同じ session の係の知らせが、§13 の包みの一覧に無い形（頭が `<agent-message`）で入力として届き、user の発話として記帳されている。記帳された発話は未仕分けの数えに入り、裁定の結び（§14）の相手にも選べてしまう。一覧に 1 つ足して外す。
+
+- 出所: 隣の project の設計席の知らせ（2026-10-01・その置き場で係の完了の知らせ 1 件が発話として記帳され、席が chat に仕分けた）。
+- 何が起きているか（main 417e4754・verified）:
+  - 包みの頭の一覧は `crates/scribe2/src/hook/utterance.rs` の閉じた 5 つ（§13 約束 3 (b)）で、`<agent-message` を持たない。
+  - 本 repo の置き場の event log に、本文の頭が `<agent-message from="…">` の発話が 16 件在る（2026-10-01T00:25Z 以後）。隣の project の置き場にも 2 件在る。どれも裁定に結ばれていない（15 件は席が chat に仕分け済み・残る 1 件も 2026-10-01 に chat へ仕分けた）。
+  - 発話は actor human・経路 chat で書かれるので、未仕分けの数え（alarm の unsorted）に入り、`seat ruling bind` が結ぶ発話の候補にもなる。
+- 約束（番号は done と 1:1）:
+  1. 包みの頭の一覧を閉じた 6 つにし、`<agent-message` を足す（先頭の空白を除いて頭で照らすのは §13 と同じ）。当たる周は記帳も出力もしない。
+  2. ほかの除外（差し込みの行・runner・marker の外）と、除きすぎない形（頭の字が 2 行目に在る prompt は記帳する）は今のまま。
+- 歯: e2e（既存の `crates/scribe2-boundary/tests/e2e/hook/session.rs`・接頭辞 `hook_utterance_record_skips_agent_message_`・1 本）。(a) 頭が `<agent-message from="x">` で後ろに本文の行を持つ prompt と、先頭に空白を置いた同じ prompt は記帳 0・stdout も stderr も 0 byte。同じ歯の中で、本文の 2 行目に `<agent-message` を置いた prompt は 1 件記帳される（除きすぎない）。base は 1 つ目の prompt を記帳するので RED（機能不在）。既存の `hook_utterance_record_skips_injected_lines_wrappers_and_runners` と `hook_utterance_record_does_not_skip_lookalikes` は本文を変えずに緑（包みの 5 つの見本は一覧の部分集合のまま）。
+- 触らない: 発話の ts の振り方・書く行の形・返す 1 行・`seat ruling bind`・`utterance sort`・既に記帳された発話（仕分けは席が持つ）。
+- 限界:
+  - 一覧は harness の包みの形を実測で足す閉じた列で、新しい形が届くまで外せない。新しい形は記帳された発話の本文の頭を数えて見つける（本 § の 16 件と同じ測り方）。
+  - 一覧に入る前に記帳された発話は消さない（event log は追記だけ）。席が chat に仕分ける。
+- 却下:
+  - 頭が `<` で始まる prompt を全部外す（user が貼った本文の包み `<pasted_content` は user の操作で、発話として残す）。
+  - `seat ruling bind` の側で包みの頭の発話を断る（記帳の側で外せば候補に入らない・口を 2 つに増やさない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -502,4 +523,14 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail doct
 size = "M"
 growth = ["crates/scribe2-boundary/src/main.rs:4", "crates/scribe2/src/init.rs:6", "crates/scribe2/src/seat/ruling.rs:2", "crates/scribe2/src/seat/role.rs:2", "crates/scribe2/src/account/mod.rs:4", "crates/scribe2/src/account/consumers.rs:2", "crates/scribe2/src/account/wire.rs:3", "crates/scribe2/src/hook/group.rs:24"]
 done = "(1) render_doctor_with が置き場を渡した周に event log を 1 回だけ読み replay を 1 回だけ撃ち、読んだ列（裁定の行の数え）と replay の値（ほかの行）を、読めない周は無しを、init・裁定・席・口座・導入先・host-guard の 6 つの doctor の関数へ引数で渡し、6 つの関数とその中の doctor の経路の私的な読み（registered・read_state・ungrouped）は event log を開かない (2) 群の予約は今の読み（置き場から読み measure の後に読み直す）と渡された replay の値だけを使う読みの 2 形を持ち、pressed_now も同じ読み方を受け、doctor の render_next は渡された値の形を呼び、判定の順（群の記録 → 閾値の行 → log → 役割の model の行）は今のまま (3) 1 回の読みが落ちた周は各行が今の読めない周の字（rulings=unreadable rule-rulings=unmeasurable・seats: registered=unreadable・run-accounts=unreadable・群の行の next=unreadable と pressure=unreadable・ungrouped=unreadable）をそのまま出す (4) doctor の出力の行の順・欄・語は 1 字も変わらない (5) 群の段の判定と管理 tick と列の群の段の読み方（reserve の今の読み・measure の後の読み直し）は変わらない 歯: e2e の doctor_single_read_（seat/account.rs・1 本の fn・群 2 つで Tier1 が逼迫し Tier2 の予約が pressed_now と measure の後の読みを通る置き場）が、1 周目に普通の file の log の出力が seats: registered=<数>・群の行 2 本の next=<label>（unreadable でも none でもない）・ungrouped=<数> を持つこと、2 周目に同じ中身の log を書き手の thread が 1 回だけ流す FIFO に替えた doctor が 30 秒以内に rc 0 で終わり出力が 1 周目と行ごとに等しいこと、3 周目に log を dir に替えた置き場の出力が (3) の読めない周の字を持ち、同じ置き場を役割の model の行を欠く rules で撃つと群の行の next=unreadable・閾値の行を欠く rules で撃つと next=no-rule（(2) の判定の順）であることを測り、lib の group_reserve_log_（hook/group.rs の既存の tests・1 本の fn）が、measure の口が置き場の log へ閾値未満の鮮度の内側の回を書く群 1 つで今の読みの reserve がその口座を予約し、measure の前に replay した値を渡す形は読み直さず None を返すことを測る。変わらない既存の歯 host_group_next_・host_group_dead_・host_group_pressure_・doctor_ungrouped_・doctor_accounts_・doctor_init_・doctor_consumer_・seat_role_doctor_・fleet_ruling_doctor_・seat_tick_judge_reserve_ は本文を変えずに緑。base は 2 周目で 2 回目の open が書き手の居ない FIFO を待ち期限で落ち、lib は渡された値の形の関数が無く compile で落ちるので RED"
+[[contract]]
+id = "j"
+title = "発話の記帳の包みの頭に <agent-message を足して閉じた 6 つにし、同じ session の係の知らせを user の発話として書かない（§16・FR82）"
+req = ["FR82", "AC52"]
+section = "16"
+write-set = ["crates/scribe2/src/hook/utterance.rs", "crates/scribe2-boundary/tests/e2e/hook/session.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_utterance_record_skips_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_utterance_record_does_not_skip_lookalikes"]
+size = "S"
+growth = ["crates/scribe2/src/hook/utterance.rs:2"]
+done = "(1) 包みの頭の一覧が閉じた 6 つになり <agent-message を持ち、頭（先頭の空白を除く）が <agent-message の prompt は記帳も出力もしない〔hook_utterance_record_skips_agent_message_ の (a): <agent-message from=\"x\"> の頭と本文の行を持つ prompt と先頭に空白を置いた同じ prompt で記帳 0・stdout と stderr 0 byte〕 (2) ほかの除外と除きすぎない形は今のまま〔(a) の同じ歯の中で本文の 2 行目に <agent-message を置いた prompt が 1 件記帳される・既存の hook_utterance_record_skips_injected_lines_wrappers_and_runners と hook_utterance_record_does_not_skip_lookalikes は本文を変えずに緑〕 歯: hook_utterance_record_skips_agent_message_（e2e・1 本）が base で RED（機能不在: base は頭が <agent-message の prompt を記帳する）"
 <!-- contracts:end -->
