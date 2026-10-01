@@ -1,6 +1,6 @@
 # 設計: 行の審査 — 契約表の行を merge の前に審査し、落ちた行の順番を起動の列が守る
 
-- 出所: 持ち主の問い 2026-09-30T11:3xZ〜11:5xZ（逐語は台帳 s2-07l.736.31 の notes）→ epic s2-07l.736.33 → [ADR-0103](../../design-intent/decisions/ADR-0103-contract-rows-pass-row-review-before-merge-and-failed-rows-keep-their-place.html)。材料は 2026-09-28〜09-30 の便 165 本の FAIL / INCONCLUSIVE 76 件の分析（host の file・tracked でない）。推奨の採用は常設の裁定 user 2026-09-28T00:54Z（決めてほしいことは推奨で進める）の適用で、rules 行の値 2 つ（§7 の期限・§6 の値 0）と行の審査の消費（§10）は SRS の追加 round で別に裁定を取る。
+- 出所: 持ち主の問い 2026-09-30T11:3xZ〜11:5xZ（逐語は台帳 s2-07l.736.31 の notes）→ epic s2-07l.736.33 → [ADR-0103](../../design-intent/decisions/ADR-0103-contract-rows-pass-row-review-before-merge-and-failed-rows-keep-their-place.html)。材料は 2026-09-28〜09-30 の便 165 本の FAIL / INCONCLUSIVE 76 件の分析（host の file・tracked でない）。推奨の採用は常設の裁定 user 2026-09-28T00:54Z（決めてほしいことは推奨で進める）の適用で、rules 行の値 2 つ（§7 の期限・§6 の値 0）と行の審査の消費（§10）は SRS の追加 round で裁定を取った（値は user 2026-09-30T22:13Z 項 reserve・項 precheck、消費は常設の裁定の適用）。
 - 要件（今の字）: [FR49](../../design-intent/spec/srs.html#FR49) 契約の審査 / [FR68](../../design-intent/spec/srs.html#FR68) 起動の列 / [FR92](../../design-intent/spec/srs.html#FR92) merge の門 / [FR39](../../design-intent/spec/srs.html#FR39) 交差の排他 / [FR44](../../design-intent/spec/srs.html#FR44) 席の入力欄への差し込み（変えない・§3 形 6）。FR49・FR68・FR92 の字を直す SRS の追加 round が先に要る（§11）。
 - 前提: 審査役に読みだけの道具を渡し、作業場所を審査の木（HEAD の commit を detach した一時の worktree）にする設計（同じ epic の別の設計の PR・未着地・以下「打ち手 0」）。行の審査の lens はその形で撃つ（§11 の行 a はその行の後）。
 - この設計から出る契約: §11 の 7 行。契約表の行は SRS の round の後に足す（FR49 と FR68 の意味が変わるので、今の要件 id を指す行にできない）。
@@ -49,7 +49,7 @@
   8. **撃ち中の印と重ねての撃ち**: 口は ref の dir に撃ち中の印（`<pid> <起動時刻>`・`lock_owner` で生死を判じる）を置き、同じ sha に 2 本目の口を撃つと、印の持ち主が生きていれば撃たずに待ち、死んでいれば印を外して撃ち直す。
   9. **ref の結果**: 行ごとの判定（lens の JSON を Reviewed と同じ `read_outcome` → `narrow` の 2 本で読み、done の対応の表の倒し〔[contract-source.md](./contract-source.md) §64 形 4〕を通す）から ref の結果を 1 語に決める: 全行が PASS か、INCONCLUSIVE の行が全部 basis が forecast か partial で理由の型が unparsed でない → pass／FAIL の行か、basis が actual の INCONCLUSIVE の行か、unparsed の行が 1 本でも在る → fail／撃ち中の印の持ち主が生きている → pending／印の持ち主が死んで撃ち終えていない → stale。
 - forecast と partial の INCONCLUSIVE を pass に数える理由と C10 の読み: 祖先の本文は祖先が着地するまで存在しない。止めると依存を持つ行の設計の PR が祖先の着地を待って直列になる。「測れない」を merge の通過に倒すのは、その判定が便の段の判定として効かないからである: forecast と partial の記録は Reviewed の段で使い回されない（§5・材料の鍵か code の木の鍵が必ず違う）ので、その行は祖先の着地の後の Reviewed で実物の base で審査し直され、そこで測れなければ今どおり Reviewed で止まる。FAIL は basis に依らず止める。
-- 索引の表（[reverse-index.md](./reverse-index.md) §7 (a)・(b)・(c)・[ADR-0105](../../design-intent/decisions/ADR-0105-code-facts-come-from-an-external-index-the-vessel-reads.html)・proposed）: vessel 宣言が code の索引を名乗る repo では、形 4 の機械の検査に索引の閉包と code の事実の欄の測りが加わり（確定の finding）、形 5 の材料に逆引きの表 index.txt が加わる。どちらも同じ epic の別の設計の行で、この設計の行 a の後に起こす。
+- 索引の表（[reverse-index.md](./reverse-index.md) §7 (a)・(b)・(c)・[ADR-0105](../../design-intent/decisions/ADR-0105-code-facts-come-from-an-external-index-the-vessel-reads.html)）: vessel 宣言が code の索引を名乗る repo では、形 4 の機械の検査に索引の閉包と code の事実の欄の測りが加わり（確定の finding）、形 5 の材料に逆引きの表 index.txt が加わる。どちらも同じ epic の別の設計の行で、この設計の行 a の後に起こす。
 
 ## 4. merge の門の 2 つ目の判定（vessel 宣言の任意 key row-review）
 
@@ -94,7 +94,7 @@
 
 - 待たせる元 B: 直前の便が設計の側の終端に着いた行＝Reviewed の判定が FAIL か INCONCLUSIVE（理由の型が unparsed でない）、または Gated の判定が FAIL。Failed（起動の失敗・環境）と Stopped（人の停止）は元にしない。
 - 兄弟: B と同じ設計 doc の行のうち、(a) B と同じ section を実装する行、または (b) B の直前の便の契約と節の写しから求めた行の digest を持つ B の行を載せた ref の記録（1 本でも・push ごとの記録も直しの PR の記録も含む）に載る、B 以外の行。どちらも置き場の file だけから 1 関数で導く。起動の列の候補（live でない）だけが対象である。
-- 効き: 兄弟の候補は待ちの理由の新しい variant（名 sibling・値は B の bead）で待つ。介入 first の印を持つ候補は待たない（orchestrator が名指して起こす口を残す・[dispatcher.md](./dispatcher.md) §35 の床の検査の設計と同じ扱い・その設計は未着地）。
+- 効き: 兄弟の候補は待ちの理由の新しい variant（名 sibling・値は B の bead）で待つ。介入 first の印を持つ候補は待たない（orchestrator が名指して起こす口を残す・[dispatcher.md](./dispatcher.md) §35 の床の検査の設計と同じ扱い・その設計は未着地）。B が台帳の blocks で待つ祖先（推移）の候補は待たない（§7 と同じく、B の直しとして同じ節に前提の行を足し B に blocks で付けた形で、B が依存で待ち前提の行が sibling で待つ輪を作らない・SRS FR103）。
 - 兄弟の待ちが解ける契機（閉じた列・どれか 1 つ）: B の行の digest が B の直前の便の記録の写し（契約 file と設計の節の本文の写し）と違う周（直しが main に入った）・B への release か hold の印・兄弟自身の今の行の digest の行の記録で、判定が PASS か、basis が forecast か partial で unparsed でない INCONCLUSIVE のものが、B の終端より後に書かれた（兄弟も直されて審査を通った）・B の bead の close・期限（`pipe.reserve_h` を共用）。
 - 候補 1 件の理由の決め方の順: 依存 → hold → launched → 設計 pointer → 契約の生成 → settled → sibling →（行 aj の後は floor の上書き）→ `settle` の中で reserved → overlap → 受付。名の列 `WAIT_REASONS` では、行 aj と am が足す `unreflected-ruling` と `floor` の後ろに reserved と sibling を足す。
 - 行 a1 と b1 の例では、b1 は (b)（同じ設計の PR）で a1 の兄弟になり、a1 の終端の 4 秒後の起動は起きない。

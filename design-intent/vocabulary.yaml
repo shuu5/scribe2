@@ -70,7 +70,7 @@ terms:
   # ---------------------------------------------------------------- §5 day-1 optional adapter
   - canonical: day-1 optional adapter
     domain: consumer
-    definition: seam だけを最初から用意し、 採否を K 指標で決める外部依存の枠。 rtk と graphify が該当する。 依存の追加は A3 の対象。 graphify の枠は ADR-0105 (proposed) で code の索引が持つ。
+    definition: seam だけを最初から用意し、 採否を K 指標で決める外部依存の枠。 rtk と graphify が該当する。 依存の追加は A3 の対象。 graphify の枠は ADR-0105 で code の索引が持つ。
     relationships: [rtk, graphify, seam, K 指標]
   - canonical: rtk
     domain: consumer
@@ -78,7 +78,7 @@ terms:
     relationships: [day-1 optional adapter]
   - canonical: graphify
     domain: consumer
-    definition: land ごとに知識グラフを生成して context を供給する候補 (day-1 optional adapter)。 v1 では micro-bench のみ (v1 の実測は本 repo へ持ち越していない・SPIKE-tooling-report.md 冒頭)。 2026-09-30 の試しで不採用の案 (ADR-0105・proposed・code の問い 53 のうち 9 合格)。
+    definition: land ごとに知識グラフを生成して context を供給する候補 (day-1 optional adapter)。 v1 では micro-bench のみ (v1 の実測は本 repo へ持ち越していない・SPIKE-tooling-report.md 冒頭)。 2026-09-30 の試しで不採用の案 (ADR-0105・code の問い 53 のうち 9 合格)。
     relationships: [day-1 optional adapter, land]
   - canonical: K 指標
     domain: consumer
@@ -383,7 +383,7 @@ terms:
     relationships: [flip check, KNOWN-RED 台帳]
   - canonical: gate
     domain: consumer
-    definition: 便の成果物を独立に検証して Verdict を返す機構。 MVP は契約の verify の実走 + lens 1 本 (SRS FR8 / FR9)。 crate の gate module が担う。 歯 (test / lint / CI) とは別の entity。
+    definition: 便の成果物を独立に検証して Verdict を返す機構。 MVP は共通 verify と契約の verify の実走 + lens 1 本 (SRS FR8 / FR9)。 crate の gate module が担う。 歯 (test / lint / CI) とは別の entity。
     relationships: [Verdict, 便, land, lens]
   - canonical: flip check
     domain: consumer
@@ -706,7 +706,7 @@ terms:
   - canonical: 並列の枠
     domain: consumer
     aliases: [受付の枠]
-    definition: host 単位で便の変異検査に配る並列の枠 (SRS NFR6)。 契約を便にする前の検査の段 (受付) とは別。 置き場は state dir の親の下の host 用 dir で project をまたぎ、 枠 1 組は受付札 1 つで表す (ADR-0021 §2.3)。 器が管理する状態ではなく受付の一時的な印。 ADR-0095 の後は、 gate の共通 verify・検出線・契約の verify の全部の行が枠を取る (穴 {jobs} を持たない行は job 1 つ)。
+    definition: host 単位で便の検証の行 (変異検査と、 gate と終わりの門の共通 verify・契約の verify の行) に配る並列の枠 (SRS NFR6)。 契約を便にする前の検査の段 (受付) とは別。 置き場は state dir の親の下の host 用 dir で project をまたぎ、 枠 1 組は受付札 1 つで表す (ADR-0021 §2.3)。 器が管理する状態ではなく受付の一時的な印。 ADR-0095 の後は、 gate の共通 verify・検出線・契約の verify の全部の行が枠を取る (穴 {jobs} を持たない行は job 1 つ)。
     relationships: [受付札, 実効 jobs, 封じ込め, 検出線]
   - canonical: 受付札
     domain: consumer
@@ -763,7 +763,7 @@ terms:
     aliases: [precompact slot]
     definition: 圧縮が始まる直前に、 器が席の直前の発言を逐語で書く高々 1 つの記録 (SRS FR42・設計 docs/design/seat-roles.md)。 置き場は state dir の席ごとの置き場で repo の外。 圧縮の後の session の開始で 1 回だけ出して消す。 AI が書く散文の退避物ではない (SRS FR23 / FR66)。
     relationships: [席の指示文, state dir, hook, 開発 session]
-    flagged_ambiguities: ["枠: 圧縮の直前の 1 枠 (席の記録) と並列の枠 (変異検査の並列・SRS NFR6) と host の memory の枠 (受付) は別義"]
+    flagged_ambiguities: ["枠: 圧縮の直前の 1 枠 (席の記録) と並列の枠 (検証の行の並列・SRS NFR6) と host の memory の枠 (受付) は別義"]
   - canonical: 席の queue
     domain: consumer
     definition: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合として前の器が持っていた実体。 器は持たず、 続きの pointer を queue から注入しない (ADR-0045・SRS FR43)。 席の次の仕事は台帳の現在値が持ち、 管理 tick が台帳の現在地から続きを促す (ADR-0058)。
@@ -826,7 +826,7 @@ terms:
     relationships: [契約表, 台帳, 契約 id]
   - canonical: write-set の閉包
     domain: consumer
-    definition: 契約の行が宣言した閉じた型を、 網羅 match・literal 構築・件数 pin で持つ source file の集合 (SRS FR48)。 write-set に足りなければ intake が契約を断る。 字面の走査で求めるため下界であり、 限界は歯が固定する (ADR-0023 §2.3)。
+    definition: 契約の行が宣言した閉じた型を、 網羅 match・literal 構築・件数 pin で持つ source file の集合 (SRS FR48)。 write-set に足りなければ intake が契約を断る。 字の照合で求めるため下界であり、 限界は歯が固定する (ADR-0023 §2.3)。
     relationships: [write-set, 契約表, 便, in-loop guard]
   - canonical: 約束の行
     domain: consumer
@@ -854,7 +854,7 @@ terms:
     relationships: [約束の行, 契約表, 契約の審査]
   - canonical: 契約の審査
     domain: consumer
-    definition: intake の直後に、 契約とそれが実装する設計と要件を lens が読んで判定する段 (SRS FR49)。 実装後の gate の lens (SRS FR9) とは別の段で、 判定が合格でない便は runner を起こさない (ADR-0019 §2.1 の終端の定義に足す・ADR-0023 §2.7)。 ADR-0103 (proposed) の後は、 同じ審査を設計の PR の段で撃つ行の審査が前に在り、 この段は行の審査の記録を判定の鍵で使い回すか、 審査し直す段になる。
+    definition: intake の直後に、 契約とそれが実装する設計と要件を lens が読んで判定する段 (SRS FR49)。 実装後の gate の lens (SRS FR9) とは別の段で、 判定が合格でない便は runner を起こさない (ADR-0019 §2.1 の終端の定義に足す・ADR-0023 §2.7)。 ADR-0103 の後は、 同じ審査を設計の PR の段で撃つ行の審査が前に在り、 この段は行の審査の記録を判定の鍵で使い回すか、 審査し直す段になる。
     relationships: [lens, 便, Stage, gate, 行の審査, 判定の鍵]
   - canonical: land の終端
     domain: consumer
@@ -934,7 +934,7 @@ terms:
   - canonical: 受付
     domain: consumer
     aliases: [contract intake]
-    definition: 契約 file を便にする前に器が撃つ検査の段。 必須 field・verify の形・allowlist・write-set の余地・host の memory の枠・同時走行の最大値 (SRS FR68) を通った契約だけが便になる (交差の排他は SRS FR39)。 変異検査の並列の枠 (SRS NFR6) とは別。 上限の読み・材料の読み・契約表の検査・宣言と上限の突き合わせ (freeze) は入口の lock の前に 1 周 1 回撃ち、 lock の中の判定はその突き合わせの結果 (有効値と名乗りの語) を借りて宣言を読み直さない (ADR-0059・accepted)。 detect か deny を名乗った宣言の契約では、 lock の前に nextest の検証行を base の木で撃って base で緑の行の本数を残し、 deny の契約は base で緑か測れない行が在れば断る (ADR-0059・accepted)。 preflight は同じ判定を便を作らずに撃つ口。
+    definition: 契約 file を便にする前に器が撃つ検査の段。 必須 field・verify の形・allowlist・write-set の余地と閉包 (SRS FR48)・設計 pointer (SRS FR54)・done の項目ごとの歯の欄 (SRS FR105)・code の事実の欄 (SRS FR109)・host の memory の枠・同時走行の最大値 (SRS FR68) を通った契約だけが便になる (交差の排他は SRS FR39)。 vessel 宣言が ruling-check を true で持つ repo では裁定 id の実在 (SRS FR83) も確かめる。 並列の枠 (SRS NFR6) とは別。 上限の読み・材料の読み・契約表の検査・宣言と上限の突き合わせ (freeze) は入口の lock の前に 1 周 1 回撃ち、 lock の中の判定はその突き合わせの結果 (有効値と名乗りの語) を借りて宣言を読み直さない (ADR-0059・accepted)。 detect か deny を名乗った宣言の契約では、 lock の前に nextest の検証行を base の木で撃って base で緑の行の本数を残し、 deny の契約は base で緑か測れない行が在れば断る (ADR-0059・accepted)。 preflight は同じ判定を便を作らずに撃つ口。
     relationships: [dispatcher, 並列の枠, write-set, 便, base で緑の行, 名乗りの語, 契約の検証行, 受付の断りの event]
   - canonical: priority
     domain: consumer
@@ -975,7 +975,7 @@ terms:
     aliases: [live run cap]
     definition: host で同時に走る live な便の本数の上限。 値は rules 行 pipe.max_live が持ち (user 裁定 id 付き・憲法 C5)、 受付が便を作る前に live な便を数えて値以上の周は typed に断り、 dispatcher はその契約を列に留めて次の契機で再判定する。 走行中の便には効かない。 env・launcher の変数・host の宣言 file には置かない (ADR-0035)。 並列の枠 (変異検査の並列度・memory の枠) とは別。
     relationships: [live な便, 受付, dispatcher, 起動の列, rules 行, 並列の枠]
-    flagged_ambiguities: ["上限: 同時走行の最大値 (便の本数・pipe.max_live) と並列の枠 (変異検査の並列度・memory) と上限停止 (口座の使用上限) は別義"]
+    flagged_ambiguities: ["上限: 同時走行の最大値 (便の本数・pipe.max_live) と並列の枠 (検証の行の並列度・memory) と上限停止 (口座の使用上限) は別義"]
   - canonical: 着地の列
     domain: consumer
     aliases: [landing queue]
@@ -1501,7 +1501,7 @@ terms:
     flagged_ambiguities: ["床: 床の検査 (main の最低限の検査・SRS FR85) と、 管理 tick の段の床 (ADR-0058・設計 seat-heartbeat の段) と、 thread 本数の下限 (1 の床) は別義。 SRS は裸の「床」を書かず「床の検査」と書く"]
   - canonical: alarm
     domain: consumer
-    definition: 管理 tick の打刻の合図の末尾に足す閉じた語 (unreflected・floor・unsorted・owned)。 置き場の file だけを読んで決め、 台帳も git も撃たない (SRS FR27)。 unsorted は局面の出力に未仕分けの発話 (SRS FR88) が 1 つ以上在る周、 owned は局面の出力が持つ席の手番の閾値越え (SRS FR90) の件数が 1 以上の周で、 どちらも局面の出力の値を読むだけで、 局面の出力が古さの印を持つ周は unsorted と owned の語に閉じた 1 語 stale を添える (SRS FR27 / FR94・ADR-0087・ADR-0088)。 合図を送らない周の席には届かず、 doctor の行だけが知らせる。
+    definition: 管理 tick の打刻の合図の末尾に足す閉じた語 (unreflected・floor・unsorted・owned・unreadable・stale)。 置き場の file だけを読んで決め、 台帳も git も撃たない (SRS FR27)。 unsorted は局面の出力に未仕分けの発話 (SRS FR88) が 1 つ以上在る周、 owned は局面の出力が持つ席の手番の閾値越え (SRS FR90) の件数が 1 以上の周で、 どちらも局面の出力の値を読むだけで、 局面の出力が古さの印を持つ周は unsorted と owned の語に閉じた 1 語 stale を添える (SRS FR27 / FR94・ADR-0087・ADR-0088)。 unreadable は局面の出力が無いか読めない周、 単独の stale は添える先の unsorted も owned も無く局面の出力が古さの印を持つ周 (SRS FR27)。 合図を送らない周の席には届かず、 doctor の行だけが知らせる。
     relationships: [管理 tick, 打刻の合図, 未反映の裁定, 床の検査, doctor, 局面の出力, 未仕分けの発話, 席の手番の閾値越え, 古さの印]
   - canonical: 雛形の合図
     domain: consumer
@@ -1545,7 +1545,7 @@ terms:
     domain: consumer
     definition: dispatcher が起動の列の待ちの行に先に掛け、 受付が断りうる理由を予想して置き場の file に残す段 (設計 dispatcher)。 結果は待ちの理由・起こす判定・受付のどれも読まない (予想は通行証にしない)。
     relationships: [dispatcher, 起動の列, 受付]
-    flagged_ambiguities: ["事前審査 (予想・lens を撃たない) と契約の審査 (SRS FR49・lens の判定) は別", "事前審査の機械の予想と束は ADR-0103 (proposed) の後も残り、 退役するのは先撃ち (事前審査の lens) だけ"]
+    flagged_ambiguities: ["事前審査 (予想・lens を撃たない) と契約の審査 (SRS FR49・lens の判定) は別", "事前審査の機械の予想と束は ADR-0103 の後も残り、 退役するのは先撃ち (事前審査の lens) だけ"]
   - canonical: 選択式の問いの遮断
     domain: consumer
     aliases: [choice question block]
@@ -1685,7 +1685,7 @@ terms:
   - canonical: merge の門
     domain: consumer
     aliases: [merge gate]
-    definition: 器の hook の入口が、 席の道具の呼び出しの PR の merge の command を実行の前に読み、 渡す commit の本文が発端の trailer か器の便の trailer を持たなければ欠けを名指して断る段 (SRS FR92・ADR-0088)。 trailer の判定は本文の形だけを見て台帳を読まない。 vessel 宣言の任意 key row-review を名乗る repo では、 PR の head の固定と行の審査の結果と契約表の動きを見る 2 つ目の判定が加わる (ADR-0103・proposed)。 器の便でない merge を通したときは書き直さずに古さの印を置く (SRS FR90)。 事後の検出は CI の main の検査。
+    definition: 器の hook の入口が、 席の道具の呼び出しの PR の merge の command を実行の前に読み、 渡す commit の本文が発端の trailer か器の便の trailer を持たなければ欠けを名指して断る段 (SRS FR92・ADR-0088)。 trailer の判定は本文の形だけを見て台帳を読まない。 vessel 宣言の任意 key row-review を true で持つ repo では、 PR の head の固定と行の審査の結果と契約表の動きを見る 2 つ目の判定が加わる (ADR-0103)。 器の便でない merge を通したときは書き直さずに古さの印を置く (SRS FR90)。 事後の検出は CI の main の検査。
     relationships: [発端の trailer, trailer, 古さの印, 着地の列, hook, 行の審査]
   - canonical: 受付の断りの event
     domain: consumer
@@ -1868,13 +1868,13 @@ terms:
   - canonical: 読みの道具
     domain: consumer
     aliases: [read-only tools]
-    definition: 器が審査役 (契約の審査・gate・先撃ちの lens) の claude に渡す道具の閉じた列 Read・Grep・Glob (ADR-0102)。 書きの道具と shell を持たず、 許可の問いを誰にも出さない mode で起き、 cwd の外の読みは断られる。 起動の雛形が渡す permission mode の値は使わず、 dontAsk でない値の周は契約の file の dir に 1 語の記録 lens.ignored を残す。
+    definition: 器が審査役 (lens) の claude に渡す道具の閉じた列 Read・Grep・Glob (ADR-0102)。 書きの道具と shell を持たず、 許可の問いを誰にも出さない mode で起き、 cwd の外の読みは断られる (ADR-0102 の実測)。 起動の雛形が渡す permission mode の値は使わず、 dontAsk でない値の周は契約の file の dir に 1 行の記録 lens.ignored を残す。
     relationships: [lens, 審査の木, 自動 memory]
   - canonical: 審査の木
     domain: consumer
     aliases: [review tree]
-    definition: 審査役の lens の cwd になる一時の worktree (ADR-0102)。 契約の審査では、 器が材料の前に読んだ対象 repo の HEAD の sha を run dir の直下 (材料の dir の外) に detach し、 判定の後に外す。 先撃ちでは、 材料を組んだ予想の木 (HEAD に祖先の層を当てた木) で、 lens が終わるまで外さず、 その sha と種類 (actual か forecast) を置き場に残す。 受付の base の木とは別の木。
-    relationships: [契約の審査, lens, 読みの道具, base の木, 事前審査]
+    definition: 審査役の lens の cwd になる一時の worktree (ADR-0102)。 契約の審査では、 器が材料の前に読んだ対象 repo の HEAD の sha を便の記録の dir の直下 (材料の dir の外) に detach し、 判定の後に外す。 行の審査 (ADR-0103) では設計の PR の head の commit を detach する。 先撃ち (行の審査に替わるまで) では、 材料を組んだ予想の木 (HEAD に祖先の層を当てた木) で、 lens が終わるまで外さず、 その sha と種類 (actual か forecast) を state dir に残す。 受付の base の木とは別の木。
+    relationships: [契約の審査, 行の審査, lens, 読みの道具, base の木, 事前審査]
   - canonical: 自動 memory
     domain: consumer
     aliases: [auto memory]
@@ -1883,61 +1883,61 @@ terms:
   - canonical: 共通 verify の節
     domain: consumer
     aliases: [common verify section]
-    definition: 器が runner の stdin の契約の直後に足す見出し「## 共通 verify」の節で、 便の写しの共通 verify の各行を gate と同じ 4 つの穴の埋め方 (base の sha・受付を通らない並列度 1・契約の verify 行の filter 語) で埋めて並べる (ADR-0102)。 runner は commit の後にその行を撃って緑にしてから turn を閉じる。
+    definition: 器が runner の stdin の契約の直後に足す見出し「## 共通 verify」の節で、 便の写しの共通 verify の各行を gate と同じ 4 つの穴の埋め方 (base の sha・並列の枠を取らない並列度 1・契約の verify 行の filter 語) で埋めて並べる (ADR-0102)。 runner は commit の後にその行を撃って緑にしてから turn を閉じる。
     relationships: [runner, 共通 verify, 終わりの門]
   - canonical: 終わりの門
     domain: consumer
     aliases: [end gate]
-    definition: runner の turn が rc 0 かつ commit 1 本以上で終わった直後に、 器が gate と同じ撃ち手と受付で書きの範囲の検査・共通 verify・契約の検証行を便の worktree に撃つ段 (ADR-0102)。 赤の周は rules 行の周まで同じ worktree で runner を起こし直し、 使い切った周と測れなかった周は gate へ進める。 gate は結果を持ち越さない。
+    definition: runner の turn が rc 0 かつ base からの commit 1 本以上で終わった直後に、 器が gate と同じ撃つ関数・封じ込め・並列の枠で、 gate の write-set を照らす段・共通 verify・契約の検証行を便の worktree に撃つ段 (ADR-0102)。 赤の周は rules 行の周まで同じ worktree で runner を起こし直し、 使い切った周と測れなかった周は gate へ進める。 gate は結果を持ち越さない。
     relationships: [runner, gate, 共通 verify, 共通 verify の節, 契約の検証行]
-  # ---------------------------------------------------------------- 行の審査と落ちた行の順番 (ADR-0103・proposed)
+  # ---------------------------------------------------------------- 行の審査と落ちた行の順番 (ADR-0103)
   - canonical: 行の審査
     domain: consumer
     aliases: [row review]
-    definition: 契約表の行を足す・変える設計の PR の head で、 行の digest が merge-base と違う着地済みでない行ごとに、 器の口 (pipe review --ref) が撃つ受付と同じ機械の検査と契約の審査の lens (ADR-0103・proposed・設計 docs/design/row-review.md)。 判定は判定の鍵ごとに state dir に記録し、 vessel 宣言の任意 key row-review を名乗る repo の merge の門と、 契約の審査の段が読む。 口は前面で最後まで走り、 席の入力欄へは知らせない。
+    definition: 契約表の行を足す・変える設計の PR の head で、 行の digest が merge-base と違い、 指す bead が無いか 1 本でも閉じていない行ごとに、 器の口 (pipe review --ref) が撃つ受付と同じ機械の検査と契約の審査の lens (ADR-0103・設計 docs/design/row-review.md)。 判定は判定の鍵ごとに state dir に記録し、 vessel 宣言の任意 key row-review を true で持つ repo の merge の門と、 契約の審査の段が読む。 口は前面で最後まで走り、 席の入力欄へは知らせない。
     relationships: [契約の審査, merge の門, 行の digest, 判定の鍵, 予想の審査, 事前審査]
-    flagged_ambiguities: ["行の審査 (設計の PR の段・merge の前) と契約の審査 (便の Reviewed の段・SRS FR49) は同じ lens を別の時点で撃つ"]
+    flagged_ambiguities: ["行の審査 (設計の PR の段・merge の前) と契約の審査 (便の Reviewed の段・SRS FR49) は同じ lens を別の時点で撃つ", "行の審査の結果の stale (撃ち中の印の持ち主が死んだ) と古さの印 (stale mark) は別"]
   - canonical: 行の digest
     domain: consumer
     aliases: [row digest]
-    definition: 行の欄から受付と同じ生成で作った契約の字の hash と、 行が実装する設計の節の本文の hash の対 (ADR-0103・proposed)。 SRS FR49 が契約の中身の同一性に使う 2 つと同じもので、 行の審査の記録の鍵になる。
+    definition: 行の欄から受付と同じ生成で作った契約の字の hash と、 行が実装する設計の節の本文の hash の対 (ADR-0103)。 SRS FR49 が契約の中身の同一性に使う 2 つと同じもので、 行の審査の記録の鍵になる。
     relationships: [行の審査, 契約の審査, 契約表]
   - canonical: 材料の鍵
     domain: consumer
     aliases: [materials key]
-    definition: 審査の材料の dir の全 file の名と本文から名の順に決まる 1 つの digest (ADR-0103・proposed)。 lens の cmd の字は入れない。 判定の鍵の 1 つ。
+    definition: 審査の材料の dir の全 file の名と本文から名の順に決まる 1 つの digest (ADR-0103)。 lens の cmd の字は入れない。 判定の鍵の 1 つ。
     relationships: [判定の鍵, 行の審査, 契約の審査]
   - canonical: 行の予約
     domain: consumer
     aliases: [row reservation]
-    definition: 直前の便が着地でない終端に着いた open な行 (列外か列に戻ったかを問わない) が、 次の便を起こすまで持つ write-set の取り置き (ADR-0103・proposed)。 起動の列の順で後ろの候補のうち write-set が交差するものを待ちの理由 reserved で待たせ、 前の候補とその行の依存の祖先は待たせない。 解ける契機は設計 docs/design/row-review.md §7 の閉じた列が持ち、 期限は rules 行 pipe.reserve_h。 記帳せず既存の記録から周ごとに導く。
+    definition: 直前の便が着地でない終端に着いた open な契約 (の行・列外か列に戻ったかを問わない) が、 次の便の起動・close・hold・期限などで解けるまで持つ write-set の取り置き (ADR-0103)。 起動の列の順で後ろの候補のうち write-set が交差するものを待ちの理由 reserved で待たせ、 前の候補とその行の依存の祖先は待たせない。 解ける契機は設計 docs/design/row-review.md §7 の閉じた列が持ち、 期限は rules 行 pipe.reserve_h。 記帳せず既存の記録から周ごとに導く。
     relationships: [起動の列, write-set, 介入, dispatcher]
     flagged_ambiguities: ["行の予約 (起動の列の write-set の取り置き) と群の予約 (群が次に移る口座・ADR-0069) は別"]
   - canonical: 兄弟の待ち
     domain: consumer
     aliases: [sibling wait]
-    definition: 審査の FAIL か判断不能 (unparsed を除く) か gate の FAIL で終端した行と同じ節を実装する行か、 落ちた行の digest を載せた設計の PR の行の審査の記録に載る行を待たせる起動の列の待ちの理由 sibling (ADR-0103・proposed)。 介入 first の印を持つ候補は待たない。 解ける契機は設計 docs/design/row-review.md §8 の閉じた列が持つ。
+    definition: 契約の審査の FAIL か INCONCLUSIVE (unparsed を除く) か gate の FAIL で終端した契約と同じ節を実装する契約か、 その行の digest を載せた設計の PR の行の審査の記録に載る契約を待たせる起動の列の待ちの理由 sibling (ADR-0103)。 介入 first の印を持つ候補と、 その契約が台帳の blocks で待つ祖先の候補は待たない。 解ける契機は設計 docs/design/row-review.md §8 の閉じた列が持つ。
     relationships: [起動の列, 行の審査, 行の digest, 介入]
   - canonical: 判定の鍵
     domain: consumer
     aliases: [verdict key]
-    definition: 行の digest・材料の鍵・code の木の鍵・basis・祖先ごとの状態・lens の版を並べた字の digest (ADR-0103・proposed)。 行の審査は同じ鍵の行を撃ち直さず、 契約の審査の段は同じ鍵の実物の PASS の記録だけを写す。
+    definition: 行の digest・材料の鍵・code の木の鍵・basis・祖先ごとの状態・lens の版を並べた字の digest (ADR-0103)。 行の審査は同じ鍵の行を撃ち直さず、 契約の審査の段は同じ鍵の実物の PASS の記録だけを写す。
     relationships: [行の審査, 行の digest, 材料の鍵, lens の版]
   - canonical: lens の版
     domain: consumer
     aliases: [lens version]
-    definition: lens の子が自分の rules と組み込みの雛形から出す 1 行 (model・effort・雛形の digest・道具の列・permission の mode・cap) (ADR-0103・proposed)。 撃つ側の定数から推さず、 lens の cmd の字の代わりに lens の同一性を比べる。
+    definition: lens の子が自分の rules と組み込みの雛形から出す 1 行 (model・effort・雛形の digest・道具の列・permission の mode・cap) (ADR-0103)。 撃つ側の定数から推さず、 lens の cmd の字の代わりに lens の同一性を比べる。
     relationships: [lens, 判定の鍵]
   - canonical: 予想の審査
     domain: consumer
     aliases: [forecast review]
-    definition: 未着地の祖先を持つ行の行の審査 (ADR-0103・proposed)。 祖先の行の写しと節の本文を材料に足し、 祖先の新しい file を空で置かない。 その判断不能は merge を通し、 その記録は契約の審査の段で写さない。
+    definition: 未着地の祖先を持つ行の行の審査 (ADR-0103)。 祖先の行の写しと節の本文を材料に足し、 祖先の新しい file を空で置かない。 その INCONCLUSIVE は merge を通し、 その記録は契約の審査の段で写さない。
     relationships: [行の審査, 判定の鍵, 事前審査]
     flagged_ambiguities: ["予想の審査 (行の審査の 1 形・lens を撃つ) と事前審査の予想 (lens を撃たない機械の予想・設計 dispatcher.md §27) は別"]
   - canonical: 先撃ち
     domain: consumer
     aliases: [prelens]
-    definition: 依存を待つ行に契約の審査の lens を事前に撃ち、 判定を契約の審査の段で使い回す口 (設計 dispatcher.md §27 の形 aa・ac)。 ADR-0103 (proposed) で、 rules 行の値で撃つのを止める段と code の退役の段の 2 段で退役する。
+    definition: 依存を待つ行に契約の審査の lens を事前に撃ち、 判定を契約の審査の段で使い回す口 (設計 dispatcher.md §27 の形 aa・ac)。 ADR-0103 で、 rules 行の値で撃つのを止める段と code の退役の段の 2 段で退役する。
     relationships: [事前審査, 行の審査, 契約の審査]
   # ---------------------------------------------------------------- done の項目と歯の対応の欄 (ADR-0104)
   - canonical: done の項目
@@ -1948,52 +1948,52 @@ terms:
   - canonical: 歯の対応の欄
     domain: consumer
     aliases: [done-teeth field]
-    definition: 契約表の行の任意の欄 done-teeth (ADR-0104)。 要素は「<番号>:<歯>」で、 done の項目ごとに、 その約束を外した実装で落ちる歯を 1 本以上名指す。 歯は名・既存の歯の印を前に置いた名・検証行の番号の歯・仕組みの歯の 4 形。 表の検査・受付・preflight が揃いと検証行の選びと base の在りかを照らし、 gate の最初の段が便の木に書かれたかを測る。 vessel 宣言の任意 key teeth-check を true と名乗った repo では、 base に無い行と done の字が base と違う行に欄を求める (done 以外の欄だけを変えた行には求めない)。 欄を読むだけの版を先に着地させて器を入れ替えてから、 初めて欄を書く。 Promised の行は持てず、 約束の行の歯の完全名が同じ対応を持つ。
+    definition: 契約表の行の任意の欄 done-teeth (ADR-0104)。 要素は「<番号>:<歯>」で、 done の項目ごとに、 その約束を外した実装で落ちる歯を 1 本以上名指す。 歯は名・既存の歯の印を前に置いた名・検証行の番号の歯・仕組みの歯の 4 形。 表の検査・受付・preflight が揃いと検証行の選びと base の在りかを照らし、 gate の write-set を照らす段が便の木に書かれたかを測る。 vessel 宣言の任意 key teeth-check を true で持つ repo では、 base に無い行と done の字が base と違う行に欄を求める (done 以外の欄だけを変えた行には求めない)。 欄を読むだけの版を先に着地させて器を入れ替えてから、 初めて欄を書く。 Promised の行は持てず、 約束の行の歯の完全名が同じ対応を持つ。
     relationships: [done の項目, 契約表, 約束の行, 契約の検証行, 契約の審査, gate]
   - canonical: 既存の歯の印
     domain: consumer
     aliases: [kept tooth mark]
-    definition: 歯の対応の欄の歯の名の前に置く = (ADR-0104)。 base に在り、 その便が本文を変えない歯を表す。 gate の最初の段は、 印の無い名の歯にだけ base から足されたか本文が変わったことを求め、 印の在る歯には便の木に残ることを求める。
+    definition: 歯の対応の欄の歯の名の前に置く = (ADR-0104)。 base に在り、 その便が本文を変えない歯を表す。 gate の write-set を照らす段は、 印の無い名の歯にだけ base から足されたか本文が変わったことを求め、 印の在る歯には便の木に残ることを求める。
     relationships: [歯の対応の欄, 歯]
   - canonical: 検証行の番号の歯
     domain: consumer
     aliases: [verify-line tooth]
-    definition: 歯の対応の欄の @k の形 (ADR-0104)。 行の k 本目の検証行の全体を歯とする。 歯の名を 1 本ずつ解く読み手の無い形 (nextest でない test の撃ち手・文書の検査) の項目はこの形で書き、 gate の最初の段は測らない (検証行の実走が測る)。
+    definition: 歯の対応の欄の @k の形 (ADR-0104)。 行の k 本目の検証行の全体を歯とする。 歯の名を 1 本ずつ解く読み手の無い形 (nextest でない test の撃ち手・文書の検査) の項目はこの形で書き、 gate の write-set を照らす段は測らない (検証行の実走が測る)。
     relationships: [歯の対応の欄, 契約の検証行]
   - canonical: 仕組みの歯
     domain: consumer
     aliases: [mechanism tooth]
-    definition: 歯の対応の欄の !<名> の形 (ADR-0104)。 名は閉じた 4 語 write-set・place-only・new-file・closure で、 外した実装でも観測の変わらない構造の制約を器の仕組み (runner の guard・gate の最初の段・契約表の検査の閉包) が測ることを表す。 closure が測るのは、 足した file がほかの行の touches の型を名指して、 その行の閉包をその行の write-set の外へ広げないこと (子 module がほかの行の touches の型を名指さない約束を含む) で、 行は便の木で契約表の検査を撃つ検証行の 1 行を持つ。 挙動の約束には書かない。 仕組みが測らない構造の制約は done に載せない。 place-only は write-set の = の file を runner の allowlist から外し、 gate の最初の段が diff の = の file を落とす測り (設計 docs/design/contract-source.md §66 の行 (4)) を指す。
+    definition: 歯の対応の欄の !<名> の形 (ADR-0104)。 名は閉じた 4 語 write-set・place-only・new-file・closure で、 外した実装でも観測の変わらない構造の制約を器の仕組み (runner の guard・gate の write-set を照らす段・契約表の検査の閉包) が測ることを表す。 closure が測るのは、 足した file がほかの行の touches の型を名指して、 その行の閉包をその行の write-set の外へ広げないこと (子 module がほかの行の touches の型を名指さない約束を含む) で、 行は便の木で契約表の検査を撃つ検証行の 1 行を持つ。 挙動の約束には書かない。 仕組みが測らない構造の制約は done に載せない。 place-only は write-set の = の file を runner の allowlist から外し、 gate の write-set を照らす段が diff の = の file を落とす測り (設計 docs/design/contract-source.md §66 の行 (4)) を指す。
     relationships: [歯の対応の欄, done の項目, write-set, gate]
-  # ---------------------------------------------------------------- code の索引と逆引きの表 (ADR-0105・proposed)
+  # ---------------------------------------------------------------- code の索引と逆引きの表 (ADR-0105)
   - canonical: code の索引
     domain: consumer
     aliases: [code index]
-    definition: vessel 宣言の任意 key index-scip と index-roles が名乗る外の道具が commit の木から作った SCIP と構文の役の一致を、 器が自前の読み手で読んで state dir に置く平らな表 (ADR-0105・proposed・設計 docs/design/reverse-index.md)。 1 行 1 occurrence の導出値で、 真実の置き場にしない。 置き場の量の上限は rules 行 index.cap_mb。
+    definition: vessel 宣言の任意 key index-scip と index-roles が名乗る外の道具が commit の木から作った SCIP と構文の役の一致を、 器が自前の読み手で読んで state dir に置く平らな表 (ADR-0105・設計 docs/design/reverse-index.md)。 1 行 1 occurrence の導出値で、 真実の置き場にしない。 置き場の量の上限は rules 行 index.cap_mb。 SRS FR108 の行ごとの表 (逆引きの表) とは別。
     relationships: [索引の鍵, 構文の役, 逆引きの表, day-1 optional adapter]
   - canonical: 逆引きの表
     domain: consumer
-    aliases: [reverse lookup table]
-    definition: 契約表の行が触る型と節が名指す型と関数を項目に、 参照・呼び手・literal・pattern・歯・可視性の連鎖・その項目を touches に持つほかの行の 7 列を、 site と write-set の外の印と母集団 (名の字の件数・索引の外の件数) とともに並べた表 (ADR-0105・proposed)。 口 pipe index show と審査の材料 index.txt が同じ字で出す。
+    aliases: [reverse lookup table, 行ごとの使われ方の表]
+    definition: 契約表の行が触る型と節が名指す型と関数を項目に、 参照・呼び手・literal・pattern・歯・可視性の連鎖・その項目を touches に持つほかの行の 7 列を、 site と write-set の外の印と母集団 (名の字の件数・索引の外の件数) とともに並べた表 (ADR-0105)。 口 pipe index show と審査の材料 index.txt が同じ字で出す。
     relationships: [code の索引, 行の審査, 契約の審査]
   - canonical: 索引の鍵
     domain: consumer
     aliases: [index key]
-    definition: code の木の鍵と索引の宣言の字を並べた字の digest (ADR-0105・proposed)。 同じ鍵の code の索引は作り直さず、 契約表の doc だけを変えた設計の PR は main の索引を使う。
+    definition: code の木の鍵と索引の宣言の字を並べた字の digest (ADR-0105)。 同じ鍵の code の索引は作り直さず、 契約表の doc だけを変えた設計の PR は main の索引を使う。
     relationships: [code の索引, 判定の鍵]
   - canonical: 構文の役
     domain: consumer
     aliases: [syntax role]
-    definition: occurrence が literal・pattern・call・use・reexport・test・doclink・capture・vis のどれに当たるかを表す閉じた 9 語 (ADR-0105・proposed)。 どの構文の node がどの役かは vessel 宣言が名指す言語ごとの規則の file が持ち、 器は語だけを知る。
+    definition: occurrence が literal・pattern・call・use・reexport・test・doclink・capture・vis のどれに当たるかを表す閉じた 9 語 (ADR-0105)。 どの構文の node がどの役かは vessel 宣言が名指す言語ごとの規則の file が持ち、 器は語だけを知る。
     relationships: [code の索引]
   - canonical: 索引の閉包
     domain: consumer
     aliases: [index closure]
-    definition: write-set の閉包の 3 形 (literal の構築・match の arm・variant の構築) を、 字の代わりに code の索引が解いた symbol で数えた file の集合 (ADR-0105・proposed)。 別名・Self の構築・glob の越しの site が加わる。 受付と行の審査だけが撃ち、 CI の契約表の検査は字面の閉包のまま。
+    definition: write-set の閉包の 3 形 (literal の構築・match の arm・variant の構築) を、 字の代わりに code の索引が解いた symbol で数えた file の集合 (ADR-0105)。 別名・Self の構築・glob の越しの site が加わる。 受付と行の審査だけが撃ち、 CI の契約表の検査は字面の閉包のまま。
     relationships: [code の索引, 受付, 行の審査]
-    flagged_ambiguities: ["索引の閉包 (索引で解いた 3 形の file) と字面の閉包 (pipe/closure.rs の字面の走査・下界) は同じ形を別の測りで数える"]
+    flagged_ambiguities: ["索引の閉包 (索引で解いた 3 形の file) と字面の閉包 (pipe/closure.rs の字の照合・下界) は同じ形を別の測りで数える"]
   - canonical: code の事実の欄
     domain: consumer
     aliases: [code facts field]
-    definition: 契約表の行の任意の欄 code-facts。 要素は列 (refs・files・callers・literals・patterns・teeth・vis) と項目と値の 1 組で、 行の審査・受付・起動の列が各々の commit の code の索引で測り、 違えば断るか受付の理由 code-facts で待たせる (ADR-0105・proposed)。
+    definition: 契約表の行の任意の欄 code-facts。 要素は列 (refs・files・callers・literals・patterns・teeth・vis) と項目と値の 1 組で、 行の審査・受付・起動の列が各々の commit の code の索引で測り、 違えば断るか受付の理由 code-facts で待たせる (ADR-0105)。
     relationships: [code の索引, 逆引きの表, 受付, 起動の列]

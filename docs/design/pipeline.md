@@ -1230,7 +1230,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   - **`--bare` で自動 memory と hook を切る**: OAuth を読まないので subscription の口座で起きない。
   - **先撃ちの使い回しを止めるだけ**（審査の H1 の案 (b)）: 使い回しは止まるが、先撃ちの lens が anchor の作業木を読み、材料の木と読む木が食い違う形は残る。
 - 限界:
-  - turn の上限は渡さない。上限の値は rules 行の裁定が要り（C5）、SRS の追加 round で裁定を取る（行 `lens.max_turns` を足す後の行・推奨 30・読んだ lens の turn は実測で 2〜10）。
+  - turn の上限は渡さない。上限の値は rules 行の裁定が要り（C5）、SRS の追加 round で裁定を取った（user 2026-09-30T22:13Z 項 lens-turns・値 30・行 `lens.max_turns` を足す後の行・読んだ lens の turn は実測で 2〜10）。
     - 行 bg は上限の行より先に着地する。その間は、読む lens の消費に天井が無い。便の token の検出線（R-C6-1）は判定行を出すだけで止めない。間の期間は SRS の round と上限の行の着地までで、その間の lens の消費は pipe show の判定行で見る。
   - 道具の名と env の名は claude の版に従う。器の歯は fake の argv と env しか測らないので、実 binary の効き（init の tools と memory_paths）は着地の後に orchestrator が init の record で測り、台帳の notes に残す（ADR-0011 の測り方と同じ）。
   - 自動 memory のほかに、口座で変わる入力が残るかは測っていない（例: 口座の設定 dir の CLAUDE.md が `--setting-sources ""` の下で読まれるか）。init の record はその読みを載せないので、課金の要る 1 回の実測で着地の後に測る。ADR-0102 の「口座に依らず同じ材料」は、自動 memory の分についての主張である。
