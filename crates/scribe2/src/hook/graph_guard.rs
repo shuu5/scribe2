@@ -6,6 +6,9 @@
 //! closed でも pinned でもない状態）。掛かる segment が 1 つも無い command と、hook の root が `.beads` の dir を持たない
 //! repo の command は台帳を読まない（NFR5）。
 //!
+//! 掛かる segment が全部、付け先を持たず型の値が epic の update の周は台帳を読まずに通し、payload の cwd が hook の root で先読みの口の写しの
+//! 鍵が今の鍵と等しい周は client を起こさず写しで測る（設計 §20）。
+//!
 //! 掛かる周は台帳を 1 回だけ読み（待ち上限は rules 行 [`BUDGET_ROW`]）、読んだ写し 1 つ（[`Ledger`]）に segment の順で
 //! 当て、通った segment の効き（足す子・親の付け替えと外し・型・status）を写しに足してから次の segment を測る。断るのは
 //! 崩れが**増える**向きだけ（[`Refusal`]・問いは §10 の [`Graph`] が持つ）で、すでに崩れた所を直す書きは通す。読めない
@@ -79,6 +82,8 @@ pub struct Scene<'a> {
     pub bd: Option<&'a str>,
     /// rules manifest の差し替え（`--rules`・無ければ埋め込み）。
     pub rules: Option<&'a Path>,
+    /// 記録の置き場（先読みの口が置く台帳の形の写しの dir・設計 §20 約束 5）。
+    pub state_dir: &'a Path,
 }
 
 /// 掛かる書き（閉じた 6 つ・create と graph は起票の門の [`create_of`] の読み）。
@@ -165,7 +170,10 @@ pub enum Refusal {
     /// 台帳を読めない。
     LedgerUnreadable,
     /// 台帳の読みが待ち上限を越えた。
-    LedgerTimeout,
+    LedgerTimeout {
+        /// hook の root（次の一手の先読みの口が名指す repo）。
+        root: String,
+    },
     /// rules を読めない。
     RulesUnreadable,
     /// rules 行（上限・待ち上限）が無い・不発効・整数でない。
@@ -183,7 +191,7 @@ impl Refusal {
             Self::PlanOrphan { .. } => "plan-orphan",
             Self::PlanUnreadable { .. } => "plan-unreadable",
             Self::LedgerUnreadable => "ledger-unreadable",
-            Self::LedgerTimeout => "ledger-timeout",
+            Self::LedgerTimeout { .. } => "ledger-timeout",
             Self::RulesUnreadable => "rules-unreadable",
             Self::NoRule => "no-rule",
         }
@@ -210,7 +218,10 @@ impl Refusal {
             ),
             Self::PlanUnreadable { file } => format!("plan の file {file} を読めない（無い・JSON でない） — 読める plan の file を渡す"),
             Self::LedgerUnreadable => "台帳を読めない — 形を測れない周は書きを通さない（台帳を直してから撃ち直す）".to_owned(),
-            Self::LedgerTimeout => format!("台帳の読みが rules 行 {BUDGET_ROW} を越えた — 撃ち直す"),
+            Self::LedgerTimeout { root } => format!(
+                "台帳の読みが rules 行 {BUDGET_ROW} を越えた — {NAME} ledger prefetch --repo {root} で写しを作り、root の dir から同じ書きを\
+                 撃ち直す（写しの後に台帳が書かれていなければ、門は写しで測る）"
+            ),
             Self::RulesUnreadable => "rules を読めない — 形を測れない周は書きを通さない（rules を直す）".to_owned(),
             Self::NoRule => format!(
                 "rules 行 {} か {BUDGET_ROW} が無い・不発効・整数でない — 形を測れない周は書きを通さない（行を戻す）",
@@ -248,14 +259,38 @@ fn judge_command(scene: &Scene) -> Result<(), Refusal> {
     }
     let manifest = scene.rules.map_or_else(Manifest::embedded, Manifest::load).map_err(|_| Refusal::RulesUnreadable)?;
     let (max, budget) = limits(&manifest)?;
-    let bd = scene.bd.filter(|found| !found.trim().is_empty()).unwrap_or(ledger::DEFAULT_BD);
-    let issues = ledger::read_ledger(bd, scene.cwd, budget).map_err(|error| match error {
-        LedgerError::Unreadable => Refusal::LedgerUnreadable,
-        LedgerError::Timeout => Refusal::LedgerTimeout,
-    })?;
+    if passes_unread(&ops) {
+        return Ok(());
+    }
+    let issues = match copied(scene) {
+        Some(issues) => issues,
+        None => {
+            let bd = scene.bd.filter(|found| !found.trim().is_empty()).unwrap_or(ledger::DEFAULT_BD);
+            ledger::read_ledger(bd, scene.cwd, budget).map_err(|error| match error {
+                LedgerError::Unreadable => Refusal::LedgerUnreadable,
+                LedgerError::Timeout => Refusal::LedgerTimeout { root: scene.root.display().to_string() },
+            })?
+        }
+    };
     let mut copy = Ledger::new(issues, max);
     let read = |file: &str| std::fs::read_to_string(scene.cwd.join(file)).ok();
     ops.iter().try_for_each(|op| copy.apply(op, &read))
+}
+
+/// 台帳を読まずに通す書きの列か（付け先を持たず型の値が epic の update だけ・設計 §20 約束 7）。門が断るのは根の epic を epic 以外にする周だけで、
+/// 同じ update の status の書きは型を epic にした後に判定される（epic は数えない）ので、どの台帳でも断られない。
+fn passes_unread(ops: &[Op]) -> bool {
+    ops.iter().all(|op| matches!(op, Op::Update { parent: None, kind: Some(kind), .. } if kind == EPIC))
+}
+
+/// 台帳の形の写し（設計 §20 約束 5）: payload の cwd を正規化した path が hook の root と等しく、写しの鍵が今の store の鍵と等しい周だけ在る。
+/// bd の子 process も git も撃たず、写しは書かない。
+fn copied(scene: &Scene) -> Option<Vec<Issue>> {
+    if std::fs::canonicalize(scene.cwd).ok()? != scene.root {
+        return None;
+    }
+    let key = crate::ledger::store_key(scene.root)?;
+    crate::ledger::read_copy(scene.state_dir, scene.root, &key)
 }
 
 /// rules 行 2 本（上限 N と待ち上限）を id で引いて整数だけを読む。無い・不発効・整数でない周は [`Refusal::NoRule`]。
@@ -785,7 +820,7 @@ mod tests {
     #[test]
     fn hook_graph_guard_skips_reads_and_names_the_fix() {
         let nowhere = Path::new("/nonexistent-graph-guard-root");
-        let scene = |command: &'static str| Scene { command, root: nowhere, cwd: nowhere, bd: Some("/nonexistent-graph-guard-bd"), rules: None };
+        let scene = |command: &'static str| Scene { command, root: nowhere, cwd: nowhere, bd: Some("/nonexistent-graph-guard-bd"), rules: None, state_dir: nowhere };
         assert_eq!(decide(&scene("bdw create x --parent r")), LedgerDecision::Allow, ".beads の無い root");
         let embedded = Manifest::embedded().unwrap_or_else(|errors| panic!("{errors:?}"));
         assert!(limits(&embedded).is_ok(), "埋め込みの行 2 本");
@@ -795,5 +830,35 @@ mod tests {
         let line = super::denied_line(&full);
         assert!(line.contains("reason=parent-full（") && line.contains("--type epic --parent r"), "{line}");
         assert_eq!(line.lines().count(), 1);
+    }
+
+    /// 読まずに通す書きの列の判定（設計 §20 約束 7）: 付け先の無い型 epic の update（綴り 4 つと `--claim` を併せ持つ形）だけが通り、付け先つき・
+    /// 型 task・create・reopen・dep remove・混ざった列は読む側。
+    #[test]
+    fn hook_graph_copy_passes_unread_only_the_plain_epic_update() {
+        let ops = |line: &str| -> Vec<Op> { segments(line).iter().filter_map(|found| op_of(found)).collect() };
+        for line in [
+            "bdw update F --type epic", "bdw update F -t epic", "bdw update F --type=epic", "bdw update F -t=epic",
+            "bdw update F -t=epic --claim", "bdw update F G --type epic --status open",
+            "bdw update F --type epic && bdw update G -t epic",
+        ] {
+            assert!(super::passes_unread(&ops(line)), "{line}: 読まずに通す");
+        }
+        for line in [
+            "bdw update F --type epic --parent E", "bdw update F --type epic --parent=", "bdw update E --type task", "bdw create x --parent F",
+            "bdw reopen F", "bdw dep rm F E", "bdw update F --claim", "bdw update F --type epic && bdw create x --parent F.1",
+            "bdw update F --type epic && bdw update E --type task",
+        ] {
+            assert!(!super::passes_unread(&ops(line)), "{line}: 読む");
+        }
+    }
+
+    /// ledger-timeout の断り文は先読みの口と hook の root を名指し、ほかの断りの直す 1 行は先読みの口を持たない。
+    #[test]
+    fn hook_graph_copy_timeout_line_names_the_prefetch_and_the_root() {
+        let line = super::denied_line(&Refusal::LedgerTimeout { root: "/work/repo".to_owned() });
+        assert!(line.contains("reason=ledger-timeout（") && line.contains("scribe2 ledger prefetch --repo /work/repo で写しを作り"), "{line}");
+        assert_eq!(line.lines().count(), 1);
+        assert!(!super::denied_line(&Refusal::LedgerUnreadable).contains("prefetch"));
     }
 }

@@ -1,5 +1,5 @@
 // flip-check: moved s2-07l.679
-//! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_` / `hook_choice_question_` / `hook_answer_mouth_` / `ledger_prefetch_`・設計 docs/design/carry-prep.md §9 行 g）。
+//! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_` / `hook_choice_question_` / `hook_answer_mouth_` / `hook_graph_guard_` / `hook_graph_copy_` / `ledger_prefetch_`・設計 docs/design/carry-prep.md §9 行 g）。
 
 use super::*;
 
@@ -2274,6 +2274,171 @@ fn ledger_prefetch_judges_the_words_in_order() {
     fs::write(&sink, "file").unwrap_or_else(|error| panic!("file を書ける: {error}"));
     let out = prefetch_into(&moving, &sink);
     assert_prefetch_refused(&out, ("moved", 1), "動く store と通常の file の state dir");
+}
+
+// ─────────────── 門が写しで測る（`s2-07l.738.41.2`・設計 ledger-form.md §20 行 q・接頭辞 `hook_graph_copy_`） ───────────────
+//
+// 先読みの置き場（実物の形の store を持つ toy repo）に門の台帳 [`graph_ledger`] を置き、先読みの口で写しを作ってから `pre-tool-use` を撃つ。
+// client は `--bd` で差し替える（置き場の client と同じ記録へ argv と cwd を足す＝記録の行の数が client を起こした回数）。
+
+/// 先読みの置き場に門の台帳を置く（根の epic E は open の子が上限 N 本で溢れている）。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn copy_place(client: Client, store: bool) -> PrefetchPlace {
+    let place = prefetch_place(client, store);
+    fs::write(place.tool.join("ledger.json"), graph_ledger()).expect("台帳の fixture を書ける");
+    place
+}
+
+/// `tail` で終わる偽の client を置き（置き場の client と同じ記録へ 1 行足す）、その path を返す。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn copy_client(place: &PrefetchPlace, tail: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bd = place.tool.join("bd-other");
+    fs::write(&bd, format!("#!/bin/sh\nprintf '%s\\t%s\\n' \"$*\" \"$(pwd -P)\" >> '{}'\n{tail}\n", place.log.display())).expect("偽の bd を書ける");
+    fs::set_permissions(&bd, fs::Permissions::from_mode(0o755)).expect("偽の bd を実行可能にできる");
+    bd.display().to_string()
+}
+
+/// `bd` を client に、`cwd` を payload の cwd にして門を撃つ（`extra` は後ろへ足す flag）。
+fn copy_hook(bd: &str, cwd: &Path, command: &str, extra: &[&str]) -> Output {
+    let mut args = vec!["pre-tool-use", "--bd", bd];
+    args.extend_from_slice(extra);
+    run_hook_args(&args, &bash_payload(cwd, command))
+}
+
+/// 断る周の外形（rc 2・stdout 0 byte・stderr 1 行・最後の記録の語）を確かめ、stderr と記録の what を返す。
+fn copy_deny(place: &PrefetchPlace, out: &Output, command: &str, reason: &str) -> (String, String) {
+    assert_write_deny(&place.state, out, command, reason);
+    (stderr_text(out), ledger_records(&place.state).last().map(|line| what_of(line)).unwrap_or_default())
+}
+
+/// 置き場の store の manifest の path。
+fn copy_manifest(place: &PrefetchPlace) -> PathBuf {
+    place.repo.join(".beads/embeddeddolt/beads/.dolt/noms/manifest")
+}
+
+/// 先読みして写しを置く（rc 0）。
+fn copy_prefetch(place: &PrefetchPlace) {
+    let out = prefetch_in(place, &place.repo, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "先読み: {}", stderr_text(&out));
+}
+
+/// (1) 写しの無い周に読める client で撃った create の stderr の 1 行と記録の what を控え、先読みの後に rc 1 の client へ替えても同じ create は parent-full で
+/// 1 行と what が控えと字で等しく、epic の create は通り、`update E.1 --parent E.1.1` は parent-loop。payload の cwd を root の下の dir と `..` で書いた path にしても
+/// 同じ create は読まずに parent-full。どれも client を起こさない（記録が増えない）。
+#[test]
+fn hook_graph_copy_judges_without_waking_the_client() {
+    let place = copy_place(Client::Reads, true);
+    let create = "bdw create x --parent E";
+    let (told, what) = copy_deny(&place, &copy_hook(&place.bd, &place.repo, create, &[]), create, "parent-full");
+    assert_eq!(prefetch_log(&place).len(), 1, "写しの無い周は 1 回読む");
+    copy_prefetch(&place);
+    let failing = copy_client(&place, "exit 1");
+    let reads = prefetch_log(&place).len();
+    let (copied, copied_what) = copy_deny(&place, &copy_hook(&failing, &place.repo, create, &[]), create, "parent-full");
+    assert_eq!((copied, copied_what), (told.clone(), what), "判定の語・断り文・記録は読んだ周と字で等しい");
+    assert_silent(&copy_hook(&failing, &place.repo, "bdw create x --parent E --type epic", &[]), "epic の create");
+    let looped = "bdw update E.1 --parent E.1.1";
+    copy_deny(&place, &copy_hook(&failing, &place.repo, looped, &[]), looped, "parent-loop");
+    let dotted = place.repo.join("src").join("..");
+    let (through, _) = copy_deny(&place, &copy_hook(&failing, &dotted, create, &[]), create, "parent-full");
+    assert_eq!(through, told, "`..` で書いた cwd も正規化して root と等しい");
+    assert_eq!(prefetch_log(&place).len(), reads, "client の argv の記録が増えない");
+    clean(&[&place.repo, &place.state, &place.tool]);
+}
+
+/// (2) 写しの効きを確かめた後に 5 つの条件を 1 つずつ外すと、同じ create が client を 1 回起こして ledger-unreadable で断られる。写しの file を消した置き場で client を
+/// 読める形に戻すと 1 回読んで parent-full で、写しの file は無いまま。
+#[test]
+fn hook_graph_copy_reads_again_when_a_condition_is_gone() {
+    let create = "bdw create x --parent E";
+    for case in ["root と組の chunk 数", "journal に byte", "写しの file を消す", "写しの 2 行目を崩す", "cwd が root の下の dir"] {
+        let place = copy_place(Client::Reads, true);
+        copy_prefetch(&place);
+        let failing = copy_client(&place, "exit 1");
+        let reads = prefetch_log(&place).len();
+        copy_deny(&place, &copy_hook(&failing, &place.repo, create, &[]), create, "parent-full");
+        assert_eq!(prefetch_log(&place).len(), reads, "{case}: 効きの前置き（写しで判定・client を起こさない）");
+        let (copy, noms) = (vessel::ledger::copy_path(&place.state, &place.repo), copy_manifest(&place).with_file_name("v".repeat(32)));
+        let (mut cwd, mut extra) = (place.repo.to_path_buf(), Vec::new());
+        let root = place.repo.display().to_string();
+        match case {
+            "root と組の chunk 数" => {
+                let moved = format!("5:__DOLT__:{}:{}:{}:{}:11:{}:8\n", "l".repeat(32), "2".repeat(32), "0".repeat(32), "a".repeat(32), "v".repeat(32));
+                fs::write(copy_manifest(&place), moved).expect("manifest を書ける");
+            }
+            "journal に byte" => {
+                let mut journal = fs::OpenOptions::new().append(true).open(&noms).expect("journal を開ける");
+                std::io::Write::write_all(&mut journal, b"+").expect("journal へ足せる");
+            }
+            "写しの file を消す" => fs::remove_file(&copy).expect("写しを消せる"),
+            "写しの 2 行目を崩す" => {
+                let text = fs::read_to_string(&copy).expect("写しを読める");
+                let key = text.lines().next().unwrap_or_default();
+                fs::write(&copy, format!("{key}\nnot json\n")).expect("写しを崩せる");
+            }
+            _ => {
+                cwd = place.repo.join("src");
+                extra = vec!["--project", &root];
+            }
+        }
+        let out = copy_hook(&failing, &cwd, create, &extra);
+        copy_deny(&place, &out, create, "ledger-unreadable");
+        assert_eq!(prefetch_log(&place).len(), reads + 1, "{case}: client を 1 回起こす");
+        if case == "写しの file を消す" {
+            let out = copy_hook(&place.bd, &place.repo, create, &[]);
+            copy_deny(&place, &out, create, "parent-full");
+            assert_eq!(prefetch_log(&place).len(), reads + 2, "読める client に戻すと 1 回読む");
+            assert!(!copy.exists(), "門は写しを書かない");
+        }
+        clean(&[&place.repo, &place.state, &place.tool]);
+    }
+}
+
+/// (3) 付け先を持たず型が epic の update は、`.beads` を持ち store の無い repo と rc 1 の client で client を起こさずに通り、付け先を足した update・型を
+/// epic 以外にする update・ほかの掛かる書きと同じ行に並ぶ update は 1 回読んで ledger-unreadable で断られる。`ledger.open_children_max` の行を消した rules では
+/// 型を epic にするだけの update も読まずに no-rule（rules の読みの後に判じる）。
+#[test]
+fn hook_graph_copy_passes_the_epic_only_update_without_reading() {
+    let place = copy_place(Client::Fails, false);
+    for command in ["bdw update F --type epic", "bdw update F -t=epic --claim"] {
+        assert_silent(&copy_hook(&place.bd, &place.repo, command, &[]), command);
+    }
+    assert!(prefetch_log(&place).is_empty(), "client を起こさない: {:?}", prefetch_log(&place));
+    for (at, command) in ["bdw update F --type epic --parent E", "bdw update E --type task", "bdw update F --type epic && bdw create x --parent F.1"].into_iter().enumerate() {
+        copy_deny(&place, &copy_hook(&place.bd, &place.repo, command, &[]), command, "ledger-unreadable");
+        assert_eq!(prefetch_log(&place).len(), at + 1, "{command}: 1 回読む");
+    }
+    let row = "[[rule]]\nid = \"ledger.open_children_max\"\nkind = \"LedgerOpenChildrenMax\"\nvalue = 15\nenabled = true\nruling = \"user 2026-09-27T17:33Z 項 2-3\"\nruled_at = \"2026-09-27\"\n\n";
+    let text = QUESTION_EMBEDDED.replace(row, "");
+    assert_ne!(text, QUESTION_EMBEDDED, "写しは行を消した（字面が manifest と揃っている）");
+    let rules = place.tool.join("rules-no-max.toml");
+    fs::write(&rules, text).expect("rules の写しを書ける");
+    let command = "bdw update F --type epic";
+    let out = copy_hook(&place.bd, &place.repo, command, &["--rules", &rules.display().to_string()]);
+    copy_deny(&place, &out, command, "no-rule");
+    assert_eq!(prefetch_log(&place).len(), 3, "no-rule は読まずに断る");
+    clean(&[&place.repo, &place.state, &place.tool]);
+}
+
+/// (4) `hook.budget_ms` だけを 100 にした rules と 1 秒眠る client で create は rc 2・ledger-timeout で、stderr の 1 行が `ledger prefetch --repo` と root の字を持つ。
+/// 同じ client と rules の先読みが rc 0 の後に、同じ create は client を起こさずに parent-full。
+#[test]
+fn hook_graph_copy_timeout_names_the_prefetch_and_then_the_copy_serves() {
+    let place = copy_place(Client::Sleeps(1), true);
+    let rules = prefetch_rules(&place.tool, ("hook.budget_ms", "HookBudgetMs", 2000, 100));
+    let create = "bdw create x --parent E";
+    let hook = || copy_hook(&place.bd, &place.repo, create, &["--rules", &rules]);
+    let (told, what) = copy_deny(&place, &hook(), create, "ledger-timeout");
+    assert_eq!(what, "ledger-deny ledger-timeout", "記録の語");
+    assert!(told.contains(&format!("ledger prefetch --repo {}", place.repo.display())), "先読みの口と root を名指す: {told}");
+    let reads = prefetch_log(&place).len();
+    let out = prefetch_in(&place, &place.repo, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "先読み: {}", stderr_text(&out));
+    assert_eq!(prefetch_log(&place).len(), reads + 1, "先読みは 1 回読む");
+    copy_deny(&place, &hook(), create, "parent-full");
+    assert_eq!(prefetch_log(&place).len(), reads + 1, "写しで測る周は client を起こさない");
+    clean(&[&place.repo, &place.state, &place.tool]);
 }
 
 // ─────────────── 走っている便の行の門（`s2-07l.698`・設計 vessel-hook.md §15 行 i・接頭辞 `hook_live_row_`） ───────────────
