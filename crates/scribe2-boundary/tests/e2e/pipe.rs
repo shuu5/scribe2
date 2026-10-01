@@ -2835,3 +2835,90 @@ fn pipe_index_build_resolves_the_ref_and_refuses_what_it_cannot() {
     assert_eq!(idxb_word(&idxb_line(&named)), "built", "commit を渡せばその commit の索引: {}", told_index(&named));
     clean(&[&place.repo, &place.state, &plain]);
 }
+
+// ───── 本 repo の索引の宣言（設計 reverse-index.md §10 行 b・`s2-07l.736.33.21.3`・接頭辞 `pipe_index_declared_`） ─────
+//
+// repo の根は CARGO_MANIFEST_DIR から辿る。宣言は HEAD の vessel 宣言を行 a2 の索引の宣言の読み（`index_at`）で読み、
+// toolchain と役の規則の file は作業木の file を行で読む（外の道具は撃たない・CI は持たない）。
+
+/// 本 repo の根。
+fn declared_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
+}
+
+/// 根の下の file の本文（読めなければ落ちる）。
+fn declared_text(name: &str) -> String {
+    let read = fs::read_to_string(declared_root().join(name));
+    assert!(read.is_ok(), "{name} を読める: {read:?}");
+    read.unwrap_or_default().replace("\r\n", "\n")
+}
+
+/// 空白で割った command の頭 2 語。
+fn declared_head(line: &str) -> Vec<&str> {
+    line.split_whitespace().take(2).collect()
+}
+
+/// (a) HEAD の宣言を索引の宣言の読みで読むと 2 key が各 1 行で不備が 0、コメントは ADR-0105 と §4 を名指し、既存の key は変わらない。
+#[test]
+fn pipe_index_declared_reads_the_two_keys_without_defects() {
+    crate::install_spawner();
+    let found = vessel::pipe::declaration::index_at(&declared_root(), "HEAD");
+    assert!(matches!(found, Ok(Some(_))), "本 repo の宣言は 2 key を不備なく持つ: {found:?}");
+    let Ok(Some(lines)) = found else {
+        return;
+    };
+    assert_eq!(lines.scip.len(), 1, "index-scip は 1 行: {:?}", lines.scip);
+    let scip = lines.scip.join(" ");
+    assert_eq!(declared_head(&scip), ["rust-analyzer", "scip"], "rust-analyzer の scip の subcommand: {scip}");
+    assert!(scip.contains("{tree}") && scip.contains("{out}"), "{{tree}} と {{out}} を渡す: {scip}");
+    assert_eq!(lines.roles.len(), 1, "index-roles は 1 行: {:?}", lines.roles);
+    let roles = lines.roles.join(" ");
+    assert_eq!(declared_head(&roles), ["ast-grep", "scan"], "ast-grep の scan: {roles}");
+    let words: Vec<&str> = roles.split_whitespace().collect();
+    for word in [".config/index-roles.yml", "--json=stream", "{tree}"] {
+        assert!(words.contains(&word), "{word} を渡す: {roles}");
+    }
+    let text = declared_text(".vessel.toml");
+    assert!(text.contains("ADR-0105") && text.contains("reverse-index.md §4"), "コメントは ADR-0105 と §4 を名指す");
+    let keys: Vec<&str> = text.lines().filter(|line| !line.starts_with('#')).filter_map(|line| line.split(" = ").next()).collect();
+    let order = ["schema", "allowed-commands", "common-verify", "detection-verify", "remote", "close-check", "row-review", "index-scip", "index-roles"];
+    assert_eq!(keys, order, "ほかの key の順は変わらず、索引の 2 key は末尾");
+    for line in [
+        "allowed-commands = [\"cargo\", \"git\"]",
+        "common-verify = [\"cargo xtask flip-check --base {base}\", \"cargo nextest run --workspace --no-tests=fail --no-fail-fast\",\"cargo clippy --workspace --all-targets -- -D warnings\", \"cargo xtask check\", \"cargo deny check bans licenses sources\"]",
+        "remote = \"origin\"",
+        "close-check = true",
+        "row-review = true",
+    ] {
+        assert!(text.lines().any(|seen| seen == line), "既存の key の値は変わらない: {line}");
+    }
+}
+
+/// (b) toolchain の components は clippy・rustfmt・rust-analyzer で、channel は変わらない。
+#[test]
+fn pipe_index_declared_toolchain_adds_rust_analyzer_and_keeps_the_channel() {
+    let text = declared_text("rust-toolchain.toml");
+    let lines: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
+    assert_eq!(
+        lines,
+        ["[toolchain]", "channel = \"1.98.1\"", "components = [\"clippy\", \"rustfmt\", \"rust-analyzer\"]"],
+        "channel は変わらず components に rust-analyzer が足される"
+    );
+}
+
+/// (c) 役の規則の file の rule の id の集合は器の役の 9 語、どの rule も言語 Rust、名を捕える rule は NAME の meta 変数を持つ。
+#[test]
+fn pipe_index_declared_roles_file_has_one_rust_rule_per_role() {
+    let text = declared_text(".config/index-roles.yml");
+    let rules: Vec<&str> = text.split("\n---\n").filter(|chunk| chunk.lines().any(|line| line.starts_with("id: "))).collect();
+    let ids: Vec<&str> = rules.iter().filter_map(|rule| rule.lines().find_map(|line| line.strip_prefix("id: "))).map(str::trim).collect();
+    assert_eq!(ids, vessel::pipe::index::ROLES, "rule の id は器の役の 9 語と同じ列");
+    let distinct: BTreeSet<&str> = ids.iter().copied().collect();
+    assert_eq!(distinct.len(), vessel::pipe::index::ROLES.len(), "id は重ならない: {ids:?}");
+    for (id, rule) in ids.iter().zip(&rules) {
+        assert!(rule.lines().any(|line| line.trim_end() == "language: Rust"), "{id} は言語 Rust");
+        if ["literal", "pattern", "call", "use", "reexport", "doclink", "capture"].contains(id) {
+            assert!(rule.contains("$NAME"), "{id} は捕えた名を NAME の meta 変数に置く");
+        }
+    }
+}

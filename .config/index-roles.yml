@@ -1,0 +1,139 @@
+# 構文の役の規則（設計 reverse-index.md §5・§10 行 b・ADR-0105）。宣言 `index-roles` が ast-grep の scan に渡す。
+# rule の id は役の語（器の閉じた 9 語）と同じ字。名を捕える rule は捕えた名を meta 変数 NAME に置く。
+# 器は stream の JSON の ruleId・file・range の byteOffset・metaVariables の single の NAME だけを読む。
+id: literal
+language: Rust
+severity: hint
+message: struct の literal の名（`Self` を含む）
+rule:
+  pattern: $NAME
+  inside:
+    kind: struct_expression
+    field: name
+    stopBy: neighbor
+---
+id: pattern
+language: Rust
+severity: hint
+message: match の pattern の位置の path
+rule:
+  any:
+    - pattern: $NAME
+      inside:
+        kind: tuple_struct_pattern
+        field: type
+        stopBy: neighbor
+    - pattern: $NAME
+      inside:
+        kind: struct_pattern
+        field: type
+        stopBy: neighbor
+    - pattern: $NAME
+      kind: scoped_identifier
+      inside:
+        kind: match_pattern
+        field: pattern
+        stopBy: neighbor
+---
+id: call
+language: Rust
+severity: hint
+message: 呼び出しの callee（関数の path と method の名）
+rule:
+  any:
+    - pattern: $NAME
+      inside:
+        kind: call_expression
+        field: function
+        stopBy: neighbor
+    - pattern: $NAME
+      inside:
+        kind: field_expression
+        field: field
+        stopBy: neighbor
+        inside:
+          kind: call_expression
+          field: function
+          stopBy: neighbor
+---
+id: use
+language: Rust
+severity: hint
+message: import の宣言の中の名
+rule:
+  pattern: $NAME
+  any:
+    - kind: identifier
+    - kind: type_identifier
+  inside:
+    kind: use_declaration
+    stopBy: end
+---
+id: reexport
+language: Rust
+severity: hint
+message: 公開の再輸出（`pub use`）の中の名
+rule:
+  pattern: $NAME
+  any:
+    - kind: identifier
+    - kind: type_identifier
+  inside:
+    kind: use_declaration
+    stopBy: end
+    has:
+      kind: visibility_modifier
+      stopBy: neighbor
+---
+id: test
+language: Rust
+severity: hint
+message: test の関数と test の module の範囲
+rule:
+  any:
+    - kind: function_item
+    - kind: mod_item
+  follows:
+    kind: attribute_item
+    regex: '\btest\b'
+    stopBy:
+      not:
+        kind: attribute_item
+---
+id: doclink
+language: Rust
+severity: hint
+message: doc の link（`[Name]`）を持つ doc comment（捕える名は comment の本文）
+rule:
+  pattern: $NAME
+  kind: line_comment
+  regex: '^//[/!].*\[[A-Za-z_`][^\]]*\]'
+---
+id: capture
+language: Rust
+severity: hint
+message: 文字列の中の暗黙の取り込み（`{name}`）を持つ literal（捕える名は literal の本文）
+rule:
+  pattern: $NAME
+  kind: string_literal
+  regex: '\{[A-Za-z_][A-Za-z0-9_]*(:[^}]*)?\}'
+---
+id: vis
+language: Rust
+severity: hint
+message: 定義の可視性の字（item の範囲に付け、可視性の字を NAME に置く）
+rule:
+  any:
+    - kind: function_item
+    - kind: struct_item
+    - kind: enum_item
+    - kind: union_item
+    - kind: trait_item
+    - kind: type_item
+    - kind: const_item
+    - kind: static_item
+    - kind: mod_item
+  has:
+    pattern: $NAME
+    kind: visibility_modifier
+    stopBy: neighbor
