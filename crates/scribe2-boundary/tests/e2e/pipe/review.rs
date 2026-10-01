@@ -1178,22 +1178,18 @@ fn prelens_unrelated(repo: &Path, name: &str) {
 }
 
 /// (j) 周またぎ（材料が同じ）: 別の行の lens が撃ち中の周に材料に入らない file を main に commit した次の周も、B は
-/// `firm:1,provisional:0` のままで finding は `new=false`、`[DISPATCH-BUNDLE]` の行は commit の前と同じ。`--lens` 無しで撃った周と
-/// 値 0 の写しで撃った周も同じ（撃たない周も写し直す）。
+/// `firm:1,provisional:0` のままで finding は `new=false`、`[DISPATCH-BUNDLE]` の行は commit の前と同じ。`--lens` 無しで撃った周も
+/// 同じ（撃たない周も写し直す）。値 0 の周は持ち越さない（`pipe_prelens_off_` の (c)・設計 row-review.md §6）。
 #[test]
 fn pipe_prelens_same_material_keeps_the_finding_across_a_main_move() {
     let (place, lens) = prelens_crossing();
     let before = prelens_bundles(&place);
-    let rounds: [(&str, &dyn Fn()); 3] = [
+    let rounds: [(&str, &dyn Fn()); 2] = [
         ("--lens の周", &|| {
             prelens_turn(&place, &lens);
         }),
         ("--lens 無しの周", &|| {
             prelens_round(&place, None);
-        }),
-        ("値 0 の周", &|| {
-            prelens_rules(&place.state, Some(0));
-            prelens_turn(&place, &lens);
         }),
     ];
     for (index, (label, round)) in rounds.iter().enumerate() {
@@ -1206,6 +1202,69 @@ fn pipe_prelens_same_material_keeps_the_finding_across_a_main_move() {
         assert!(finding.contains(" at=prelens new=false "), "{label}: 前の結果に在った finding は new=false: {result}");
         assert_eq!(prelens_bundles(&place), before, "{label}: 束の行は変わらない");
     }
+    prelens_clean(&place, &[]);
+}
+
+// ───── 先撃ちの退役の段 1（設計 row-review.md §6・行 d・接頭辞 `pipe_prelens_off_`） ─────
+// 値 0 の周は片付けの後で返る＝材料の組み直しも一時の worktree も前の判定の写し直しも撃たない。base は値 0 の周も組み直して写し直す。
+
+/// (a) 値 0 の写しの周は、clean の依存待ちの行 B の置き場に材料の dir も key も一時の worktree も作らず、worktree の登録も増やさない。
+/// 値 1 の同じ fixture の周は作る（対照）。
+#[test]
+fn pipe_prelens_off_builds_no_material_at_value_zero_but_builds_at_value_one() {
+    let pass = lens_verdict("PASS");
+    for (limit, built) in [(0, false), (1, true)] {
+        let place = prelens_place(Some(limit), &[PRELENS_B]);
+        prelens_turn(&place, &prelens_lens(&place.state, &format!("echo '{pass}'")));
+        prelens_settle(&place.state, usize::from(built));
+        let dir = prelens_dir(&place.state, PRELENS_B);
+        assert_eq!(dir.join("key").exists(), built, "値 {limit}: key");
+        assert_eq!(dir.join("review").exists(), built, "値 {limit}: 材料の dir");
+        let list = git(&place.repo, &["worktree", "list", "--porcelain"]);
+        assert!(built || !dir.join("tree").exists(), "値 {limit}: 一時の worktree の dir");
+        assert!(built || !list.contains("precheck/lens"), "値 {limit}: worktree の登録: {list}");
+        assert_eq!(prelens_word(&place.state, PRELENS_B), "clean", "値 {limit}: 事前審査は clean");
+        prelens_clean(&place, &[]);
+    }
+}
+
+/// (b) 値 0 の周も、母集団を出た bead の置き場と前の周の木（lens が終わった行の一時の worktree）を外す。
+#[test]
+fn pipe_prelens_off_still_prunes_the_gone_places_and_the_leftover_trees() {
+    let place = prelens_place(Some(1), &[PRELENS_B]);
+    let pass = lens_verdict("PASS");
+    prelens_turn(&place, &prelens_lens(&place.state, &format!("echo '{pass}'")));
+    assert!(prelens_out(&place.state, PRELENS_B), "B の偽 lens が終わる");
+    let gone = prelens_dir(&place.state, "s2-pre.gone");
+    fs::create_dir_all(&gone).expect("母集団を出た bead の置き場を作れる");
+    fs::write(gone.join("key"), "x\n").expect("置き場に file を書ける");
+    let tree = prelens_dir(&place.state, PRELENS_B).join("tree");
+    assert!(tree.join(".git").is_file(), "周の前は B の木が在る");
+    prelens_rules(&place.state, Some(0));
+    prelens_round(&place, None);
+    assert!(!gone.exists(), "母集団を出た bead の置き場は外れる");
+    assert!(!tree.exists(), "前の周の木は外れる");
+    let list = git(&place.repo, &["worktree", "list", "--porcelain"]);
+    assert!(!list.contains("precheck/lens"), "worktree の登録も外れる: {list}");
+    prelens_clean(&place, &[]);
+}
+
+/// (c) 値 1 の写しで B が FAIL の確定を写し終え C の lens が撃ち中の置き場で、値 0 に書き換えて材料に入らない file を main に commit した
+/// 次の周の後、B の置き場の key は周の前と同じ字、B の結果は clean で finding の行を持たず、束の行は 0 本（確定は持ち越さない）。
+#[test]
+fn pipe_prelens_off_neither_rebuilds_nor_carries_a_finding_over() {
+    let (place, lens) = prelens_crossing();
+    let key = || fs::read_to_string(prelens_dir(&place.state, PRELENS_B).join("key")).unwrap_or_default();
+    let before = key();
+    assert!(!before.is_empty() && !prelens_bundles(&place).is_empty(), "周の前は key と束が在る");
+    prelens_rules(&place.state, Some(0));
+    prelens_unrelated(&place.repo, "unrelated-off.txt");
+    prelens_turn(&place, &lens);
+    assert_eq!(key(), before, "B の key は周の前と同じ字");
+    let result = prelens_result(&place.state, PRELENS_B);
+    assert_eq!(prelens_word(&place.state, PRELENS_B), "clean", "B の結果は clean: {result}");
+    assert!(!result.lines().any(|found| found.starts_with("finding=")), "finding の行を持たない: {result}");
+    assert!(prelens_bundles(&place).is_empty(), "束の行は 0 本: {:?}", prelens_bundles(&place));
     prelens_clean(&place, &[]);
 }
 

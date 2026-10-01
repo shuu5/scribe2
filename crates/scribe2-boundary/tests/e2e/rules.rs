@@ -971,8 +971,8 @@ fn rules_lifecycle_rows_refuse_an_age_word_outside_the_seat_words() {
 }
 
 /// 事前審査の先撃ちの 1 周の本数の行（設計 dispatcher.md §27 形 1・行 aa・`s2-07l.718`）が埋め込み manifest に id / kind / 形 Int /
-/// 値 1 / enabled / 裁定 id / 裁定日で 1 本在り、行は `gate.lens_count` の直後・kind は `ALL` の `GateLensCount` の直後で
-/// `GateTokenCap` の前、字面から引け、形は Int だけ（base では行も kind も無い ＝ RED）。
+/// 値 0（先撃ちの退役の段 1・設計 row-review.md §6）/ enabled / 裁定 id / 裁定日で 1 本在り、行は `gate.lens_count` の直後・kind は
+/// `ALL` の `GateLensCount` の直後で `GateTokenCap` の前、字面から引け、形は Int だけ（base では値が 1 ＝ RED）。
 #[test]
 fn rules_prelens_row_follows_the_lens_count() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
@@ -981,10 +981,10 @@ fn rules_prelens_row_follows_the_lens_count() {
     let kind = RuleKind::parse("PipePrecheckLensPerRound").expect("字面から引ける");
     assert_eq!((kind.as_str(), kind.shape()), ("PipePrecheckLensPerRound", ValueShape::Int), "kind の字面と形");
     assert_eq!(row.kind, kind, "{id} の kind");
-    assert_eq!(row.value, RuleValue::Int(1), "{id} の値（1 周に 1 本）");
+    assert_eq!(row.value, RuleValue::Int(0), "{id} の値（撃たない）");
     assert!(row.enabled, "{id} は既定で効く");
-    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-27T17:33Z 項 2-2", "2026-09-27"), "{id} の裁定 id と裁定日");
-    assert_eq!(int_row(&manifest, id), Ok(1), "{id} を整数の読み手で引ける");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-30T22:13Z 項 precheck", "2026-09-30"), "{id} の裁定 id と裁定日");
+    assert_eq!(int_row(&manifest, id), Ok(0), "{id} を整数の読み手で引ける");
     assert_eq!(manifest.rows().iter().filter(|found| found.kind == kind).count(), 1, "kind の行は 1 本");
     let at = ALL.iter().position(|found| *found == RuleKind::GateLensCount).expect("GateLensCount は ALL に在る");
     let after: Vec<RuleKind> = ALL.iter().skip(at + 1).take(2).copied().collect();

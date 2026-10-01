@@ -17,3 +17,5 @@ remote = "origin"
 # close の理由の門に加わる（設計 ledger-form.md §16・ADR-0097）。理由の無い close・和の外の理由・席の着地の形の close を
 # 起票の門が断る。契約の close は land の終端が書く。
 close-check = true
+# merge の門の 2 つ目の判定（設計 row-review.md §4・§6）。契約表の動いた PR の head は、行の審査の記録が pass でなければ merge を断る。
+row-review = true

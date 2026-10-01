@@ -108,11 +108,15 @@ pub(super) struct Sweep<'a, 'b> {
 }
 
 /// 先撃ちの 1 周（形 aa 1〜4）: 母集団を出た bead の置き場と落ちた周の worktree の残りを外し、clean の行ごとに材料を組み直し・
-/// 判定を結果に写し、上限の空きの分だけ lens を裏で起こす。組み直しと写し直しは撃つ条件に依らず毎周撃ち、行が無い・読めない・
-/// 値 0・`--lens` の無い周は起こさない（上限の空きを 0 とする）。
+/// 判定を結果に写し、上限の空きの分だけ lens を裏で起こす。組み直しと写し直しは行が無い・読めない・`--lens` の無い周も撃ち（起こさない
+/// ＝上限の空きを 0 とする）、**値 0 の周は片付けの後で返る**＝材料の組み直しも一時の worktree も前の判定の写し直しも撃たない
+/// （写し直すには材料の鍵が要り、鍵は組まないと求まらない・先撃ちの確定は値 0 の周に持ち越さない・設計 row-review.md §6）。
 pub(super) fn round(sweep: &Sweep<'_, '_>, forecast: &mut dyn FnMut(&str) -> Option<Forecast>) {
     let root = sweep.dir.join(LENS_DIR);
     prune(sweep.input.repo, &root, sweep.population);
+    if crate::rules::int_row(sweep.input.manifest, ROW) == Ok(0) {
+        return;
+    }
     let flying = sweep.population.rows.keys().filter(|bead| in_flight(&root.join(bead))).count();
     let cmd = sweep.input.lens.unwrap_or_default();
     let limit = limit_of(sweep.input.manifest).filter(|_| sweep.input.lens.is_some()).unwrap_or_default();

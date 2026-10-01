@@ -3283,6 +3283,19 @@ fn hook_merge_gate_row_review_help_is_not_a_merge_for_the_window_and_the_stale_m
     clean(&[&place.repo, &place.state, &place.shims]);
 }
 
+/// (a) 本 repo の自己ホストの宣言（`.vessel.toml`）を写した anchor で、trailer の良い本文を渡す head を固定しない merge が
+/// no-head-pin で断られる（merge の門の 2 つ目の判定が本 repo に掛かっている・設計 row-review.md §6・base の宣言は key を持たない＝RED）。
+#[test]
+fn hook_merge_gate_self_declaration_denies_a_merge_without_a_head_pin() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("repo の root を解ける");
+    let declared = fs::read_to_string(root.join(DECL_FILE)).expect("自己ホストの宣言を読める");
+    let (repo, state) = rr_place(Some(&declared));
+    let out = live_hook(&repo, &bash_payload(&repo, &rr_merge(None, true)));
+    rr_shape(&out, "no-head-pin");
+    assert_eq!(rr_words(&state), ["merge-deny no-head-pin"], "記録は 1 行");
+    clean(&[&repo, &state]);
+}
+
 // ─────────────── 選択式の問いの門（設計 vessel-hook.md §20 行 ca・ADR-0084・接頭辞 `hook_choice_question_`） ───────────────
 //
 // AskUserQuestion の呼び出しを、席か runner か・誰が開いた session か・skill の直後か・例外の印が在るかに依らず全部の門の前で
