@@ -215,6 +215,8 @@ effect が operation の問いなので、未反映の裁定（FR84）に数え�
 
 ## 10. ADR
 
+- 決定: [ADR-0106](../../design-intent/decisions/ADR-0106-limit-permits-raise-a-named-cap-for-one-bead-on-a-bound-ruling.html)（proposed・下の決定の文の案 5 つを 1 本の決定にまとめた。rules 行 2 本の値の裁定 id は SRS の round で取る）。
+
 ADR を書く条件の 1（C1・C7 / A4.2・C10 の解釈）・3（event の kind と形・run dir の写し・rules 行の kind 2 つ・跨版）・4（却下の分岐）に当たる。実装の前に ADR を land し、同じ PR で語彙と decisions の索引を直す。決定の文の案:
 
 1. 消費の上限の行のうち rules 行が名指す行だけを、bead 1 つに限って有限の値へ上げる上限の許可を、event log の新しい kind 1 つで持ち、manifest の値は変えない（C1 の読み: 値の宣言は manifest、許可は承認 event と同じ実行時の記録）。

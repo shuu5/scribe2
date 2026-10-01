@@ -1997,3 +1997,10 @@ terms:
     aliases: [code facts field]
     definition: 契約表の行の任意の欄 code-facts。 要素は列 (refs・files・callers・literals・patterns・teeth・vis) と項目と値の 1 組で、 行の審査・受付・起動の列が各々の commit の code の索引で測り、 違えば断るか受付の理由 code-facts で待たせる (ADR-0105)。
     relationships: [code の索引, 逆引きの表, 受付, 起動の列]
+  # ---------------------------------------------------------------- 上限の許可 (ADR-0106・proposed)
+  - canonical: 上限の許可
+    domain: consumer
+    aliases: [limit permit]
+    definition: 消費の上限の rules 行のうち rules 行 pipe.permit_rows が名指す 1 行を、 bead 1 つに限って manifest の値より大きい有限の値へ上げる記録 (ADR-0106・proposed・設計 docs/design/limit-permit.md)。 event log の kind LimitPermitted の 1 件で、 対話面の chat の経路の発話に結んだ裁定 id を要り、 期限 (上限は rules 行 pipe.permit_max_h)・bead の着地・同じ bead と行の新しい記帳・取り消しで切れる。 読むのはその bead の便の gate の予算の照合と gate が起こす lens だけで、 manifest の値は変えない。 上限を外す形は持たない。 event の kind と口 pipe permit はこの語の別名として書く。
+    relationships: [rules 行, manifest, event log, 裁定 id, 裁定 event, 発話 event, 発話の経路, 対話面, 台帳の問い, gate, lens]
+    flagged_ambiguities: [上限の許可 (bead 1 つの消費の上限を上げる記録・ADR-0106) と上限の余地 (受付が見込み行数と比べる file の上限との差・ADR-0057) と上限停止 (口座残量の上限で便が止まること) は別, 型の名 Allowance は口座残量の型で使用済みなので、 上限の許可の訳に使わない]
