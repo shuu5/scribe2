@@ -756,6 +756,7 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
         pool: entry.runner.and_then(|runner| runner.pool),
         limits: entry.limits,
         policy: entry.policy,
+        rules: entry.rules,
     });
     lines.extend(regated.out);
     if regated.rc != RC_OK {

@@ -13,6 +13,7 @@ guard=merge-gate timing=in-loop on-failure=fail-closed boundary=hook::merge_gate
 guard=host-guard timing=in-loop on-failure=fail-closed boundary=hook::host_guard::HostGuardDecision
 guard=register-refusal timing=in-loop on-failure=fail-closed boundary=seat::role::RegisterRefusal
 guard=role-guard timing=in-loop on-failure=fail-closed boundary=hook::role_guard::RoleDecision
+guard=bypass-deny timing=in-loop on-failure=fail-closed boundary=hook::bypass_guard::BypassDecision
 guard=live-row-guard timing=in-loop on-failure=fail-closed boundary=hook::live_row::LiveRowDecision
 guard=contract-table timing=post-hoc on-failure=fail-closed boundary=pipe::table::TableError
 guard=intake-unfit timing=in-loop on-failure=fail-closed boundary=pipe::declaration::Unfit
@@ -35,4 +36,4 @@ guard=inject-refusal timing=in-loop on-failure=fail-closed boundary=seat::inject
 guard=spawn-line timing=in-loop on-failure=fail-closed boundary=pipe::spawn::LineRefusal
 guard=land-terminal timing=post-hoc on-failure=fail-closed boundary=pipe::land::Terminal
 guard=turn-end-block timing=in-loop on-failure=fail-open boundary=hook::turn_end::TurnEndDecision
-polarity: guards=33 in-loop=27 post-hoc=6 fail-open=5
+polarity: guards=34 in-loop=28 post-hoc=6 fail-open=5

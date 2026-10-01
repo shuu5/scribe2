@@ -929,10 +929,19 @@ fn pipe_gate_lens_account_fake_lens_ignores_extra_args() {
     assert_eq!(value_of(&pairs, "findings"), FAKE_FINDINGS, "必須 2 key も同じ 1 行から読める: {pairs:?}");
     assert_eq!(
         gated_details(&state, &id),
-        vec!["verdict:PASS,account:a1".to_owned()],
+        vec![format!("verdict:PASS,account:a1,rules:{}", rules_source(&repo, Some(&rules)))],
         "器が選んだ口座を足した周である（足さない木ではこの detail が出ない）"
     );
     clean(&[&repo, &state]);
+}
+
+/// `Gated` の detail の末尾の `rules:<出所>` の期待（設計 limit-permit.md §17 約束 9）: `--rules` を渡さない周は `embedded`、渡した周は
+/// 歯が `git hash-object --no-filters` で測ったその file の blob id（器の測りと別の読み手で測る）。
+pub(super) fn rules_source(repo: &Path, rules: Option<&str>) -> String {
+    match rules {
+        None => "embedded".to_owned(),
+        Some(path) => git(repo, &["hash-object", "--no-filters", "--", path]),
+    }
 }
 
 /// 便の `RunStage(Gated)` の detail の列（物理順）。

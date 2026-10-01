@@ -322,6 +322,8 @@ pub(super) fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         pool: pool.as_ref(),
         limits,
         policy,
+        // 読んだ manifest の出所を `Gated` の detail へ残す（値の欠けは manifest を読む口が先に断っている・設計 limit-permit.md §17）。
+        rules: flag(args, "--rules").ok().flatten().map(Path::new),
     })
 }
 

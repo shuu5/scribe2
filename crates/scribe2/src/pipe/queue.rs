@@ -182,7 +182,8 @@ fn first_gated_at(events: &[Event]) -> BTreeMap<&str, &str> {
 
 /// 便ごとの**最新の** [`TURN_TAKEN`] の ts（**pure**・設計 pipeline.md §22 約束 4・5）。番を取った後に `verdict:` が PASS で
 /// ない `Gated` の記帳（列を離れた周）が在れば消す＝戻ってきた便は番を持たない。撃ち直しの `verdict:PASS` と
-/// `stale:` は列に残る周なので消さない。
+/// `stale:` は列に残る周なので消さない。判定の語は `verdict:` の後ろを最初の `,` の手前で切って読む（`verdict:PASS,rules:…` のように
+/// 後ろに項が付いても PASS は PASS・設計 limit-permit.md §17 約束 10）。
 fn taken_at(events: &[Event]) -> BTreeMap<&str, &str> {
     let mut taken: BTreeMap<&str, &str> = BTreeMap::new();
     for event in events.iter().filter(|event| event.kind == EventKind::RunStage && event.stage == Some(Stage::Gated)) {
@@ -190,7 +191,7 @@ fn taken_at(events: &[Event]) -> BTreeMap<&str, &str> {
             Some(TURN_TAKEN) => {
                 taken.insert(event.run.as_str(), event.ts.as_str());
             }
-            Some(detail) if detail.strip_prefix(VERDICT).is_some_and(|verdict| verdict != Verdict::Pass.as_str()) => {
+            Some(detail) if detail.strip_prefix(VERDICT).is_some_and(|rest| rest.split(',').next() != Some(Verdict::Pass.as_str())) => {
                 taken.remove(event.run.as_str());
             }
             _ => {}
@@ -762,6 +763,24 @@ mod tests {
         ];
         assert_eq!(turn_in(Some(&queue), "front"), Turn::After("regating".to_owned()), "戻った便は追い抜かない");
         assert_eq!(turn_in(Some(&queue), "regating"), Turn::First, "撃ち直し中の便が先頭のまま");
+    }
+
+    /// (l) 番を取った後の `verdict:PASS` に付く後ろの項（出所・口座・許可）は番を消さず、PASS でない判定の語は後ろの項が付いても消す
+    /// （語は `verdict:` の後ろを最初の `,` の手前で切って読む・設計 limit-permit.md §17 約束 10）。
+    #[test]
+    fn pipe_order_taken_suffixed_pass_keeps_the_turn_and_other_verdicts_drop_it() {
+        let gated = |run: &str, ts: &str, detail: &str| event_with(run, EventKind::RunStage, Stage::Gated, ts, Some(detail));
+        let kept = [
+            "verdict:PASS,rules:embedded",
+            "verdict:PASS,account:a1,rules:0123abcd0123abcd0123abcd0123abcd0123abcd",
+            "verdict:PASS,rules:embedded,permit:gate.token_cap=9 ruling=s2-rq9.1",
+        ];
+        for detail in kept {
+            let events = [gated("run", EARLY, "turn:taken"), gated("run", MID, detail)];
+            assert_eq!(super::taken_at(&events).get("run").copied(), Some(EARLY), "番を残す: {detail}");
+        }
+        let events = [gated("run", EARLY, "turn:taken"), gated("run", MID, "verdict:INCONCLUSIVE,rules:embedded")];
+        assert_eq!(super::taken_at(&events).get("run"), None, "PASS でない語は後ろの項が付いても番を消す");
     }
 
     /// 自分が最古の `Gated(PASS)` なら `First`・後から `Gated` になった便は `After(自分)`。

@@ -744,7 +744,7 @@ fn own_files(scene: &Scene) -> Vec<Own> {
 
 /// Bash の書き込みの対象の語と、同じ command の cd / pushd の segment より後ろかの対。redirect の対象（[`redirects`]）と、
 /// launcher を剥いだ動詞ごとの対象（[`verb_targets`]）。
-fn own_targets(segments: &[Vec<String>], cwd: &Path) -> Vec<(String, bool)> {
+pub(crate) fn own_targets(segments: &[Vec<String>], cwd: &Path) -> Vec<(String, bool)> {
     let (mut after_cd, mut carried, mut found) = (false, false, Vec::new());
     for words in segments {
         let (kept, redirected, open) = redirects(words, carried);
@@ -851,6 +851,17 @@ fn own_path<'o>(cwd: &Path, path: &str, own: &'o [Own]) -> Option<&'o Own> {
     let mut forms = forms_of(cwd, path).unwrap_or_else(|| vec![fold(cwd, path)]);
     forms.extend(fs::canonicalize(cwd.join(path)).ok());
     own.iter().find(|file| file.hit_by(&forms))
+}
+
+/// 対象の語（か編集先の path）が file 1 つに当たるか（見張り自身の設定と同じ比べ方・[`super::bypass_guard`] の event log の門が呼ぶ）:
+/// 解けない語（[`unresolved`]）は最後の要素が file の名と同じなら当たり、それ以外は [`own_path`] で字句で畳んだ path か実体が
+/// 一致する周と、実体の在る file の祖先に当たる周。
+pub(crate) fn lands_on(file: &Path, word: &str, after_cd: bool, cwd: &Path) -> bool {
+    if unresolved(word, after_cd, cwd) {
+        return file.file_name().is_some_and(|name| Path::new(word).file_name() == Some(name));
+    }
+    let own = [Own { exists: file.exists(), paths: both(file.to_path_buf()) }];
+    own_path(cwd, word, &own).is_some()
 }
 
 /// fnmatch の規則で pattern が text の全体に当たるか（依存を足さない自前の 1 関数・`*` は `/` を含めて任意の列・`?` は 1 字・

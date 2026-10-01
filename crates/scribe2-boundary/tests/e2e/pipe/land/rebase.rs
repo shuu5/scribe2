@@ -104,6 +104,56 @@ fn pipe_land_rebase_follows_landed_sibling_and_lands() {
     clean(&[&repo, &state]);
 }
 
+/// 便の `Gated` の detail のうち `verdict:` で始まるもの（物理順・番の記帳 `turn:taken` は除く）。
+fn verdict_details(state: &Path, id: &str) -> Vec<String> {
+    gated_details(state, id).into_iter().filter(|detail| detail.starts_with("verdict:")).collect()
+}
+
+/// (j) 兄弟の便の着地で main が動いた便を `--rules` つきの land で追随させると、`verdict:` で始まる `Gated` の detail は最初の gate の
+/// `rules:embedded` と、再 gate の `rules:<その file の blob id>`（land が受けた `--rules` を gate へ渡す）の 2 件。検出線の面に触れない
+/// commit で main が動いた便の引き継ぎ（`regate=skipped`）の detail は `verdict:PASS` のまま（`rules:` の項を持たない・manifest を読んで
+/// 判じた周ではない）。base は再 gate の detail が `verdict:PASS` だけ → RED。
+#[test]
+fn pipe_land_rules_source_regate_carries_the_blob_id_and_the_skip_carries_none() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let first = land_solo(&repo, &state, &id_a);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "1 本目の land: {}", stderr_of(&first));
+    let rules = write_rules(&state, "rules-follow.toml", 1, 1_000_000).display().to_string();
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = land_extra(&repo, &state, &id_b, &["--rules", &rules, "--lens", &lens]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "追随した land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=PASS") && !stdout_of(&out).contains("regate=skipped"), "再 gate を撃った: {}", stdout_of(&out));
+    let blob = rules_source(&repo, Some(&rules));
+    assert_eq!(
+        verdict_details(&state, &id_b),
+        ["verdict:PASS,rules:embedded".to_owned(), format!("verdict:PASS,rules:{blob}")],
+        "最初の gate は embedded・再 gate は land が受けた file の blob id"
+    );
+    clean(&[&repo, &state]);
+
+    // 面の外（`notes/` だけ）で main が動いた便は再 gate を省いて前周の PASS を引き継ぐ（`--rules` を渡しても項を足さない）。
+    let (repo, state) = repo_with_state();
+    let seed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let path = write_contract(&repo, &[], &[]);
+    let base = commit_main_file(&repo, "notes/pre.txt", "pre\n");
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let moved = rewrite_main_from(&repo, &seed, "notes/other.txt", "other\n");
+    assert_diverged(&repo, &base, &moved, &seed);
+    let rules = write_rules(&state, "rules-skip.toml", 1, 1_000_000).display().to_string();
+    let out = land_extra(&repo, &state, &id, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "面の外の追随は再 gate 無しで land: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("regate=skipped"), "再 gate を省いて引き継いだ: {}", stdout_of(&out));
+    assert_eq!(
+        verdict_details(&state, &id),
+        ["verdict:PASS,rules:embedded".to_owned(), "verdict:PASS".to_owned()],
+        "引き継ぎの記帳の字は不変（rules: を持たない）"
+    );
+    clean(&[&repo, &state]);
+}
+
 /// 同一変更の 2 便: 1 本目が land した後の 2 本目は rebase で commit が 0 本になり、
 /// **gate を撃ち直さず `Failed detail=rebase-empty`**（main は 1 本目の sha のまま・`s2-07l.125`）。
 #[test]

@@ -94,6 +94,9 @@ pub enum Guard {
     Register,
     /// 席の権能の執行＝役割の行に無い権能付き subcommand と path 種別の編集を止める（[`crate::hook::role_guard`]）。
     Role,
+    /// 席の道具の呼び出しの 3 形（hook の subcommand の直撃・置き場の event log への書き・pipe gate / land / resume への `--rules`）を
+    /// 権能の guard の後ろ・走っている便の行の門の前で断る（[`crate::hook::bypass_guard`]・設計 limit-permit.md §17・FR112）。
+    BypassDeny,
     /// 走っている便の契約の行の字を編集と commit の時点で止める門（[`crate::hook::live_row`]・設計 vessel-hook.md §15）。
     LiveRow,
     /// 契約表の検査＝閉包 ⊄ write-set・区間 / req / section / verify / depends の欠陥（[`crate::pipe::table`]・本便は CI の post-hoc）。
@@ -158,6 +161,7 @@ pub const ALL: &[Guard] = &[
     Guard::HostGuard,
     Guard::Register,
     Guard::Role,
+    Guard::BypassDeny,
     Guard::LiveRow,
     Guard::ContractTable,
     Guard::Intake,
@@ -220,6 +224,7 @@ impl Guard {
             Self::HostGuard => crate::hook::host_guard::POLARITY,
             Self::Register => crate::seat::role::POLARITY,
             Self::Role => crate::hook::role_guard::POLARITY,
+            Self::BypassDeny => crate::hook::bypass_guard::POLARITY,
             Self::LiveRow => crate::hook::live_row::POLARITY,
             Self::ContractTable => crate::pipe::table::POLARITY,
             Self::Intake => crate::pipe::declaration::POLARITY,
@@ -259,6 +264,7 @@ impl Guard {
             Self::HostGuard => "hook::host_guard::HostGuardDecision",
             Self::Register => "seat::role::RegisterRefusal",
             Self::Role => "hook::role_guard::RoleDecision",
+            Self::BypassDeny => "hook::bypass_guard::BypassDecision",
             Self::LiveRow => "hook::live_row::LiveRowDecision",
             Self::ContractTable => "pipe::table::TableError",
             Self::Intake => "pipe::declaration::Unfit",
@@ -298,6 +304,7 @@ impl Guard {
             Self::HostGuard => "host-guard",
             Self::Register => "register-refusal",
             Self::Role => "role-guard",
+            Self::BypassDeny => "bypass-deny",
             Self::LiveRow => "live-row-guard",
             Self::ContractTable => "contract-table",
             Self::Intake => "intake-unfit",

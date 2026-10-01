@@ -13,6 +13,7 @@
 
 pub mod anchor_guard;
 pub mod answer_mouth;
+pub mod bypass_guard;
 pub mod choice_question;
 pub mod command;
 pub mod graph_guard;
@@ -41,6 +42,7 @@ use crate::seat::ledger::LedgerError;
 use crate::seat::recent;
 use crate::seat::state::Event;
 use anchor_guard::AnchorDecision;
+use bypass_guard::BypassDecision;
 use choice_question::ChoiceQuestionDecision;
 use command::CommandDecision;
 use guard::Decision;
@@ -85,6 +87,9 @@ const EVENT_USER_PROMPT_SUBMIT: &str = "user-prompt-submit";
 const EVENT_STOP: &str = "stop";
 /// `pre-compact` の event 名（圧縮の直前の 1 枠・設計 seat-roles.md §22）。
 const EVENT_PRE_COMPACT: &str = "pre-compact";
+/// hook の event の 6 語（dispatch の腕と同じ字・`plugin/hooks/hooks.json` が撃つ `hook <event>` と集合が一致する・設計 limit-permit.md §17）。
+pub const EVENTS: [&str; 6] =
+    [EVENT_SESSION_START, EVENT_PRE_TOOL_USE, EVENT_PERMISSION_REQUEST, EVENT_USER_PROMPT_SUBMIT, EVENT_STOP, EVENT_PRE_COMPACT];
 /// 記録の置き場を上書きする flag。
 const FLAG_STATE_DIR: &str = "--state-dir";
 /// 自席の pane id を渡す flag（打刻と記録の `seat` 列が同じ値から解く）。
@@ -706,6 +711,11 @@ fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
     let role = role_outcome(hooked, &op, started);
     if role.rc != RC_OK {
         return role;
+    }
+    // 権能 guard が断らなかった周の後ろ・走っている便の行の門の前: 席の道具の 3 形（設計 limit-permit.md §17・FR112）。
+    let bypass = bypass_guard::Scene { tool: &tool, command: command.as_deref(), path: path.as_deref(), cwd, state_dir: hooked.dir };
+    if let BypassDecision::Deny { reason, line } = bypass_guard::decide(&bypass) {
+        return denied(hooked, &format!("{} {}", bypass_guard::WHAT, reason.as_str()), line, started);
     }
     // 権能 guard が断らなかった周の後ろの 1 段（走っている便の行の門・設計 vessel-hook.md §15 形 7）。
     let scene = live_row::Scene { tool: &tool, command: command.as_deref(), payload, cwd, root, state_dir: hooked.dir };

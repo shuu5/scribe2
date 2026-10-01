@@ -19,7 +19,7 @@
 //!
 //! **同じ便を 2 度以上通ることが在る**（INCONCLUSIVE からの測り直し）。`verdict.json` は
 //! 最後の判定で上書きし、`RunStage stage=Gated detail=verdict:<V>`（器が口座を選んだ周は
-//! `,account:<label>` 付き）は追記する。
+//! `,account:<label>` 付き・末尾に読んだ manifest の出所 `,rules:<出所>`）は追記する。
 //! 残るのは **3 値の履歴だけ**である——「1 度目は測れなかった」は event から読めるが、
 //! **なぜ測れなかったか（evidence）は上書きで消える**（理由まで残すには面を 1 つ増やす
 //! ことになり、MVP では取らない）。**測り直してよい便か**の判定はここではなく段の入口
@@ -65,6 +65,7 @@ use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::LockPolicy;
 use crate::fleet::{cli::now_utc, Cost, CostSource, EventKind, Stage, SCHEMA};
+use crate::invocation::Invocation;
 use crate::rules::manifest::Manifest;
 use findings::Tally;
 use lens::{
@@ -274,6 +275,8 @@ pub struct Gate<'a> {
     pub limits: Limits,
     /// lock の待ち方。
     pub policy: LockPolicy,
+    /// 受けた `--rules` の path（`Gated` の detail の `rules:<出所>` を測る・受けていない周は `None`＝埋め込み・設計 limit-permit.md §17）。
+    pub rules: Option<&'a Path>,
 }
 
 /// 実測した 2 つの量。
@@ -325,6 +328,8 @@ struct Decision {
     /// lens を起こした口座（器が選んだ周だけ `Some`＝`Gated` の detail の `account:<label>`・設計
     /// account-autonomy.md §15）。宣言 0 の周と選べなかった周は `None`（足さない＝継承と弁別できる・C10）。
     account: Option<String>,
+    /// 読んだ manifest の出所（`embedded` / file の blob id / `unreadable`・gate の入口で 1 回測る・[`rules_word`]）。
+    rules: String,
 }
 
 /// [`decide`] の戻り（判定・lens の scope の片付け・lens を起こした口座）。
@@ -340,6 +345,7 @@ struct Decided {
 /// gate を 1 回通す。
 pub fn gate(entry: &Gate<'_>) -> Outcome {
     let worktree = worktree_path(entry.repo, entry.run);
+    let rules = rules_word(entry.rules, entry.repo);
     // **「無い」と「読めない」を分ける**（C10）: 置き場が壊れている周を前提違反に化けさせない。
     let base = match super::base_of_run(entry.state_dir, entry.run) {
         super::Base::Known(found) => found,
@@ -374,6 +380,7 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
         tally: decided.judged.tally,
         scope: decided.scope,
         account: decided.account,
+        rules,
     };
     match settle(entry, &decision) {
         Err(reason) => broken(reason),
@@ -682,16 +689,32 @@ fn settle(entry: &Gate<'_>, decision: &Decision) -> Result<(), String> {
     .map_err(|err| err.to_string())
 }
 
-/// `Gated` の detail（`verdict:<V>`・器が lens の口座を選んだ周は `,account:<label>`）。
+/// `Gated` の detail（`verdict:<V>`・器が lens の口座を選んだ周は `,account:<label>`・末尾に `,rules:<出所>`）。
 ///
 /// 語彙は `Spawned` の `account:<label>` と同じ 1 つで、**足すのは器が選んだ周だけ**（設計
 /// account-autonomy.md §15 (3)）——宣言 0 の継承と「選べなかった」を接尾辞の不在で弁別できる（C10）。
+/// `rules:` は毎周の末尾（読んだ manifest の出所・設計 limit-permit.md §17 約束 9）。
 fn gated_detail(decision: &Decision) -> String {
     let verdict = format!("verdict:{}", decision.verdict.as_str());
+    let rules = &decision.rules;
     match &decision.account {
-        None => verdict,
-        Some(label) => format!("{verdict},account:{label}"),
+        None => format!("{verdict},rules:{rules}"),
+        Some(label) => format!("{verdict},account:{label},rules:{rules}"),
     }
+}
+
+/// 読んだ manifest の出所の語: 埋め込みは `embedded`（git を撃たない）、`--rules` の path は std の absolute で絶対にして
+/// `git -C <repo> hash-object --no-filters -- <path>` の stdout の 16 進の 1 行（blob id）、それ以外（絶対にできない・
+/// rc≠0・16 進でない）は `unreadable`。判定・rc・`verdict.json` は変えない（設計 limit-permit.md §17 約束 9）。
+fn rules_word(rules: Option<&Path>, repo: &Path) -> String {
+    let Some(path) = rules else {
+        return "embedded".to_owned();
+    };
+    let hashed = std::path::absolute(path).ok().and_then(|absolute| {
+        let output = Invocation::new("git").arg("-C").arg(repo).args(["hash-object", "--no-filters", "--"]).arg(absolute).output().ok()?;
+        output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    });
+    hashed.filter(|id| !id.is_empty() && id.chars().all(|found| found.is_ascii_hexdigit())).unwrap_or_else(|| "unreadable".to_owned())
 }
 
 /// 前提違反を `Failed detail=precheck:<理由>` で残して断る（lens は起動しない）。
@@ -756,5 +779,36 @@ mod tests {
         assert_eq!(red.verdict, Verdict::Fail, "印が無ければ赤が FAIL");
         assert_eq!(red.evidence, "verify の 1 行が rc≠0", "字面は不変");
         assert!(machine_order(&measured(0, None)).is_none(), "何も無い周は lens へ進む");
+    }
+
+    /// (k) 出所の語: 埋め込みは git を撃たずに `embedded`、path は git の hash-object を 1 回（絶対 path・`--no-filters`）撃って
+    /// stdout の 16 進の 1 行、rc≠0 と 16 進でない stdout は `unreadable`（設計 limit-permit.md §17 約束 9）。
+    #[test]
+    fn gate_rules_word_reads_embedded_blob_id_and_unreadable() {
+        use crate::pipe::fixture::{exited, Stub};
+        use std::path::Path;
+        let repo = Path::new("/repo");
+        let blob = "0123456789abcdef0123456789abcdef01234567";
+        let embedded = Stub::install(|_| exited(0, b"unused\n"));
+        assert_eq!(super::rules_word(None, repo), "embedded");
+        assert!(embedded.calls().is_empty(), "埋め込みは git を撃たない");
+        drop(embedded);
+        let hashed = Stub::install(move |_| exited(0, format!("{blob}\n").as_bytes()));
+        assert_eq!(super::rules_word(Some(Path::new("/tmp/rules.toml")), repo), blob);
+        let calls = hashed.calls();
+        assert_eq!(calls.len(), 1, "hash-object は 1 回");
+        assert_eq!(calls[0].program, "git");
+        let args: Vec<&str> = calls[0].args.iter().map(String::as_str).collect();
+        assert_eq!(args, ["-C", "/repo", "hash-object", "--no-filters", "--", "/tmp/rules.toml"]);
+        drop(hashed);
+        let failing = Stub::install(|_| exited(128, b"fatal\n"));
+        assert_eq!(super::rules_word(Some(Path::new("/tmp/rules.toml")), repo), "unreadable", "rc≠0");
+        drop(failing);
+        let garbled = Stub::install(|_| exited(0, b"not-hex\n"));
+        assert_eq!(super::rules_word(Some(Path::new("/tmp/rules.toml")), repo), "unreadable", "16 進でない stdout");
+        drop(garbled);
+        let empty = Stub::install(|_| exited(0, b""));
+        assert_eq!(super::rules_word(Some(Path::new("/tmp/rules.toml")), repo), "unreadable", "空の stdout");
+        assert_eq!(empty.calls().len(), 1, "git は 1 回だけ撃つ");
     }
 }

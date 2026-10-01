@@ -1,5 +1,5 @@
 // flip-check: moved s2-07l.679
-//! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_` / `hook_choice_question_` / `hook_answer_mouth_` / `hook_graph_guard_` / `hook_graph_copy_` / `ledger_prefetch_`・設計 docs/design/carry-prep.md §9 行 g）。
+//! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_` / `hook_choice_question_` / `hook_answer_mouth_` / `hook_bypass_` / `hook_graph_guard_` / `hook_graph_copy_` / `ledger_prefetch_`・設計 docs/design/carry-prep.md §9 行 g）。
 
 use super::*;
 
@@ -3141,6 +3141,238 @@ fn hook_answer_mouth_denies_a_session_with_a_pane_flag_too() {
         assert_answer_deny(&state, command, || run_hook_args(&["pre-tool-use", "--pane", "%999"], &bash_payload(&repo, command)));
     }
     clean(&[&repo, &state]);
+}
+
+// ─────────────── 席の道具の呼び出しの 3 形の門（設計 limit-permit.md §17 行 a・FR112・接頭辞 `hook_bypass_`） ───────────────
+//
+// hook の subcommand の直撃・置き場の event log への書き・pipe gate / land / resume への `--rules` を、権能の guard の後ろ・走っている便の
+// 行の門の前で断る。断りは rc 2・stdout 0 byte・stderr 1 行・記録 1 行（`bypass-deny <語>`）で、hook は command を撃たない。
+
+/// 記録のうち 3 形の門の行。
+fn bypass_records(state: &Path) -> Vec<String> {
+    inject_lines(state).into_iter().filter(|line| what_of(line).starts_with("bypass-deny")).collect()
+}
+
+/// 語ごとの次の一手（断りの 1 行が持つ字）。
+fn bypass_next_step(reason: &str) -> &'static str {
+    match reason {
+        "hook-subcommand" => "seat ruling bind",
+        "event-log-write" => "器の口",
+        _ => "--rules を外して",
+    }
+}
+
+/// 3 形の断りの外形（rc 2・stdout 0 byte・stderr 1 行・頭は `<NAME>: deny bypass reason=<語>`・FR112 と当たった字と次の一手・記録 1 行）を
+/// 確かめ、断りの 1 行を返す。
+fn assert_bypass_deny(state: &Path, why: &str, reason: &str, hit: &str, run: impl FnOnce() -> Output) -> String {
+    let before = bypass_records(state).len();
+    let out = run();
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{why}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{why}: stdout 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{why}: stderr 1 行: {text}");
+    assert!(text.starts_with(&format!("{NAME}: deny bypass reason={reason}")), "{why}: 頭と理由の語: {text}");
+    assert!(text.contains("FR112") && text.contains(hit) && text.contains(bypass_next_step(reason)), "{why}: FR112・当たった字・次の一手: {text}");
+    let records = bypass_records(state);
+    assert_eq!(records.len(), before + 1, "{why}: 記録 1 行: {records:?}");
+    assert_eq!(what_of(records.last().map_or("", String::as_str)), format!("bypass-deny {reason}"), "{why}: 記録の what");
+    text
+}
+
+/// 通る周の外形（黙る）と、記録が増えないこと。
+fn assert_bypass_pass(state: &Path, why: &str, out: &Output) {
+    assert_silent(out, why);
+    assert!(bypass_records(state).is_empty(), "{why}: 3 形の記録は 0 行");
+}
+
+/// `plugin/hooks/hooks.json` が撃つ `hook <event>` の event の語の集合。
+fn hooks_json_events() -> std::collections::BTreeSet<String> {
+    tracked_hooks_json()
+        .lines()
+        .filter(|line| line.contains("\"command\""))
+        .filter_map(|line| line.split_once(" hook ").and_then(|(_, rest)| rest.split_whitespace().next()).map(str::to_owned))
+        .collect()
+}
+
+/// (a) hooks.json の hook と event の全部（母集団 6・公開の列と集合が一致）の素の撃ちと、変数の binary・`cargo run --`・`bash -c`・`eval`・命令置換・
+/// 前に代入を持つ `bash -c`・`bash -c` の中の `bash -c` が `reason=hook-subcommand`。同じ歯の grep の引用の中の字・`git hook run`・`host-guard` の口は通る。
+#[test]
+fn hook_bypass_denies_every_hook_subcommand_form_and_passes_the_look_alikes() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let listed = hooks_json_events();
+    let public: std::collections::BTreeSet<String> = vessel::hook::EVENTS.iter().map(|event| (*event).to_owned()).collect();
+    assert_eq!(listed.len(), 6, "母集団は hooks.json の 6 event: {listed:?}");
+    assert_eq!(listed, public, "hooks.json の event と公開の列は同じ集合");
+    for event in &listed {
+        let command = format!("{NAME} hook {event} --pane %0 --project .");
+        assert_bypass_deny(&state, &command, "hook-subcommand", &format!("hook {event}"), || run_hook("pre-tool-use", &bash_payload(&repo, &command)));
+    }
+    let forms = [
+        "\"$BIN\" hook stop --pane %0",
+        "cargo run -- hook stop",
+        "bash -c 'scribe2 hook stop'",
+        "eval \"scribe2 hook pre-tool-use\"",
+        "echo $(scribe2 hook stop)",
+        "X=1 bash -c 'scribe2 hook stop'",
+        "bash -c \"bash -c 'scribe2 hook stop'\"",
+    ];
+    for command in forms {
+        assert_bypass_deny(&state, command, "hook-subcommand", "hook ", || run_hook("pre-tool-use", &bash_payload(&repo, command)));
+    }
+    assert_eq!(bypass_records(&state).len(), listed.len() + forms.len(), "1 形 1 行");
+    let before = bypass_records(&state).len();
+    for command in ["grep -rn \"hook stop\" docs", "git hook run pre-commit", &format!("{NAME} host-guard --state-dir S")] {
+        assert_silent(&run_hook("pre-tool-use", &bash_payload(&repo, command)), command);
+    }
+    assert_eq!(bypass_records(&state).len(), before, "通る 3 形は記録を増やさない");
+    clean(&[&repo, &state]);
+}
+
+/// 置き場の event log を実体の在る file にして、その絶対 path を返す。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn event_log_of(state: &Path) -> PathBuf {
+    let log = vessel::fleet::store::events_path(state);
+    fs::create_dir_all(log.parent().expect("log の親 dir が在る")).expect("fleet dir を作れる");
+    fs::write(&log, "").expect("log を置ける");
+    log
+}
+
+/// (b) event log への Edit・Write・`>>`・`tee -a`・`sed -i`・mv / cp / ln の行き先・`bash -c` の中の `>`・変数で始まる同名の向け先・cwd を置き場にした
+/// 字句で畳む相対 path・symlink の dir の下の実体の path・祖先の dir への `rm -r` が `reason=event-log-write`。log への `>>` と `hook stop` を `;` で並べた形は
+/// 形の宣言順で `reason=hook-subcommand`。置き場の別 file への Write と別の dir の同名の file への `>` は通る。
+#[test]
+fn hook_bypass_denies_event_log_writes_and_orders_the_forms() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let log = event_log_of(&state);
+    let text = log.display().to_string();
+    let deny = |why: &str, payload: String| {
+        assert_bypass_deny(&state, why, "event-log-write", "events.jsonl", || run_hook("pre-tool-use", &payload));
+    };
+    deny("Edit", tool_payload(&repo, "Edit", &text));
+    deny("Write", tool_payload(&repo, "Write", &text));
+    let link_parent = tmp();
+    let linked_fleet = link_parent.join("fleet-link");
+    assert!(std::os::unix::fs::symlink(state.join("fleet"), &linked_fleet).is_ok(), "symlink を張れる");
+    deny("symlink の dir の下の実体の path", tool_payload(&repo, "Write", &format!("{}/events.jsonl", linked_fleet.display())));
+    let commands = [
+        format!("echo x >> {text}"),
+        format!("echo x | tee -a {text}"),
+        format!("sed -i s/a/b/ {text}"),
+        format!("mv /tmp/seed {text}"),
+        format!("cp /tmp/seed {text}"),
+        format!("ln -s /tmp/seed {text}"),
+        format!("bash -c 'echo x > {text}'"),
+        "echo x > $STATE/fleet/events.jsonl".to_owned(),
+    ];
+    for command in &commands {
+        deny(command, bash_payload(&repo, command));
+    }
+    // 祖先の dir への rm -r（当たった字は向け先の dir）。
+    let fleet = state.join("fleet").display().to_string();
+    let removal = format!("rm -r {fleet}");
+    assert_bypass_deny(&state, &removal, "event-log-write", &fleet, || run_hook("pre-tool-use", &bash_payload(&repo, &removal)));
+    // cwd を置き場にした字句で畳む相対 path（anchor は `--project` が解く）。
+    let folded = "echo x >> fleet/./events.jsonl";
+    assert_bypass_deny(&state, folded, "event-log-write", "events.jsonl", || {
+        run_hook_args(&["pre-tool-use", "--project", &repo.display().to_string()], &bash_payload(&state, folded))
+    });
+    // 形の宣言順（書きが先の segment でも hook の形が先に当たる）。
+    let ordered = format!("echo x >> {text} ; {NAME} hook stop");
+    assert_bypass_deny(&state, &ordered, "hook-subcommand", "hook stop", || run_hook("pre-tool-use", &bash_payload(&repo, &ordered)));
+    // 通る: 置き場の別 file への Write と、別の dir の同名の file への `>`。
+    let before = bypass_records(&state).len();
+    let sibling = state.join("fleet").join("other.jsonl").display().to_string();
+    assert_silent(&run_hook("pre-tool-use", &tool_payload(&repo, "Write", &sibling)), "置き場の別 file");
+    let other = tmp();
+    let other_log = vessel::fleet::store::events_path(&other);
+    assert!(fs::create_dir_all(other_log.parent().unwrap_or(&other)).is_ok(), "別の dir に fleet を作れる");
+    let elsewhere = format!("echo x > {}", other_log.display());
+    assert_silent(&run_hook("pre-tool-use", &bash_payload(&repo, &elsewhere)), "別の dir の同名の file");
+    assert_eq!(bypass_records(&state).len(), before, "通る 2 形は記録を増やさない");
+    clean(&[&repo, &state, &link_parent, &other]);
+}
+
+/// (c) event log を読むだけの `cat`・`tail -n`・`grep`・`wc -l <` は通り、記録 0。
+#[test]
+fn hook_bypass_passes_commands_that_only_read_the_event_log() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let text = event_log_of(&state).display().to_string();
+    for command in [format!("cat {text}"), format!("tail -n 5 {text}"), format!("grep run {text}"), format!("wc -l < {text}")] {
+        assert_bypass_pass(&state, &command, &run_hook("pre-tool-use", &bash_payload(&repo, &command)));
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (d) pane の無い session で pipe gate・pipe land・pipe resume に `--rules X` と `--rules=X` を渡す形と `bash -c` で包んだ形が `reason=rules-swap`。
+/// 同じ歯の `--rules` の無い 3 つは通る。
+#[test]
+fn hook_bypass_denies_rules_swap_without_a_pane_and_passes_the_plain_forms() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    for verb in ["gate", "land", "resume"] {
+        for flag in ["--rules /tmp/r.toml", "--rules=/tmp/r.toml"] {
+            let command = format!("{NAME} pipe {verb} --run r-1 {flag}");
+            assert_bypass_deny(&state, &command, "rules-swap", &format!("pipe {verb} --rules"), || run_hook("pre-tool-use", &bash_payload(&repo, &command)));
+        }
+    }
+    let wrapped = format!("bash -c '{NAME} pipe gate --run r-1 --rules /tmp/r.toml'");
+    assert_bypass_deny(&state, &wrapped, "rules-swap", "pipe gate --rules", || run_hook("pre-tool-use", &bash_payload(&repo, &wrapped)));
+    let before = bypass_records(&state).len();
+    for verb in ["gate", "land", "resume"] {
+        let command = format!("{NAME} pipe {verb} --run r-1");
+        assert_silent(&run_hook("pre-tool-use", &bash_payload(&repo, &command)), &command);
+    }
+    assert_eq!(bypass_records(&state).len(), before, "--rules の無い 3 つは記録を増やさない");
+    clean(&[&repo, &state]);
+}
+
+/// (e) pipe dispatch の `--rules`（手動の 1 周）・名指しの pipe stop・pipe land-window の `--rules` は通る。
+#[test]
+fn hook_bypass_passes_dispatch_stop_and_land_window_with_rules() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    for tail in ["dispatch --rules /tmp/r.toml", "stop --run r-1 --rules /tmp/r.toml", "land-window --rules /tmp/r.toml"] {
+        let command = format!("{NAME} pipe {tail}");
+        assert_bypass_pass(&state, &command, &run_hook("pre-tool-use", &bash_payload(&repo, &command)));
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (f) 偽 tmux の席: `role.orchestrator` の既定の行は pipe land と pipe resume の `--rules` を権能の guard の 1 行（（merge）・（launch）と行 id）で断り、
+/// 3 形の記録は 0。merge と launch を足した行の同じ席では権能が通り（role-allow の記録の後）、同じ 2 つが `reason=rules-swap` で断られる。
+#[test]
+fn hook_bypass_defers_to_the_capability_guard_then_denies_for_a_seat_with_the_capability() {
+    let place = role_place();
+    let path = stub_seat(&place, "bypassa", Some("orchestrator"));
+    let me = "bypassa_bypassa";
+    let lines = [
+        (format!("{NAME} pipe land --run r --rules {}", place.rules), "merge"),
+        (format!("{NAME} pipe resume --run r --rules {}", place.rules), "launch"),
+    ];
+    for (line, cap) in &lines {
+        let before = role_records(&place.state).len();
+        let text = assert_role_deny(&run_stop_hook(&place, &path, Some(&place.rules), line), line);
+        assert!(text.contains(&format!("（{cap}）")) && text.contains("role.orchestrator"), "{line}: 欠けた権能と行 id: {text}");
+        assert_role_record(&place.state, before, &format!("role-deny capability={cap}"), me);
+        assert!(bypass_records(&place.state).is_empty(), "{line}: 権能の断りだけで 3 形の記録は 0");
+    }
+    let mut caps = ORCHESTRATOR_CAPS.to_vec();
+    caps.extend(["merge", "launch"]);
+    let widened = place.sock_dir.join("with-merge-launch.toml");
+    assert!(fs::write(&widened, role_rules_text(&caps)).is_ok(), "rules を書ける");
+    let rules = widened.display().to_string();
+    for (line, cap) in &lines {
+        let before = role_records(&place.state).len();
+        let text = assert_bypass_deny(&place.state, line, "rules-swap", "--rules", || run_stop_hook(&place, &path, Some(&rules), line));
+        assert!(!text.contains("role.orchestrator"), "{line}: 権能の断りではない: {text}");
+        assert_role_record(&place.state, before, &format!("role-allow capability={cap}"), me);
+        let last = bypass_records(&place.state).last().cloned().unwrap_or_default();
+        assert_attributed(&last, Some(me), "3 形の記録は席を名乗る");
+    }
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
 // ─────────────── close の理由の段（`s2-07l.738.28`・設計 ledger-form.md §16 行 l1・接頭辞 `hook_close_reason_`） ───────────────

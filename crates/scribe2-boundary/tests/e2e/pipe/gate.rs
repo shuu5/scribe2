@@ -547,8 +547,8 @@ fn pipe_gate_findings_counts_are_recorded_per_category() {
     assert_eq!(value_of(&pairs, "verdict"), "PASS", "3 値は動かない");
     let seen = trail(&state, &id);
     assert!(
-        seen.contains(&(EventKind::RunStage, Some(Stage::Gated), Some("verdict:PASS".to_owned()))),
-        "`Gated` の detail は verdict だけ（不変）: {seen:?}"
+        seen.contains(&(EventKind::RunStage, Some(Stage::Gated), Some(format!("verdict:PASS,rules:{}", rules_source(&repo, None))))),
+        "`Gated` の detail は verdict と読んだ manifest の出所だけ: {seen:?}"
     );
     clean(&[&repo, &state]);
 }
@@ -916,7 +916,7 @@ fn pipe_gate_regates_after_inconclusive() {
         .collect();
     assert_eq!(
         gated,
-        vec!["verdict:INCONCLUSIVE".to_owned(), "verdict:PASS".to_owned()],
+        vec![format!("verdict:INCONCLUSIVE,rules:{}", rules_source(&repo, None)), format!("verdict:PASS,rules:{}", rules_source(&repo, None))],
         "測り直しは 2 件目を追記する（1 件目を書き換えない）"
     );
     // 吸収状態が解けている＝そのまま land まで進む。
@@ -980,6 +980,49 @@ fn pipe_gate_regates_after_relaxing_cap() {
     assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS");
     let landed = land_once(&repo, &state, &id);
     assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
+    clean(&[&repo, &state]);
+}
+
+/// (h) 埋め込みの manifest で撃った gate の `Gated` の detail は `verdict:PASS,rules:embedded`（設計 limit-permit.md §17 約束 9）で、
+/// 判定・rc・stdout の判定行・`verdict.json` は変わらない（出所は event の detail だけに載る）。base は `rules:` を足さない → RED。
+#[test]
+fn pipe_gate_rules_source_embedded_run_records_embedded() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let lens = fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "判定は変わらない: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=PASS"), "stdout の判定行は不変: {}", stdout_of(&out));
+    assert_eq!(gated_details(&state, &id), ["verdict:PASS,rules:embedded".to_owned()], "埋め込みは embedded");
+    let pairs = verdict_pairs(&state, &id);
+    assert!(!pairs.iter().any(|(key, _)| key.contains("rules")), "verdict.json に出所を書かない: {pairs:?}");
+    clean(&[&repo, &state]);
+}
+
+/// (i) cap の狭い fixture の INCONCLUSIVE と、広い fixture の撃ち直しの PASS の 2 件の detail が、それぞれの file の blob id（歯が
+/// `git hash-object --no-filters` で測る）を持ち、2 つは違う（`--rules` の file ごとに出所が分かれる）。
+#[test]
+fn pipe_gate_rules_source_names_each_rules_file_by_its_blob_id() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let lens = fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let tight = write_rules(&repo, "tight.toml", 1, 1);
+    let first = gate_with_rules(&repo, &state, &id, &tight, &lens);
+    assert_eq!(first.status.code(), Some(3), "cap 超過の rc は 3: {}", stderr_of(&first));
+    let bytes: u64 = value_of(&verdict_pairs(&state, &id), "diff_bytes").parse().unwrap_or(0);
+    let relaxed = write_rules(&repo, "relaxed.toml", 1, bytes);
+    let second = gate_with_rules(&repo, &state, &id, &relaxed, &lens);
+    assert_eq!(second.status.code(), Some(i32::from(RC_OK)), "cap を緩めた撃ち直しは通る: {}", stderr_of(&second));
+    let (narrow, wide) = (rules_source(&repo, Some(&tight.display().to_string())), rules_source(&repo, Some(&relaxed.display().to_string())));
+    assert_ne!(narrow, wide, "2 つの file の blob id は違う");
+    assert!(narrow.len() >= 40 && narrow.chars().all(|found| found.is_ascii_hexdigit()), "歯が測った blob id は 16 進: {narrow}");
+    assert_eq!(
+        gated_details(&state, &id),
+        [format!("verdict:INCONCLUSIVE,rules:{narrow}"), format!("verdict:PASS,rules:{wide}")],
+        "detail は file ごとの blob id を運ぶ"
+    );
     clean(&[&repo, &state]);
 }
 
@@ -2913,8 +2956,8 @@ fn pipe_gate_lens_account_is_chosen_and_appended() {
     assert_eq!(lifecycle::curl_calls(&state), 2, "lens の前に FR33 の計測を 1 回（口座 2 つ）");
     assert_eq!(
         gated_details(&state, &id),
-        vec!["verdict:PASS,account:a2".to_owned()],
-        "記帳は判定と起こした口座を対で運ぶ"
+        vec![format!("verdict:PASS,account:a2,rules:{}", rules_source(&repo, Some(&rules)))],
+        "記帳は判定と起こした口座と読んだ manifest の出所を運ぶ"
     );
     clean(&[&repo, &state]);
 }
@@ -2932,7 +2975,8 @@ fn pipe_gate_lens_account_absent_when_no_declared_accounts() {
     assert_eq!(lens_calls(&state), 1, "lens は 1 回起きる");
     assert_eq!(lifecycle::argv_account_dir(&lens_argv(&state)), None, "宣言 0 は起動行を変えない: {:?}", lens_argv(&state));
     assert_eq!(lifecycle::curl_calls(&state), 0, "宣言の無い置き場は測らない");
-    assert_eq!(gated_details(&state, &id), vec!["verdict:PASS".to_owned()], "detail は判定だけ");
+    let word = rules_source(&repo, Some(&rules.display().to_string()));
+    assert_eq!(gated_details(&state, &id), vec![format!("verdict:PASS,rules:{word}")], "detail は判定と読んだ manifest の出所だけ（account を足さない）");
     clean(&[&repo, &state]);
 }
 
@@ -2961,7 +3005,8 @@ fn pipe_gate_lens_account_none_is_inconclusive_without_calling_lens() {
     let pairs = verdict_pairs(&state, &id);
     assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "{pairs:?}");
     assert!(value_of(&pairs, "evidence").contains("account:none="), "理由は候補なしを名乗る: {pairs:?}");
-    assert_eq!(gated_details(&state, &id), vec!["verdict:INCONCLUSIVE".to_owned()], "選べなかった周は account を足さない");
+    let word = rules_source(&repo, Some(&rules));
+    assert_eq!(gated_details(&state, &id), vec![format!("verdict:INCONCLUSIVE,rules:{word}")], "選べなかった周は account を足さない");
     assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "便は Gated のまま（測り直せる側）");
     clean(&[&repo, &state]);
 }
@@ -2992,8 +3037,8 @@ fn pipe_gate_lens_account_fresh_measured_account_is_not_remeasured() {
     assert_eq!(lifecycle::curl_calls(&state), 0, "新しい実測の口座は測り直さない");
     assert_eq!(
         gated_details(&state, &id),
-        vec!["verdict:PASS,account:a1".to_owned()],
-        "記帳は判定と起こした口座を対で運ぶ"
+        vec![format!("verdict:PASS,account:a1,rules:{}", rules_source(&repo, Some(&rules)))],
+        "記帳は判定と起こした口座と読んだ manifest の出所を運ぶ"
     );
     clean(&[&repo, &state]);
 }
@@ -3060,7 +3105,7 @@ fn pipe_gate_lens_reread_unreadable_then_readable_passes_with_two_calls() {
     // record の field も verdict.json の schema も足さない（撃ち直した事実は stderr の行だけ）。
     let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
     assert!(!keys.iter().any(|key| key.contains("reread")), "verdict.json に field を足さない: {keys:?}");
-    assert_eq!(gated_details(&state, &id), vec!["verdict:PASS".to_owned()], "Gated の detail も不変");
+    assert_eq!(gated_details(&state, &id), vec![format!("verdict:PASS,rules:{}", rules_source(&repo, None))], "Gated の detail は判定と出所だけ");
     clean(&[&repo, &state]);
 }
 
@@ -3396,7 +3441,8 @@ fn pipe_gate_health_busy_run_stays_gated_and_can_be_regated() {
     let (repo, state, id) = health_run();
     let busy = health_gate(&repo, &state, &id, 0);
     assert_eq!(busy.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "1 周目は INCONCLUSIVE: {}", stderr_of(&busy));
-    assert_eq!(gated_details(&state, &id), ["verdict:INCONCLUSIVE".to_owned()], "Gated に留まる");
+    let word = |per_core: u64| rules_source(&repo, Some(&state.join(format!("rules-health-{per_core}.toml")).display().to_string()));
+    assert_eq!(gated_details(&state, &id), [format!("verdict:INCONCLUSIVE,rules:{}", word(0))], "Gated に留まる");
     let failed = events(&state).into_iter().filter(|event| event.run == id && event.stage == Some(Stage::Failed)).count();
     assert_eq!(failed, 0, "FAIL で終端しない（Failed の event が無い）");
     let calm = health_gate(&repo, &state, &id, HEALTH_PER_CORE_OPEN);
@@ -3404,7 +3450,7 @@ fn pipe_gate_health_busy_run_stays_gated_and_can_be_regated() {
     assert_eq!(verify_calls(&repo), ["common".to_owned(), "contract".to_owned()], "撃ち直しの周で初めて撃つ");
     assert_eq!(
         gated_details(&state, &id),
-        ["verdict:INCONCLUSIVE".to_owned(), "verdict:PASS".to_owned()],
+        [format!("verdict:INCONCLUSIVE,rules:{}", word(0)), format!("verdict:PASS,rules:{}", word(HEALTH_PER_CORE_OPEN))],
         "測り直しの履歴"
     );
     clean(&[&repo, &state]);
