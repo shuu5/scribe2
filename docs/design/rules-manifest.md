@@ -293,7 +293,7 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 
 ## 21. R-C4-1 を 82000 に上げる（契約表の行 r）
 
-- 何が起きているか（main 71610086・verified）: `cargo xtask check` の core-lines は 73496（上限 R-C4-1 = 74000・余地 504）。起票済みで設計の pointer を持つ契約 27 本の core の growth の見込みの和は約 4,450 行で、上限の許可の契約表の行 a〜e（[limit-permit.md](./limit-permit.md) の行）の見込みの和は約 1,320 行。次の数本の受付が core の余地で断り始める。user 裁定 2026-10-01T04:49Z（A2・閾値の変更・逐語は器の裁定の event に残る・台帳の問い s2-07l.745）で上限を 82000 に上げる（見込みの後に約 2,200 行の余地）。
+- 何が起きているか（main 71610086・verified）: `cargo xtask check` の core-lines は 73496（上限 R-C4-1 = 74000・余地 504）。起票済みで設計の pointer を持つ契約 27 本の core の growth の見込みの和は約 4,450 行で、上限の許可の契約表の行 a〜e（[limit-permit.md](./limit-permit.md) の行）の見込みの和は約 1,320 行。次の数本の受付が core の余地で断り始める。user 裁定 2026-10-01T04:49Z（A2・閾値の変更・逐語は器の裁定の event に残る・台帳の問い s2-07l.745・裁定 id s2-07l.745:20261001T0449Z-1）で上限を 82000 に上げる（見込みの後に約 2,200 行の余地）。
 - 約束（この 3 つだけ）:
   1. `rules/manifest.toml` の行 `R-C4-1` の `value` を 82000 に・`ruling` を `user 2026-10-01T04:49Z` に・`ruled_at` を `2026-10-01` に書き換える。行の id・kind・`enabled` は不変で、行は増やさない（C5）。
   2. 値を pin している既存の歯 2 本を直す。実測: repo 全体で値 74000 を持つのは、`crates/scribe2-boundary/tests/e2e/rules.rs` の `rules_cli_get_returns_value`（`rules get R-C4-1` の出力・assert の文言の裁定 id）と `rules_core_lines_74000_raised_by_ruling`（§20 の行 q が足した歯）と manifest と本 doc だけである。前者は値と文言の裁定 id を新しい値と id に直す。後者は名が前の値を持つので、同じ形の `rules_core_lines_82000_raised_by_ruling` に置き換える（値 82000・kind `CoreLines`・発効・`ruling` が `user 2026-10-01T04:49Z` で始まり・`ruled_at` が `2026-10-01`・整数の読み手が 82000 を返す）。xtask の閾値の読み手と歯は現物の manifest から値を読むので 1 字も変えない（§19・§20 と同じ・行 r は `=` で置く）。
