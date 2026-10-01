@@ -11,14 +11,14 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.33"
+  version: "0.34"
   date: "2026-10-01"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-10-01（版 0.33。 版ごとの裁定 id は台帳が持つ）
+    when: 2026-10-01（版 0.34。 版ごとの裁定 id は台帳が持つ）
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
@@ -98,6 +98,7 @@ scope:
     - 落ちた行の順番
     - done の項目の照らし
     - code の索引
+    - 上限の許可
   out:
     - 席の自律機能（管理 tick の外）
     - interpreter 経路の中身の解析（v3）
@@ -198,6 +199,9 @@ acceptance:
   - { id: AC81, criterion: "別名の取り込み・自分の型の短縮の構築・一括の取り込み・公開の再輸出・test の module の file・doc の link・文字列の中の取り込み・別 module の同名の型を持つ fixture の小さな crate から作った SCIP と一致で、 7 つの列の名の場所が期待の集合と一致し（別名・短縮の構築・一括の取り込みの越しの場所を含む）、 同名の別の型の場所を数えず、 toml の file に現れる名を索引が読まない file に現れる件数に数えて path を名指し、 契約の審査と行の審査の材料と表を出す器の口に同じ字の表が在り、 索引が無い周は無いことの 1 行だけが在ることを歯が nextest で確かめる", metric_v: "列 7/7 + 同名の別物 0 + 索引の外 1/1 + 材料と口 3/3 + 無い周 1/1", metric_l: "行ごとの使われ方の表", links: [FR108, FR49, FR100] }
   - { id: AC82, criterion: "行が変えると宣言した型を別名の越しに組む file X が write-set に無い行で、 base の索引が在る受付が X を名指して断り（断りは閉包の不足と同じ名で、 索引で数えたと添える）、 行の審査の機械の検査が同じ行を lens を撃たずに FAIL にし、 索引の無い受付と CI の契約表の検査は同じ行を通し、 索引を作り中の周は起動の列がその契約を受付の理由で待たせて手の受付が同じ名で断り（閉じた型も事実の欄も持たない契約は待たない）、 作れない周は通して受付の 1 行に索引が無いことの 1 語が在ることを歯が nextest で確かめる", metric_v: "断り 1/1 + 行の審査の FAIL 1/1 + 索引の無い通過 2/2 + 作り中の待ち 1/1 と手の受付の断り 1/1 + 縮退の 1 語 1/1", metric_l: "索引の閉包", links: [FR48, FR55, FR100, FR107] }
   - { id: AC83, criterion: "契約表の検査が code の事実を数で名乗る欄の列の語の外・値の形の外・項目の path の形の外の要素を行番号つきで名指して非 0 で止まり、 適合の要素だけなら 0 件で、 名乗りと実測が同じ行が行の審査・受付・起動の列のどれでも通り、 名乗りと違う行（fixture の code で組み立ての場所を 1 つ足した commit）は行の審査が FAIL・受付が断り・起動の列が受付の理由で待たせて、 断りの 1 行が名乗り・名乗りの値・実測の値・増えた場所・母集団を名指し、 索引を作れない周は行の審査が名乗りと測れない理由を名指して FAIL にせず、 索引を作り中の周と作れない周は手の受付が断り起動の列が受付の理由で待たせ、 索引の 2 つの key を揃えて名乗らない repo（名乗らない repo と片方だけ名乗る repo）では行の審査がその行を FAIL にし受付が断り起動の列が受付の理由で待たせ、 欄も閉じた型の宣言も持たない行は作り中と作れないのどちらの周も待たないことを歯が nextest で確かめる", metric_v: "形の外れ 3/3 + 一致の通過 3/3 + 違いの止め 3/3 + 作れない周の名指し 1/1 と FAIL 0 + 測れない周の断りと待ち 4/4 + key の揃わない repo の FAIL 2/2 と断りと待ち 4/4 + 欄も閉じた型も無い行の不待 2/2", metric_l: "名乗った code の事実の測り直し", links: [FR47, FR109, FR100, FR55] }
+  - { id: AC84, criterion: "偽の event log と偽の台帳と偽の状態の打刻と tmp の state dir で、 許可の記帳の 10 の照合のどれか 1 つだけを外した fixture がそれぞれ event 0 件でその照合の理由の語を名指して rc 1 で断り、 後の照合が先の照合の確かめた記録を読む 3 組（no-ruling と before-question・no-utterance と not-surface・no-utterance と bad-until）を同時に外した fixture が先の照合の語を名指し、 状態の打刻の file が無い fixture・空の file の fixture・最後の行の会話 id が空の fixture・最後の行の会話 id が会話 id の形でない fixture がそれぞれ not-surface で rc 1 で断り、 最後の行が打刻の形でない fixture が前の行の会話 id へ戻らずに rc 2 で止まり、 全部通る fixture が actor machine の event 1 件と 1 行を出し、 取り消しが裁定 id 無しで event 1 件を書いて、 効いている許可が無い周と台帳と打刻を読めない周も 1 件を書き、 対象の列に無い行の取り消しが rule-not-listed で断られ、 event log と manifest のそれぞれを読めない取り消しの周が event 0 件で rc 2 で止まり、 同じ発話を引く 2 度目の許可が reused で断られ、 event log・manifest・台帳・状態の打刻のそれぞれを読めない許可の記帳の周が event 0 件で rc 2 で止まり、 先の照合（rule-not-listed）が外れて打刻の最後の行も壊れている周が照合の順に関わらず rc 2 で止まり、 許可の読み手の無い 1 つの便か bead の消費の行・host と群で分け合う上限・構造の上限・上限でない行のそれぞれの行 id を pipe.permit_rows に持つ manifest が読みで断られて許可の記帳の口が event 0 件で rc 2 で止まり、 orchestrator の登録 row を持つ席から許可の記帳と取り消しが通って役割の記録の無い席からの許可の記帳と取り消しが deny されることを歯が nextest で確かめる", metric_v: "断りの語 10/10 と event 0 + 順の境目 3/3 + 打刻の rc 1 4/4 + 壊れた最後の行の rc 2 1/1 + 通る 1/1 + 取り消し 4/4 + 2 度目の reused 1/1 + 読めない周の止め 4/4 + 順に関わらない rc 2 1/1 + 取り消しの読めない周 2/2 + 対象の列の閉じ 4/4 + 権能の通過 2/2 + deny 2/2", metric_l: "上限の許可の記帳", links: [FR110, FR41, FR17, NFR4] }
+  - { id: AC85, criterion: "bead 2 つと偽の lens と cap を越える diff の fixture で、 許可を持つ bead の便は gate の照合と gate が起こす lens の cap が許可の値で通り、 許可の値も越える diff は INCONCLUSIVE で verdict の記録が行と許可の値と裁定 id を持ち、 持たない bead の便は同じ diff が INCONCLUSIVE で、 許可を読んだ周の段の event と verdict の記録が行と値と裁定 id を持ち、 期限の後・便の着地の後・取り消しの後は manifest の値に、 同じ bead と行の新しい記帳の後はその値になり、 新しい記帳の期限が古い許可の期限より先に切れた後も古い許可へ戻らずに manifest の値を読み、 manifest の値が許可の値以上に上がった fixture は manifest の値を読み、 pipe show が 6 つの状態の語を出し、 2 つの語に当たる 5 組（landed と revoked・landed と superseded・revoked と expired・superseded と expired・expired と overtaken）で先の語を出して pipe dispatch ls が効いている許可だけを並べ、 許可を持つ bead の契約の審査と行の審査と memo の審査の lens が manifest の値を読み、 event log を読めない周の gate が rc 2 で止まって verdict を書かないことを歯が nextest で確かめる", metric_v: "許可の効き 2/2 + 許可の値の上限 1/1 + 持たない bead の止め 1/1 + 使用の記録 1/1 + 切れ方 4/4 + 古い許可へ戻らない 1/1 + manifest 以下の不効 1/1 + 状態の語 6/6 + 重なり 5/5 + 効いている許可の一覧 1/1 + 審査の lens の不効 3/3 + 読めない周の rc 2 1/1", metric_l: "上限の許可の効き", links: [FR111, FR9, NFR1, NFR4] }
+  - { id: AC86, criterion: "器の hook の入口の歯で、 器の hook の subcommand を撃つ Bash・state dir の event log の path への Edit と Write と shell の書き込みの向け先・pipe gate に --rules を渡す Bash がそれぞれ実行の前に断られて形ごとの理由の語を名指し、 権能〔merge〕と〔launch〕を持つ fixture の席から pipe land と pipe resume に --rules を渡す Bash が同じく形の理由の語で断られ、 その権能を持たない orchestrator の席からの同じ 2 つが権能の guard の断り（欠けた権能と行 id）を先に出し、 event log を読むだけの command と --rules を持たない pipe gate・pipe land・pipe resume と手動の 1 周（pipe dispatch）に渡す --rules がこの断りに当たらないことを歯が nextest で確かめる", metric_v: "hook の subcommand の断り 1/1 + 書きの断り 3/3 + --rules の断り 3/3 + 権能の guard が先の断り 2/2 + 読むだけの不断 1/1 + --rules の無い 3 つの不断 3/3 + 手動の 1 周の不断 1/1", metric_l: "hook の subcommand と書きと差し替えの遮断", links: [FR112, FR45] }
 requirements:
   - id: FR1
     type: FR
@@ -293,10 +297,10 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1], acceptance: [AC3, AC69] }
+    trace: { backward: [N-1], acceptance: [AC3, AC69, AC85] }
     ears:
       pattern: unwanted
-      condition: lens が要るのに lens が無い・diff が予算 cap を超える・stdout が parse できない・verdict が 3 値の外のとき
+      condition: lens が要るのに lens が無い・diff が効いている予算 cap（manifest の値か、 予算 cap の rules 行への上限の許可〔FR111〕がその bead の便の gate と gate が起こす lens に効く周はその値）を超える・stdout が parse できない・verdict が 3 値の外のとき
       response: PASS を名乗らず INCONCLUSIVE とする。 ただし lens は在るが lens の出力が parse できない周だけは、 同じ gate の中で lens を 1 回だけ撃ち直し、 撃ち直した lens の出力もなお parse できないときに INCONCLUSIVE とする（parse できたうえで規則が断った周は lens を撃ち直さない）
   - id: FR10
     type: FR
@@ -381,11 +385,11 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3], acceptance: [AC6, AC17] }
+    trace: { backward: [N-3], acceptance: [AC6, AC17, AC84] }
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 規則の種類は閉じた enum と網羅 match で持ち、 値は tracked な manifest 1 file から起動時に読む
+      response: 規則の種類は閉じた enum と網羅 match で持ち、 値は tracked な manifest 1 file から起動時に読む。 上限の許可の対象の列（rules 行 pipe.permit_rows・FR110）が、 許可の読み手を FR111 が持つ行（予算 cap の rules 行）の外の行 id を持つ manifest は、 読みがその行 id を名指して断る
   - id: FR18
     type: FR
     label: rules の検査
@@ -649,11 +653,11 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3, N-1], acceptance: [AC15] }
+    trace: { backward: [N-3, N-1], acceptance: [AC15, AC84] }
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 役割ごとの権能は rules manifest の行 role.orchestrator（裁定 id 付き）が持ち、 承認の記帳は rules 行 R-C7-1 が名指す orchestrator の席の権能とし、 便の起動・着地・merge は行に無く器の dispatcher だけが行い（FR68）、 止まった終端を閉じる器の 2 つの口（便の終端だけの撃ち直し〔pipe land --terminal-only・FR50〕と worktree を畳む口〔pipe retire・FR96〕）は、 便 1 本を名指す形（畳むだけの指定〔--fold-only〕を 1 つ足した pipe retire を含み、 置き場と repo は席のものに限り規則を差し替えない）だけを行 role.orchestrator の権能〔settle〕で席が撃て、 それ以外の形は撃ち直しが権能〔merge〕・pipe retire が権能〔launch〕の手に残り（名指しの pipe retire が畳める便の列は ADR-0048・ADR-0097）、 席の src の編集は行に無く、 落ちる歯の編集（tests/ の path 種別）だけを行が与える
+      response: 役割ごとの権能は rules manifest の行 role.orchestrator（裁定 id 付き）が持ち、 承認の記帳と上限の許可の記帳と取り消し（FR110）は rules 行 R-C7-1 が名指す orchestrator の席の権能〔approve〕とし、 便の起動・着地・merge は行に無く器の dispatcher だけが行い（FR68）、 止まった終端を閉じる器の 2 つの口（便の終端だけの撃ち直し〔pipe land --terminal-only・FR50〕と worktree を畳む口〔pipe retire・FR96〕）は、 便 1 本を名指す形（畳むだけの指定〔--fold-only〕を 1 つ足した pipe retire を含み、 置き場と repo は席のものに限り規則を差し替えない）だけを行 role.orchestrator の権能〔settle〕で席が撃て、 それ以外の形は撃ち直しが権能〔merge〕・pipe retire が権能〔launch〕の手に残り（名指しの pipe retire が畳める便の列は ADR-0048・ADR-0097）、 席の src の編集は行に無く、 落ちる歯の編集（tests/ の path 種別）だけを行が与える
   - id: FR42
     type: FR
     label: 席の指示文の注入
@@ -693,7 +697,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3, N-1], acceptance: [AC15, AC16] }
+    trace: { backward: [N-3, N-1], acceptance: [AC15, AC16, AC86] }
     ears:
       pattern: ubiquitous
       condition: 常時
@@ -1420,11 +1424,44 @@ requirements:
       pattern: unwanted
       condition: "契約表の行が code の事実を数で名乗る任意の欄を持ち、 行の審査の head・受付の base・起動の列の HEAD のどれかの commit の code の索引で測った値が名乗りと違うか、 その索引を作り中か作れないか、 vessel 宣言が索引の 2 つの key を揃えて名乗らない repo のとき"
       response: "器は、 値が違う周は名乗り・名乗りの値・実測の値・増えた場所と消えた場所・母集団を名指し、 行の審査はその行を FAIL にし、 受付は契約を断って便を作らず、 起動の列はその契約を受付の理由で待たせる。 索引を作り中の周（受付と起動の列だけが出会う・行の審査は終わりを待つ〔FR107〕）と作れない周は、 名乗りと測れない理由を名指し、 行の審査はそれを確定の断りに数えず（行の判定は lens に委ね、 記録に理由を残す）、 受付は契約を断って便を作らず、 起動の列はその契約を受付の理由で待たせる（名乗った事実を測らずに起動しない）。 索引の 2 つの key を揃えて名乗らない repo（名乗らない repo と片方だけ名乗る repo）では永久に測れないので、 行の審査はその行を FAIL にし、 受付は断り、 起動の列は受付の理由で待たせる。 欄を持たない行はこの判定の外で、 契約表の検査はこの判定を撃たず、 欄の要素の形（FR47）だけを照らす"
+  - id: FR110
+    type: FR
+    label: 上限の許可の記帳
+    priority: must
+    vmethod: T
+    rationale_source: N-2
+    trace: { backward: [N-2, N-1], acceptance: [AC84] }
+    ears:
+      pattern: event
+      condition: "席が器の上限の許可の口に bead・rules 行・値・期限・裁定 id を渡して許可の記帳を撃ったとき、 または bead と rules 行に取り消しを渡して撃ったとき"
+      response: "許可の記帳の周は、 器が次の 10 の照合を上から順に照らし、 全部通る周だけ上限の許可の event（actor は machine）を event log に 1 件書いて 1 行を返す: 行が rules 行 pipe.permit_rows（値は user 裁定 id 付き）の名指す行に在る（rule-not-listed）・値が manifest の値より大きい有限の整数（not-raise）・裁定 id が問い id の形でその裁定 event が在る（no-ruling）・裁定 event が引く発話 event が在り actor が human（no-utterance）・発話の経路が対話の session で、 発話 event の session が対象 repo の orchestrator の席の会話 id（claude の session の id・状態の打刻の file の最後の行）と同じ（not-surface・打刻の file が無いか空でない行を持たない周と、 file の最後の行の会話 id が空か会話 id の形でない周も断る）・発話が問いの起票より後（before-question）・期限が今より後で発話の時刻から rules 行 pipe.permit_max_h（値は user 裁定 id 付き）の時間の内側（bad-until）・同じ裁定 id か同じ発話を引く許可がまだ無い（reused）・問いの本文が bead と行 id と値を字のまま持つ（not-stated）・bead の便がまだ着地していない（landed）。 許可の記帳の周は、 器は照らす前に event log・manifest・台帳・対象 repo の orchestrator の席の状態の打刻を読み、 どれかを読めない（file は在るが開けないか、 打刻の file の最後の行が打刻の形〔会話 id の欄の値を除いた行の形〕でない〔前の行へは戻らない〕か、 ほかの置き場の行の形が壊れているか、 manifest の読みが断る〔FR17〕）周は照合の順に関わらず何も書かずに読めない旨を名指して rc 2 で止まり（NFR4）、 照合のどれかが外れる周は何も書かずに、 最初に外れた照合の理由の語を名指して rc 1 で断る。 rules 行 pipe.permit_rows が名指せるのは、 FR111 が許可の読み手を持つ行（予算 cap の rules 行）だけで（ほかの行〔許可の読み手の無い 1 つの便か bead の消費の行・host と群で分け合う上限・構造の上限〔憲法 C4・C13〕・上限でない行〕を名指す値は FR17 の読みが断る）、 上限を外す（上限なし）許可は持たない。 取り消しの周は、 器は裁定 id を要らず、 読むのは event log と manifest だけで、 照合は rule-not-listed だけを照らし（外れる周は何も書かずに rc 1 で断る）、 通る周は同じ bead と行の許可を今の時刻で切る event を 1 件書き（効いている許可が無い周も書く）、 event log か manifest を読めない周は何も書かずに rc 2 で止まる（NFR4）"
+  - id: FR111
+    type: FR
+    label: 上限の許可の効き
+    priority: must
+    vmethod: T
+    rationale_source: N-2
+    trace: { backward: [N-2], acceptance: [AC85] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: "器は、 bead に効いている上限の許可（期限の前で、 bead の便が未着地で、 同じ bead と行の最新の記帳がその許可自身〔後に取り消しも新しい許可も無い〕で、 値が今の manifest の値より大きい許可）が在る周だけ、 その bead の便の gate の予算の照合と、 その gate が起こす lens に許可の値を cap として読ませ、 それ以外の周と、 その gate の照合と lens の外の読み手のすべて（ほかの bead の便・契約の審査〔FR49〕と行の審査〔FR100〕と memo の審査〔FR87〕の lens・host 全体の読み・CI の門を含む）には manifest の値を読ませる（手動の 1 周〔pipe dispatch〕に --rules で渡した写しで起きた便の読みは FR112 の断りの外で、 扱いは後継の決定が持つ・ADR-0106）。 manifest の値の宣言（FR17）は変えず、 許可の値は裁定に基づく実行時の記録として読む（ADR-0106）。 許可の値を読んだ gate の周は、 段の event と verdict の記録に行と値と裁定 id を書く。 pipe show は bead の許可を状態の閉じた語で 1 行ずつ出し、 先に当たる語を選ぶ（landed〔bead の便が着地〕・revoked〔同じ bead と行の次の記帳が取り消し〕・superseded〔次の記帳が新しい許可〕・expired〔期限の後〕・overtaken〔値が今の manifest の値以下〕・active〔効いている〕の順）。 pipe dispatch ls は効いている許可を 1 行ずつ出す。 event log を読めない周は、 許可の値へ倒さずに gate が rc 2 で止まり、 verdict を書かない（NFR4）"
+  - id: FR112
+    type: FR
+    label: hook の subcommand と event log の書きと規則の差し替えの遮断
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1], acceptance: [AC86] }
+    ears:
+      pattern: unwanted
+      condition: "席の道具の呼び出しが、 器の hook の subcommand を撃つ形か、 state dir の event log の file を書く形（Edit・Write・shell の書き込みの向け先）か、 pipe gate・pipe land・pipe resume に --rules を渡す形のとき"
+      response: "器の hook の入口は実行の前にその呼び出しを断り、 形ごとの理由の語を名指す（席が起こした子 process の撃ちと書きは門の外・FR82 と同じ）。 権能の guard（FR45）が先に断る呼び出し（権能〔merge〕を持たない席の pipe land・権能〔launch〕を持たない席の pipe resume など）はその断りを出す。 event log を読むだけの command と、 --rules を持たない pipe gate・pipe land・pipe resume と、 手動の 1 周（pipe dispatch）に渡す --rules はこの断りに当たらない（手動の 1 周の --rules の扱いは後継の決定が持つ・ADR-0106）"
 nfr:
-  - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
+  - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（既定の目標値。 予算 cap の rules 行への上限の許可〔FR111〕が効く gate の lens の周はこの目標の外で、 lens に渡す diff の上限が許可の値）,                                measure: lens 起動時の diff byte と効いている予算 cap の照合を verdict に記録（上限の許可〔FR111〕が効いた周はその値と裁定 id も）,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3, AC85] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの既定の上限 } }
   - { id: NFR2, type: NFR, label: 契約の大きさ, category: 大きさ, target: 1 契約の diff は 300 行程度・見積は 550 行以内,                      measure: PR の diff 行数と契約の見積を記録して照合,                   vmethod: A, trace: { backward: [N-4], acceptance: [AC2] }, hero: { cat: 小ささ, big: "300", unit: 行, qual: 1 契約の diff の目安 } }
   - { id: NFR3, type: NFR, label: 依存,        category: 依存, target: 実行時の直接依存 0 本・std だけで build（allowlist の外は歯が落とす）,   measure: cargo xtask check の deps-empty と cargo deny を CI で毎回,     vmethod: T, trace: { backward: [N-2], acceptance: [AC6] }, hero: { cat: 依存, big: "0", unit: 本, qual: 実行時の直接依存 } }
-  - { id: NFR4, type: NFR, label: fail-closed, category: 安全, target: 不正入力を黙って落とす件数 0・読めない store は rc 2,                     measure: fixture 実走（壊した行・未知 kind）で全件 loud を確認,           vmethod: T, trace: { backward: [N-3], acceptance: [AC6, AC44, AC45, AC46, AC50] }, hero: { cat: 安全, big: "0", unit: 件, qual: 黙って落とす入力 } }
+  - { id: NFR4, type: NFR, label: fail-closed, category: 安全, target: 不正入力を黙って落とす件数 0・読めない store は rc 2,                     measure: fixture 実走（壊した行・未知 kind）で全件 loud を確認,           vmethod: T, trace: { backward: [N-3], acceptance: [AC6, AC44, AC45, AC46, AC50, AC84, AC85] }, hero: { cat: 安全, big: "0", unit: 件, qual: 黙って落とす入力 } }
   - { id: NFR5, type: NFR, label: hook の予算,  category: 応答, target: 道具 1 回の呼出しにつき hook は binary 1 本の呼出し 2 回以内（hook の入口と host-guard の口）・各 2.0 秒以内・重い I/O を持たない。 turn の終わりの判定の hook と発話の記帳の hook の呼出しも各 2.0 秒以内で、 event log の大きさに依らない読みだけを持つ（FR88・FR90）。 host-guard の呼出しは git の問い合わせ 1 回まで。 ただし公開の segment（FR80）の周の host-guard の呼出しだけは、 2.0 秒と git 1 回と重い I/O を持たないことに代えて、 git と gh の問い合わせ（GitHub への問いを含む）を数で縛らず、 出ていく字面を 8 MB まで読み、 全体を締め切り 6 秒で縛る（越えた周の扱いは FR80）。 FR11 と FR50 の着地の段の走査も同じ読む上限と締め切りで縛る, measure: hook の wall time と host-guard が断る周の wall time を注入計測の slot に記録し、 host-guard が通す周の時間の上限と git の子 process の回数と公開の segment の周の締め切りは歯が測る。 turn の終わりの判定の hook と発話の記帳の hook の読む byte が event log の大きさで変わらないことも歯が測る（AC58・AC60）, vmethod: T, trace: { backward: [N-2], acceptance: [AC7, AC44, AC50, AC23, AC58, AC60] }, hero: { cat: 速さ, big: "2.0", unit: 秒, qual: hook の呼出し 1 回の上限（公開の segment を除く） } }
   - { id: NFR6, type: NFR, label: host の資源,  category: 安全, target: 封じ込めの外で走る器の子 process 0 本・検証の行の並列度は並列の枠から, measure: 便ごとに封じ込めの有無・並列度・縮退の理由が record に残ることを fixture で確認, vmethod: T, trace: { backward: [N-1, N-2], acceptance: [AC20, AC80, AC72] }, hero: { cat: 資源, big: "0", unit: 本, qual: 封じ込めの外で走る子 process } }
 
@@ -1564,3 +1601,4 @@ glossary:
   - { term: 兄弟の待ち, en: sibling wait, plain_short: "兄弟の行の待ち", def: "契約の審査の FAIL か INCONCLUSIVE（unparsed を除く）か gate の FAIL で終端した契約と同じ節の契約か、 その行の digest を載せた行の審査の記録に載る契約を、 直しが入るなどで解けるまで待たせる起動の列の待ちの理由 sibling（FR103）。" }
   - { term: done の項目, en: done item, plain_short: "番号つきの約束", def: "done（契約の「何ができたら終わりか」の欄）の字を (1) から 1 ずつ増える半角の番号の印で区切った約束の 1 つ。 項目ごとの歯は契約表の行の任意の欄が名指す（FR104・FR105）。" }
   - { term: code の索引, en: code index, plain_short: "名の場所の索引", def: "vessel 宣言が名乗る外の道具が commit の木から作った、 名が現れる場所とその使われ方の種類の表（FR107）。 器が自分の読み手で読み、 state dir に置き、 作り直せる値として扱う。 FR108 の行ごとの表とは別。" }
+  - { term: 上限の許可, en: limit permit, plain_short: "作業 1 つだけの上限上げ", def: "rules 行 pipe.permit_rows が名指す、 許可の読み手を持つ rules 行（予算 cap の行）1 本を、 bead 1 つに限って manifest の値より大きい有限の値へ上げる記録（FR110・FR111）。 manifest の値は変えず、 event log の 1 件として持ち、 対話の session の経路の発話に結んだ裁定 id を要り、 期限・bead の着地・取り消し・同じ bead と行の新しい記帳で切れ、 値が manifest の値以下になった周も効かない。 その bead の便の gate の予算の照合と、 その gate が起こす lens だけが読む。" }
