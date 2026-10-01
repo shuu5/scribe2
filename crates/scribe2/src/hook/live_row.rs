@@ -17,6 +17,8 @@ use crate::fleet::Stage;
 use crate::invocation::Invocation;
 use crate::name::NAME;
 use crate::pipe::cli::{live_runs, LiveRun, Tag};
+use crate::pipe::land::MAIN_REF;
+use crate::pipe::question_of_run;
 use crate::pipe::table::{form_of, promises_of, read_table, ContractRow, PromiseRow, BEGIN, DESIGN_DIR};
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::path::{Component, Path, PathBuf};
@@ -133,7 +135,17 @@ fn promised(promises: &[PromiseRow], id: &str) -> Vec<PromiseRow> {
 /// 行の比べ（**pure な 1 関数**・設計 §15 形 1）: doc の repo 相対 path・変更前と変更後の本文・live な便の列から当たりを
 /// 返す。名札が行の便はその行の変化、doc だけの便はその doc の最初の変化、名札の無い便はどの doc でも最初の変化に当たる。
 pub(crate) fn hits(doc: &str, before: &str, after: &str, runs: &[LiveRun]) -> Vec<Hit> {
-    let found = changes(doc, before, after);
+    hits_merging(doc, before, after, None, runs)
+}
+
+/// [`hits`] に merge の相手（MERGE_HEAD）の本文を足した比べ（**pure な 1 関数**・設計 §24 約束 4）: 変化の列のうち、変更後と
+/// 相手の本文の両方で表が読め、その行 id の行が両方で同じ変化を名札に当てる前に落とす（doc だけと名札の無い便の「最初の変化」も
+/// 落とした後の列から取る）。相手が無い・表が読めない周は [`hits`] と同じ。
+pub(crate) fn hits_merging(doc: &str, before: &str, after: &str, merge: Option<&str>, runs: &[LiveRun]) -> Vec<Hit> {
+    let found = match merge {
+        Some(theirs) => unmerged(doc, changes(doc, before, after), after, theirs),
+        None => changes(doc, before, after),
+    };
     runs.iter()
         .filter_map(|run| {
             let (change, own) = match &run.tag {
@@ -153,6 +165,27 @@ pub(crate) fn hits(doc: &str, before: &str, after: &str, runs: &[LiveRun]) -> Ve
             })
         })
         .collect()
+}
+
+/// 表を読んだ結果（行と約束の行）。
+type Table = (Vec<ContractRow>, Vec<PromiseRow>);
+
+/// 変化の列から、変更後の本文と merge の相手の本文で行が同じものを落とす（どちらかの表が読めない周は列のまま）。
+fn unmerged(doc: &str, found: Vec<(String, Reason)>, after: &str, theirs: &str) -> Vec<(String, Reason)> {
+    let (Ok(later), Ok(other)) = (read_table(doc, after), read_table(doc, theirs)) else {
+        return found;
+    };
+    found.into_iter().filter(|(id, _)| !same_in(id, &later, &other)).collect()
+}
+
+/// 行 id の行（line を除く全欄）とその行を親に持つ約束の行が 2 つの表で同じか（両方に無いも同じ）。
+fn same_in(id: &str, (left, left_promises): &Table, (right, right_promises): &Table) -> bool {
+    let rows = match (left.iter().find(|row| row.id == id), right.iter().find(|row| row.id == id)) {
+        (Some(one), Some(other)) => same_row(one, other),
+        (None, None) => true,
+        _ => false,
+    };
+    rows && promised(left_promises, id) == promised(right_promises, id)
 }
 
 /// 実装役の自分の行の除外（設計 §15 形 5）: 便の worktree が編集か commit の worktree の root と同じで、行が便自身の行
@@ -447,6 +480,7 @@ fn resolved_commit(scene: &Scene, dir: &Path) -> LiveRowDecision {
     }
     let runs = live_runs(scene.state_dir);
     let mut found = Vec::new();
+    let mut ancestor: Option<bool> = None;
     for doc in &docs {
         let before = git_bytes(&root, &["show", &format!("HEAD:{doc}")]).unwrap_or_default();
         let index = git_bytes(&root, &["show", &format!(":{doc}")]).unwrap_or_default();
@@ -457,13 +491,26 @@ fn resolved_commit(scene: &Scene, dir: &Path) -> LiveRowDecision {
             }
             continue;
         };
-        for hit in hits(doc, &before, &index, runs).into_iter().chain(hits(doc, &before, &work, runs)) {
+        let (mut at_index, mut at_work) = (hits(doc, &before, &index, runs), hits(doc, &before, &work, runs));
+        let counted = !exclude_own(at_index.clone(), &root).is_empty() || !exclude_own(at_work.clone(), &root).is_empty();
+        if counted && *ancestor.get_or_insert_with(|| merge_head_is_main_ancestor(&root)) {
+            if let Some(theirs) = git_bytes(&root, &["show", &format!("MERGE_HEAD:{doc}")]) {
+                at_index = hits_merging(doc, &before, &index, Some(&theirs), runs);
+                at_work = hits_merging(doc, &before, &work, Some(&theirs), runs);
+            }
+        }
+        for hit in at_index.into_iter().chain(at_work) {
             if !found.iter().any(|seen: &Hit| seen.run == hit.run && seen.row == hit.row) {
                 found.push(hit);
             }
         }
     }
     refusal(exclude_own(found, &root), scene.state_dir, scene.root)
+}
+
+/// MERGE_HEAD が anchor の main の祖先か（MERGE_HEAD が無い・main の祖先でない・測れない周は偽）。
+fn merge_head_is_main_ancestor(root: &Path) -> bool {
+    git_bytes(root, &["merge-base", "--is-ancestor", "MERGE_HEAD", MAIN_REF]).is_some()
 }
 
 /// HEAD との差の path の列（index と作業の木の和・`--no-renames`＝rename は旧 path と新 path）。git が落ちれば `None`。
@@ -506,18 +553,37 @@ fn refusal(hits: Vec<Hit>, state_dir: &Path, root: &Path) -> LiveRowDecision {
     }
 }
 
-/// 断りの 1 行（設計 §15 形 6）: 先頭の当たりの理由・行・run id・段・残りの本数と、止めずに済ませる道（終端まで待つ・
-/// Questioned なら答える口）を名指し、**行の末尾**に止めてから変える 1 行を置く（後ろに何も付けない）。
+/// 断りの 1 行（設計 §15 形 6・§24 約束 3）: 先頭の当たりの段が Questioned の周だけ、その便の最新の問いの about を
+/// [`question_of_run`] の 1 本で読み（通す周は読まない）、[`deny_sentence`] で文にする。
 pub(crate) fn deny_line(hits: &[Hit], state_dir: &Path, root: &Path) -> Option<String> {
+    let first = hits.first()?;
+    let about = match first.stage {
+        Stage::Questioned => question_of_run(state_dir, &first.run).and_then(|question| question.about),
+        _ => None,
+    };
+    deny_sentence(hits, about.as_deref(), state_dir, root)
+}
+
+/// write-set の問いの句（答えでは広がらない・止めてから行を広げる道）。
+const WRITE_SET_WAY: &str =
+    "write-set の問いは答えでは広がらない（contract-source.md §7）— 止めてから行の write-set を広げ、受付で次の便を起こす";
+
+/// 断りの文の組み立て（**pure な 1 関数**・設計 §24 約束 1・2）: 先頭の当たりの理由・行・run id・段・残りの本数と、止めずに
+/// 済ませる道（終端まで待つ）を名指し、Questioned の段は about で分ける（`write-set` は句だけ・それ以外の about は答える口だけ・
+/// about 無しは両方）。**行の末尾**に止めてから変える 1 行を置く（後ろに何も付けない）。
+pub(crate) fn deny_sentence(hits: &[Hit], about: Option<&str>, state_dir: &Path, root: &Path) -> Option<String> {
     let first = hits.first()?;
     let state = absolute(state_dir);
     let repo = absolute(first.repo.as_deref().unwrap_or(root));
-    let answer = match first.stage {
-        Stage::Questioned => format!(
-            "・問いなら答える「{NAME} pipe answer --run {} --words <答えの逐語> --state-dir {}」",
-            first.run,
-            state.display()
-        ),
+    let mouth = format!(
+        "・問いなら答える「{NAME} pipe answer --run {} --words <答えの逐語> --state-dir {}」",
+        first.run,
+        state.display()
+    );
+    let answer = match (first.stage, about) {
+        (Stage::Questioned, Some("write-set")) => format!("・{WRITE_SET_WAY}"),
+        (Stage::Questioned, Some(_)) => mouth,
+        (Stage::Questioned, None) => format!("{mouth}・{WRITE_SET_WAY}"),
         _ => String::new(),
     };
     Some(format!(
@@ -537,7 +603,7 @@ pub(crate) fn deny_line(hits: &[Hit], state_dir: &Path, root: &Path) -> Option<S
 
 #[cfg(test)]
 mod tests {
-    use super::{deny_line, exclude_own, git_segments, hits, Reason};
+    use super::{deny_line, deny_sentence, exclude_own, git_segments, hits, hits_merging, Reason};
     use crate::fleet::Stage;
     use crate::name::NAME;
     use crate::pipe::cli::{LiveRun, Tag};
@@ -693,5 +759,76 @@ mod tests {
             assert_eq!(line.contains("pipe answer --run r1"), answers, "{line}");
             assert!(line.contains("stage=") && line.contains("run=r1") && line.contains("others=0"), "{line}");
         }
+    }
+
+    /// 同じ当たり（行 a・段 `stage`）を about つきで文にする。
+    fn sentence(stage: Stage, about: Option<&str>) -> String {
+        let found = hits(DOC, &doc("", &[row("a", "d")]), &doc("", &[row("a", "e")]), &[run("r1", stage, row_tag(DOC, "a"), None)]);
+        deny_sentence(&found, about, Path::new("/s"), Path::new("/repo")).unwrap_or_default()
+    }
+
+    /// (a)(b)(c) about の write-set は句だけ・write-set でない about は答える口だけ・about 無しは両方・Gated はどちらも無し。
+    #[test]
+    fn live_row_about_splits_the_answer_mouth_and_the_write_set_way() {
+        let (way, mouth) = ("write-set の問いは答えでは広がらない（contract-source.md §7）— 止めてから行の write-set を広げ、受付で次の便を起こす", "pipe answer --run r1");
+        let stop = format!("{NAME} pipe stop --run r1 --state-dir /s --repo /repo");
+        let write_set = sentence(Stage::Questioned, Some("write-set"));
+        assert!(write_set.contains(way) && !write_set.contains("pipe answer") && write_set.ends_with(&stop), "{write_set}");
+        let verify = sentence(Stage::Questioned, Some("verify"));
+        assert!(verify.contains(mouth) && !verify.contains(way) && verify.ends_with(&stop), "{verify}");
+        let none = sentence(Stage::Questioned, None);
+        assert!(none.contains(mouth) && none.contains(way) && none.ends_with(&stop), "{none}");
+        let gated = sentence(Stage::Gated, Some("write-set"));
+        assert!(gated.contains("stage=Gated") && !gated.contains(way) && !gated.contains("pipe answer"), "{gated}");
+    }
+
+    /// 行 a と行 b を `(a, b)` の done にした本文。
+    fn two(a: &str, b: &str) -> String {
+        doc("", &[row("a", a), row("b", b)])
+    }
+
+    /// 行 a の名札の便 1 本に MERGE_HEAD の本文つきで当てた理由の列。
+    fn merged(before: &str, after: &str, theirs: Option<&str>, tag: Tag) -> Vec<(String, Reason)> {
+        hits_merging(DOC, before, after, theirs, &[run("r1", Stage::Spawned, tag, None)])
+            .into_iter()
+            .map(|hit| (hit.row, hit.reason))
+            .collect()
+    }
+
+    /// (a)(b)(c) MERGE_HEAD の行と同じ字の変化は落ち（消えたも同じ）、違えば残り、表が読めない・MERGE_HEAD が無い周は `hits` と同じ。
+    #[test]
+    fn live_row_merge_head_drops_only_the_changes_the_merge_already_has() {
+        let tag = || row_tag(DOC, "a");
+        let (before, after) = (two("d", "d"), two("e", "d"));
+        assert!(merged(&before, &after, Some(&two("e", "d")), tag()).is_empty(), "同じ字");
+        for other in ["d", "f"] {
+            assert_eq!(merged(&before, &after, Some(&two(other, "d")), tag()), [("docs/design/x.md#a".to_owned(), Reason::Changed)], "{other}");
+        }
+        let gone = doc("", &[row("b", "d")]);
+        assert!(merged(&before, &gone, Some(&gone), tag()).is_empty(), "MERGE_HEAD にも無い");
+        assert_eq!(merged(&before, &gone, Some(&before), tag()), [("docs/design/x.md#a".to_owned(), Reason::Removed)]);
+        let plain = hits(DOC, &before, &after, &[run("r1", Stage::Spawned, tag(), None)]).len();
+        for theirs in [Some("not a table"), None] {
+            assert_eq!(merged(&before, &after, theirs, tag()).len(), plain, "{theirs:?}");
+        }
+    }
+
+    /// (d) 名札が doc だけの便は、落とした後の列の先頭＝行 b に当たる。
+    #[test]
+    fn live_row_merge_head_doc_only_tag_takes_the_first_change_left() {
+        let found = merged(&two("d", "d"), &two("e", "e"), Some(&two("e", "d")), Tag::Doc(DOC.to_owned()));
+        assert_eq!(found, [("docs/design/x.md#b".to_owned(), Reason::Changed)]);
+    }
+
+    /// (e) 行 a は同じ字でも、行 a を親に持つ約束の行が MERGE_HEAD と違えば changed。
+    #[test]
+    fn live_row_merge_head_compares_the_promises_of_the_row() {
+        let promise = |text: &str| {
+            format!("[[promise]]\nof = \"a\"\nn = 1\ntext = \"{text}\"\nfiles = [\"x.rs\"]\nteeth = [\"t\"]\nfixture = \"f\"\nexpect = \"e\"\n")
+        };
+        let with = |done: &str, text: &str| doc("", &[row("a", done), promise(text)]);
+        let (before, after) = (with("d", "p"), with("e", "q"));
+        assert_eq!(merged(&before, &after, Some(&with("e", "r")), row_tag(DOC, "a")).len(), 1, "約束だけ違う");
+        assert!(merged(&before, &after, Some(&with("e", "q")), row_tag(DOC, "a")).is_empty(), "約束も同じ");
     }
 }

@@ -2668,6 +2668,104 @@ fn hook_live_row_git_mv_out_of_design_is_denied() {
     clean(&[&repo, &state]);
 }
 
+/// write-set の問いの句（設計 §24 約束 1）。
+const LIVE_WRITE_SET_WAY: &str = "write-set の問いは答えでは広がらない（contract-source.md §7）— 止めてから行の write-set を広げ、受付で次の便を起こす";
+
+/// 便の質問の event 1 件を記帳する（`stage` が在れば段つき）。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn live_question(state: &Path, run: &str, (kind, stage): (&str, Option<&str>), detail: &str) {
+    let mut args = vec!["fleet", "record", "--kind", kind, "--run", run, "--bead", "s2-live", "--detail", detail];
+    args.extend(stage.into_iter().flat_map(|found| ["--stage", found]));
+    let out = Command::new(bin()).args(args).arg("--state-dir").arg(state).output().expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "fleet record: {}", stderr_text(&out));
+}
+
+/// replay が持つ便の最後の自由文。
+fn live_detail(state: &Path, run: &str) -> Option<String> {
+    let events = vessel::fleet::store::read_all(state).unwrap_or_default();
+    vessel::fleet::replay(&events).runs.get(run).and_then(|found| found.detail.clone())
+}
+
+/// 行 a を変える Edit を撃ち、断りの文を返す。
+fn live_row_a_denied(repo: &Path, state: &Path) -> String {
+    let out = live_hook(repo, &edit_payload(repo, &repo.join(LIVE_DOC), "done = \"d-a\"", "done = \"e-a\""));
+    assert_live_row_deny(state, &out, "changed")
+}
+
+/// (1)(2)(3) 問いの about が write-set の便の断りは句を持ち答える口を持たない（回答と写しの取り直しの記帳の後も）・about が
+/// verify の便の断りは答える口を持ち句を持たない。
+#[test]
+fn live_row_about_follows_the_latest_question_not_the_replay_detail() {
+    let (repo, state) = live_place();
+    live_run(&state, &repo, ("r-q", "Questioned", "a"), None);
+    live_question(&state, "r-q", ("QuestionRaised", None), "write-set に x.rs が無い");
+    live_question(&state, "r-q", ("RunStage", Some("Questioned")), "about:write-set");
+    let stop = format!("{NAME} pipe stop --run r-q --state-dir {} --repo {}", state.display(), repo.display());
+    let check = |text: &str| {
+        assert!(text.contains(LIVE_WRITE_SET_WAY) && !text.contains("pipe answer") && text.trim_end().ends_with(&stop), "{text}");
+    };
+    check(&live_row_a_denied(&repo, &state));
+    live_question(&state, "r-q", ("QuestionAnswered", None), "答えの逐語");
+    assert_eq!(live_detail(&state, "r-q").as_deref(), Some("答えの逐語"), "replay の detail は逐語");
+    check(&live_row_a_denied(&repo, &state));
+    live_question(&state, "r-q", ("RunStage", Some("Questioned")), "contract:refreshed");
+    assert_eq!(live_detail(&state, "r-q").as_deref(), Some("contract:refreshed"), "replay の detail は取り直し");
+    check(&live_row_a_denied(&repo, &state));
+    live_run(&state, &repo, ("r-v", "Questioned", "b"), None);
+    live_question(&state, "r-v", ("QuestionRaised", None), "verify が矛盾する");
+    live_question(&state, "r-v", ("RunStage", Some("Questioned")), "about:verify");
+    let out = live_hook(&repo, &edit_payload(&repo, &repo.join(LIVE_DOC), "done = \"d-b\"", "done = \"e-b\""));
+    let text = assert_live_row_deny(&state, &out, "changed");
+    assert!(text.contains("pipe answer --run r-v") && !text.contains(LIVE_WRITE_SET_WAY), "{text}");
+    clean(&[&repo, &state]);
+}
+
+/// 行 a の done を `from` から `to` へ書き換えて作業の木に置く。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn live_set_a(repo: &Path, (from, to): (&str, &str)) {
+    let text = fs::read_to_string(repo.join(LIVE_DOC)).expect("doc を読める");
+    fs::write(repo.join(LIVE_DOC), text.replace(from, to)).expect("doc を書ける");
+}
+
+/// (1)〜(4) main を merge する途中の commit は MERGE_HEAD の行と同じ字なら通し、第 3 の字・merge の無い木・main の祖先でない
+/// merge は断る。
+#[test]
+fn live_row_merge_head_passes_only_the_rows_main_already_has() {
+    let (repo, state) = live_place();
+    git(&repo, &["branch", "-M", "main"]);
+    git(&repo, &["branch", "side"]);
+    git(&repo, &["branch", "other"]);
+    live_set_a(&repo, ("d-a", "e-a"));
+    git(&repo, &["commit", "-q", "-am", "main a"]);
+    git(&repo, &["checkout", "-q", "side"]);
+    let prose = fs::read_to_string(repo.join(LIVE_DOC)).expect("doc を読める");
+    fs::write(repo.join(LIVE_DOC), prose.replace("prose line", "prose side")).expect("散文を直せる");
+    git(&repo, &["commit", "-q", "-am", "side prose"]);
+    live_run(&state, &repo, ("r-q", "Questioned", "a"), None);
+    git(&repo, &["merge", "-q", "--no-commit", "--no-ff", "main"]);
+    assert!(repo.join(".git").join("MERGE_HEAD").exists(), "merge の途中");
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, "git commit -m m")), "MERGE_HEAD の行と同じ字");
+    assert!(live_row_records(&state).is_empty(), "記録 0");
+    live_set_a(&repo, ("e-a", "g-a"));
+    assert_live_row_deny(&state, &live_hook(&repo, &bash_payload(&repo, "git commit -am m")), "changed");
+    git(&repo, &["checkout", "-q", "--", LIVE_DOC]);
+    git(&repo, &["merge", "--abort"]);
+    assert!(!repo.join(".git").join("MERGE_HEAD").exists(), "merge は無い");
+    live_set_a(&repo, ("d-a", "e-a"));
+    assert_live_row_deny(&state, &live_hook(&repo, &bash_payload(&repo, "git commit -am x")), "changed");
+    git(&repo, &["checkout", "-q", "--", LIVE_DOC]);
+    git(&repo, &["checkout", "-q", "other"]);
+    live_set_a(&repo, ("d-a", "h-a"));
+    git(&repo, &["commit", "-q", "-am", "other a"]);
+    git(&repo, &["checkout", "-q", "side"]);
+    git(&repo, &["merge", "-q", "--no-commit", "--no-ff", "other"]);
+    assert!(repo.join(".git").join("MERGE_HEAD").exists(), "other の merge の途中");
+    let ancestor = Command::new("git").arg("-C").arg(&repo).args(["merge-base", "--is-ancestor", "MERGE_HEAD", "main"]).status();
+    assert!(ancestor.is_ok_and(|found| !found.success()), "MERGE_HEAD は main の祖先でない");
+    assert_live_row_deny(&state, &live_hook(&repo, &bash_payload(&repo, "git commit -m m")), "changed");
+    clean(&[&repo, &state]);
+}
+
 // ─────────────── anchor の門（`s2-07l.700`・設計 vessel-hook.md §14 行 h・接頭辞 `hook_anchor_guard_`） ───────────────
 //
 // HEAD が main の tmp repo を器へ紐づけ、揃えなかった anchor（main を別の木の commit へ進め、index と作業の木を着地の前の
