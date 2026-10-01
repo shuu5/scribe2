@@ -993,6 +993,30 @@ enabled = true
 ruling = "user 2026-09-30T04:25Z 項 lifecycle"
 ruled_at = "2026-09-30"
 
+[[rule]]
+id = "memo.notes_max_bytes"
+kind = "MemoNotesMaxBytes"
+value = 8192
+enabled = true
+ruling = "user 2026-09-30T04:25Z 項 memo"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "memo.triage_interval_h"
+kind = "MemoTriageIntervalH"
+value = 24
+enabled = true
+ruling = "user 2026-09-28T07:27Z"
+ruled_at = "2026-09-28"
+
+[[rule]]
+id = "memo.triage_per_round"
+kind = "MemoTriagePerRound"
+value = 2
+enabled = true
+ruling = "user 2026-09-28T07:27Z"
+ruled_at = "2026-09-28"
+
 # 口座の宣言（設計 fleet-usage.md §2・account-lifecycle.md §2・ADR-0026 §2.1）は host の manifest（state dir
 # の host.toml）にだけ置く。この file に口座の表は置かない（文法は残る・足す変更は A1 の対話面で聞く・本 repo
 # は PUBLIC・SRS CON2）。器は credential の置き場を走査せず、宣言だけを真実として読む（C3）。

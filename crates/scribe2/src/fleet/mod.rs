@@ -14,6 +14,7 @@ pub mod lifecycle;
 pub mod lifecycle_line;
 pub mod lifecycle_mark;
 pub mod lifecycle_partial;
+pub mod lifecycle_read;
 pub mod phase;
 pub mod select;
 pub mod store;

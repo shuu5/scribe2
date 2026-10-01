@@ -403,6 +403,13 @@ pub enum RuleKind {
     /// 手番が seat の局面が滞ったとみなす年齢の閾値（時間・§12 約束 10）。**1 kind で行が 13 本**で、id は `lifecycle.age_h.<語>`
     /// （語は手番が seat の局面の語・`age_word_is_known` が語の外の後ろを断る）。行の無い seat の語は `owned.unset` に数える。
     LifecycleAgeH,
+    /// open な memo の notes の byte の上限（設計 ledger-form.md §19 約束 4・FR87）。越えた open な memo を doctor の台帳の行が名指す
+    /// （門では止めない）。行を読めない周は `oversized=no-rule`。読み手は `ledger::lint` の 1 本。
+    MemoNotesMaxBytes,
+    /// 1 本の memo を審査にかける間隔（時間・設計 ledger-form.md §19 約束 5・読み手は dispatcher.md 行 aq）。
+    MemoTriageIntervalH,
+    /// 1 周に審査にかける memo の本数の上限（設計 ledger-form.md §19 約束 5・読み手は dispatcher.md 行 aq）。
+    MemoTriagePerRound,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -494,6 +501,9 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatDraftsBusyS,
     RuleKind::LifecycleClosedWindowH,
     RuleKind::LifecycleAgeH,
+    RuleKind::MemoNotesMaxBytes,
+    RuleKind::MemoTriageIntervalH,
+    RuleKind::MemoTriagePerRound,
 ];
 
 impl RuleKind {
@@ -538,8 +548,7 @@ impl RuleKind {
             Self::GateSlotWaitS => "GateSlotWaitS",
             Self::GateTmuxTestThreads => "GateTmuxTestThreads",
             Self::GateCpuWeight => "GateCpuWeight",
-            Self::HostRunnablePerCore => "HostRunnablePerCore",
-            Self::HostBlockedPerCore => "HostBlockedPerCore",
+            Self::HostRunnablePerCore => "HostRunnablePerCore", Self::HostBlockedPerCore => "HostBlockedPerCore",
             Self::PipeLandWaitS => "PipeLandWaitS",
             Self::PipeCiWaitS => "PipeCiWaitS", Self::PipeCiPollS => "PipeCiPollS",
             Self::SeatDraftsStaleH => "SeatDraftsStaleH", Self::SeatDraftsCapMb => "SeatDraftsCapMb", Self::SeatDraftsBusyS => "SeatDraftsBusyS",
@@ -559,8 +568,9 @@ impl RuleKind {
             // 管理 tick の 3 kind と席の箱も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
             Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS", Self::SeatMemoryMaxMb => "SeatMemoryMaxMb",
             Self::SeatPrecheckAlarmS => "SeatPrecheckAlarmS", Self::FloorTimeoutS => "FloorTimeoutS", Self::PipeReserveH => "PipeReserveH",
-            Self::LifecycleClosedWindowH => "LifecycleClosedWindowH", Self::LifecycleAgeH => "LifecycleAgeH",
-            Self::SeatPointerLadderS => "SeatPointerLadderS", Self::SeatMoveGraceS => "SeatMoveGraceS", Self::SeatIdleAlarmS => "SeatIdleAlarmS",
+            Self::LifecycleClosedWindowH => "LifecycleClosedWindowH", Self::LifecycleAgeH => "LifecycleAgeH", Self::MemoNotesMaxBytes => "MemoNotesMaxBytes",
+            Self::MemoTriageIntervalH => "MemoTriageIntervalH", Self::MemoTriagePerRound => "MemoTriagePerRound", Self::SeatPointerLadderS => "SeatPointerLadderS",
+            Self::SeatMoveGraceS => "SeatMoveGraceS", Self::SeatIdleAlarmS => "SeatIdleAlarmS",
         }
     }
 
@@ -609,7 +619,7 @@ impl RuleKind {
             | Self::FlipMarksPerPr | Self::LedgerOpenChildrenMax
             | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS | Self::SeatMemoryMaxMb | Self::SeatIdleAlarmS
             | Self::SeatPrecheckAlarmS | Self::AccountSelection | Self::FloorTimeoutS | Self::PipeReserveH
-            | Self::LifecycleClosedWindowH | Self::LifecycleAgeH => ValueShape::Int,
+            | Self::LifecycleClosedWindowH | Self::LifecycleAgeH | Self::MemoNotesMaxBytes | Self::MemoTriageIntervalH | Self::MemoTriagePerRound => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
             | Self::RunnerEffort | Self::LensModel | Self::PipePrecheckLensModel

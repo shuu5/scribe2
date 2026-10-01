@@ -109,7 +109,7 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
         (None, _, _, _) => return Err(()),
     }
     if let Some(found) = repo {
-        lines.extend(vessel::ledger::lint::doctor_lines(Path::new(found), rules));
+        lines.extend(vessel::ledger::lint::doctor_lines(Path::new(found), rules, state_dir.map(Path::new)));
     }
     Ok(lines)
 }
@@ -388,8 +388,8 @@ mod tests {
         let mut lines = render_doctor();
         lines.push(render_host_template(&Template::Unreadable));
         lines.push(render_init(&Readiness::NoRepo, &Template::Unreadable));
-        lines.push(render(&judge(&issues, &resolved)));
-        lines.push(render(&judge(issues.get(3..4).unwrap_or_default(), &resolved)));
+        lines.push(render(&judge(&issues, &resolved, Some(8192))));
+        lines.push(render(&judge(issues.get(3..4).unwrap_or_default(), &resolved, Some(8192))));
         lines.push(render_unreadable("ledger-unreadable"));
         lines.push(render_usage());
         lines.push(render_version());

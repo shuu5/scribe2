@@ -11,7 +11,9 @@
 //! 行を出す（[`render_unreadable`]・C10 / NFR4）。極性は増やさない（doctor は読むだけで判定しない・C10.2）。
 
 use super::form::is_memo;
+use crate::fleet::lifecycle_read;
 use crate::pipe::table;
+use crate::rules::int_row;
 use crate::rules::manifest::Manifest;
 use crate::seat::ledger::{self, Issue, LedgerError};
 use std::collections::BTreeSet;
@@ -19,6 +21,9 @@ use std::path::Path;
 
 /// 行の先頭の字面。
 pub const PREFIX: &str = "ledger:";
+
+/// notes の上限の rules 行の id（値は byte・行を読めない周は `oversized=no-rule`）。
+const NOTES_MAX_ROW: &str = "memo.notes_max_bytes";
 
 /// memo の本文の機械が読む設計の見出し（固定の 1 つ）。
 pub const MEMO_HEADING: &str = "## memo";
@@ -47,6 +52,8 @@ pub struct Report {
     pub memos: usize,
     /// (ii) 見出しを持ち pointer 行を持たない memo。
     pub unpointed: Vec<String>,
+    /// notes の byte が上限を越えた open な memo（上限の行を読めない周は `None`＝0 に畳まない・門では止めない）。
+    pub oversized: Option<Vec<String>>,
 }
 
 /// 契約の pointer の字面（acceptance の先頭行の `design =` の後ろ・trim 済み）。契約でなければ `None`。
@@ -75,8 +82,9 @@ fn ids<'i>(issues: impl Iterator<Item = &'i Issue>) -> Vec<String> {
     issues.map(|issue| issue.id.clone()).collect()
 }
 
-/// 3 つの欠陥を数える（**純関数**）。`resolved` は解けた pointer の字面の集合。
-pub fn judge(issues: &[Issue], resolved: &BTreeSet<String>) -> Report {
+/// 3 つの欠陥と notes の大きさを数える（**純関数**）。`resolved` は解けた pointer の字面の集合、`notes_max` は rules 行
+/// `memo.notes_max_bytes` の値（行を読めない周は `None`）。
+pub fn judge(issues: &[Issue], resolved: &BTreeSet<String>, notes_max: Option<u64>) -> Report {
     let open: Vec<&Issue> = issues.iter().filter(|issue| issue.status != CLOSED).collect();
     let contracts: Vec<&Issue> = open.iter().copied().filter(|issue| pointer_of(issue).is_some()).collect();
     let memos: Vec<&Issue> = open.iter().copied().filter(|issue| is_memo(issue)).collect();
@@ -87,6 +95,7 @@ pub fn judge(issues: &[Issue], resolved: &BTreeSet<String>) -> Report {
         bodied: ids(contracts.iter().copied().filter(|issue| is_bodied(issue))),
         memos: memos.len(),
         unpointed: ids(memos.iter().copied().filter(|memo| is_unpointed(memo))),
+        oversized: notes_max.map(|max| ids(memos.iter().copied().filter(|memo| u64::try_from(memo.notes.len()).is_ok_and(|bytes| bytes > max)))),
     }
 }
 
@@ -94,15 +103,17 @@ pub fn judge(issues: &[Issue], resolved: &BTreeSet<String>) -> Report {
 /// `<語>:<id>,<id>…` の形で並べる（1 件以上の欠陥だけ）。
 pub fn render(report: &Report) -> String {
     let mut line = format!(
-        "{PREFIX} open={} contracts={} unresolved={} bodied={} memos={} unpointed={}",
+        "{PREFIX} open={} contracts={} unresolved={} bodied={} memos={} unpointed={} oversized={}",
         report.open,
         report.contracts,
         report.unresolved.len(),
         report.bodied.len(),
         report.memos,
         report.unpointed.len(),
+        report.oversized.as_ref().map_or_else(|| "no-rule".to_owned(), |found| found.len().to_string()),
     );
-    for (word, found) in [("unresolved", &report.unresolved), ("bodied", &report.bodied), ("unpointed", &report.unpointed)] {
+    let oversized = report.oversized.clone().unwrap_or_default();
+    for (word, found) in [("unresolved", &report.unresolved), ("bodied", &report.bodied), ("unpointed", &report.unpointed), ("oversized", &oversized)] {
         if !found.is_empty() {
             line.push_str(&format!(" {word}:{}", found.join(",")));
         }
@@ -116,13 +127,16 @@ pub fn render_unreadable(reason: &str) -> String {
 }
 
 /// doctor の台帳の 4 行（本行 → [`super::graph`] の行 → [`super::form`] の行 → [`super::citation`] の行＝裁定 id の引用の行が末尾）。
-/// 台帳は**1 回だけ**読み、4 行が同じ出力を分けて読む。
-pub fn doctor_lines(repo: &Path, rules: Option<&str>) -> Vec<String> {
+/// 台帳は**1 回だけ**読み、4 行が同じ出力を分けて読む。`state_dir` を渡した周は 4 行の前に局面の出力の 3 行を出す
+/// （台帳は撃たない・[`lifecycle_read::doctor_lines`]・ledger-form.md §19 約束 2）。
+pub fn doctor_lines(repo: &Path, rules: Option<&str>, state_dir: Option<&Path>) -> Vec<String> {
     use super::{citation, form, graph};
-    ledger::one_read(|| {
+    let mut lines = state_dir.map(|dir| lifecycle_read::doctor_lines(dir, repo)).unwrap_or_default();
+    lines.extend(ledger::one_read(|| {
         let notes = || issues_of(repo, rules).ok().map(|issues| notes_of(&issues));
         vec![doctor_line(repo, rules), graph::doctor_line(repo, rules), form::doctor_line(repo, rules), citation::doctor_line(repo, notes)]
-    })
+    }));
+    lines
 }
 
 /// 引用の行へ渡す台帳の材料（閉じた問いの notes と全 bead の notes）。
@@ -142,17 +156,25 @@ pub fn doctor_line(repo: &Path, rules: Option<&str>) -> String {
 
 /// 読みの全部（manifest → 台帳 → pointer の先）。読めない周は理由の語。
 fn measure(repo: &Path, rules: Option<&str>) -> Result<Report, &'static str> {
-    let issues = issues_of(repo, rules)?;
+    let manifest = manifest_of(rules)?;
+    let issues = read_issues(repo, &manifest)?;
     let resolved = issues.iter().filter_map(pointer_of).filter(|text| resolves(repo, text)).map(str::to_owned).collect();
-    Ok(judge(&issues, &resolved))
+    Ok(judge(&issues, &resolved, int_row(&manifest, NOTES_MAX_ROW).ok()))
 }
 
-/// 台帳を読む（manifest の待ち上限 → 台帳の client）。読めない周は理由の語。引用の行も同じ読みを [`ledger::one_read`] の区間で分ける。
+/// 台帳を読む（manifest → 台帳の client）。読めない周は理由の語。引用の行も同じ読みを [`ledger::one_read`] の区間で分ける。
 fn issues_of(repo: &Path, rules: Option<&str>) -> Result<Vec<Issue>, &'static str> {
-    let manifest = rules
-        .map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path)))
-        .map_err(|_| "rules-unreadable")?;
-    let timeout = ledger::timeout_of(&manifest).ok_or("no-rule")?;
+    read_issues(repo, &manifest_of(rules)?)
+}
+
+/// 規則の manifest（`rules` の path か埋め込み）。
+fn manifest_of(rules: Option<&str>) -> Result<Manifest, &'static str> {
+    rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))).map_err(|_| "rules-unreadable")
+}
+
+/// manifest の待ち上限で台帳を読む。
+fn read_issues(repo: &Path, manifest: &Manifest) -> Result<Vec<Issue>, &'static str> {
+    let timeout = ledger::timeout_of(manifest).ok_or("no-rule")?;
     ledger::read_ledger(ledger::DEFAULT_BD, repo, timeout).map_err(|error| match error {
         LedgerError::Unreadable => "ledger-unreadable",
         LedgerError::Timeout => "ledger-timeout",
@@ -191,12 +213,17 @@ mod tests {
         ]"####;
         let issues = issues_of(json).unwrap_or_default();
         let resolved: BTreeSet<String> = ["docs/design/x.md#a".to_owned()].into();
-        let found = render(&judge(&issues, &resolved));
+        let found = render(&judge(&issues, &resolved, Some(8192)));
         assert_eq!(
             found,
-            "ledger: open=10 contracts=4 unresolved=1 bodied=2 memos=5 unpointed=3 unresolved:u1 bodied:b1,b2 unpointed:m1,m2,m3"
+            "ledger: open=10 contracts=4 unresolved=1 bodied=2 memos=5 unpointed=3 oversized=0 unresolved:u1 bodied:b1,b2 unpointed:m1,m2,m3"
         );
-        assert_eq!(render(&judge(&[], &resolved)), "ledger: open=0 contracts=0 unresolved=0 bodied=0 memos=0 unpointed=0");
+        assert_eq!(render(&judge(&[], &resolved, Some(8192))), "ledger: open=0 contracts=0 unresolved=0 bodied=0 memos=0 unpointed=0 oversized=0");
+        // notes の上限は open な memo の notes だけに掛かる（`## memo` は 7 byte・description と closed は数えない）。
+        let small = render(&judge(&issues, &resolved, Some(6)));
+        assert!(small.contains(" oversized=1 ") && small.ends_with(" oversized:m2"), "上限を越えた memo は m2 だけ: {small}");
+        let unruled = render(&judge(&issues, &resolved, None));
+        assert!(unruled.contains(" oversized=no-rule ") && !unruled.contains("oversized:"), "行の無い周は no-rule: {unruled}");
         assert_eq!(render_unreadable("ledger-unreadable"), "ledger: unreadable reason=ledger-unreadable");
     }
 }
