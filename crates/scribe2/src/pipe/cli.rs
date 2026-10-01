@@ -51,10 +51,10 @@ use super::gate;
 use super::land;
 use super::notify;
 use super::regate::REASON_FLAG;
-use super::review::ReviewCheck;
 use super::stop::stop;
 use super::{head_of, repo_of_run, repo_path};
 use crate::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
+use crate::fleet::lifecycle_read;
 use crate::fleet::store::LockPolicy;
 use crate::fleet::{Mark, Stage};
 use crate::rules::manifest::Manifest;
@@ -280,27 +280,35 @@ fn notices(queue: &Queue<'_>, run: Option<&str>, turn: &queue::Turn) -> Vec<Stri
     let Ok(state) = super::current(&queue.state_dir) else {
         return Vec::new();
     };
+    // 送るかと語は局面の出力の便の部品から読む（比べる印は event log・case-lifecycle §15 の表・設計 §43 行 ar）。
+    // 終端の語は event log の印で・memo の要約は台帳の印で古さを測るので、1 回の読みで両方と比べる（行 au）。
+    let output = lifecycle_read::read(&queue.state_dir, &queue.repo, &[lifecycle_read::Input::Events, lifecycle_read::Input::Ledger]);
     let mut payloads = Vec::new();
     if let Some(found) = run.and_then(|id| state.runs.get(id)) {
-        if let Some(word) = alarm_word(&queue.state_dir, &found.id, found.stage, found.detail.as_deref()) {
-            let line = notify::Terminal { bead: &found.bead, run: &found.id, stage: found.stage.as_str(), word };
+        if let Some(word) = word_of(&output, &found.id) {
+            let line = notify::Terminal { bead: &found.bead, run: &found.id, stage: found.stage.as_str(), word: &word };
             payloads.push(notify::terminal_line(&line));
         }
     }
     // 並列の実測は同じ周の `Turn` と運転手の置き場で 1 回だけ撃つ（設計 dispatcher.md §26 形 4）。
     let facts = queue::facts::facts(&queue.state_dir, Some(turn), crate::seat::state::now_secs());
-    // 未処置の終端: `Settled` の候補ごとにその bead の最新の便（run id の昇順の最後）を同じ `alarm_word` で判じる（設計 §29 形 1）。
-    let pending: Vec<notify::Terminal<'_>> = turn
+    // 未処置の終端: `Settled` の候補ごとにその bead の最新の便（run id の昇順の最後）を同じ読みで判じる（設計 §29 形 1・§43 行 ar）。
+    let settled: Vec<&crate::fleet::Run> = turn
         .candidates
         .iter()
         .filter(|found| matches!(found.reason, Some(queue::WaitReason::Settled { .. })))
         .filter_map(|found| state.runs.values().rfind(|run| run.bead == found.bead))
-        .filter_map(|last| {
-            let word = alarm_word(&queue.state_dir, &last.id, last.stage, last.detail.as_deref())?;
-            Some(notify::Terminal { bead: &last.bead, run: &last.id, stage: last.stage.as_str(), word })
-        })
         .collect();
-    payloads.extend(notify::idle_line(turn, &facts, &pending));
+    let words: Vec<Option<String>> = settled.iter().map(|last| word_of(&output, &last.id)).collect();
+    let pending: Vec<notify::Terminal<'_>> = settled
+        .iter()
+        .zip(&words)
+        .filter_map(|(last, word)| Some(notify::Terminal { bead: &last.bead, run: &last.id, stage: last.stage.as_str(), word: word.as_deref()? }))
+        .collect();
+    // 出力が無いか読めない周は、`Settled` の候補が 1 本以上の周だけ ` pending=unreadable`（0 本の周は key を出さない）。
+    let unread = !matches!(output, lifecycle_read::Lifecycle::Read(_)) && !settled.is_empty();
+    let memos = memos_of(&output, &queue.state_dir);
+    payloads.extend(notify::idle_line(turn, &facts, (!unread).then_some(pending.as_slice()), &memos));
     // 直しの束の集合が前に送った集合と違う周だけ 1 行（設計 dispatcher.md §27 形 2・同じ宛先と送達の 1 関数）。
     payloads.extend(queue::bundle::changed(&queue.state_dir).map(|found| notify::precheck_line(&found)));
     // 送達の記録と消費の証拠は運転手の置き場で測る（設計 dispatcher.md §21 形 1・解決は flag の 1 回だけ）。
@@ -314,28 +322,68 @@ fn notices(queue: &Queue<'_>, run: Option<&str>, turn: &queue::Turn) -> Vec<Stri
         .collect()
 }
 
-/// 席へ知らせる終端か（`Some` なら段に添える 1 語・設計 dispatcher.md §19 形 1 (a)）。
+/// 便 `run` の終端の知らせに添える 1 語（`None` なら送らない・設計 dispatcher.md §43 行 ar）。
 ///
-/// 送るのは `Reviewed` / `Gated` の PASS でない周（verdict の字面）・`Failed`・`Questioned`・`Stopped`（detail の頭の
-/// 1 語）。`Landed` と PASS は送らない（静かな正常）。**段の網羅 match で書く**（段が増えたら compile で気付く）。
-fn alarm_word<'a>(state_dir: &std::path::Path, id: &str, stage: Stage, detail: Option<&'a str>) -> Option<&'a str> {
-    match stage {
-        Stage::Failed | Stage::Questioned | Stage::Stopped => Some(notify::head_word(detail)),
-        Stage::Gated => match land::verdict_of(state_dir, id) {
-            Some(gate::Verdict::Pass) => None,
-            found => Some(found.map_or("読めない", gate::Verdict::as_str)),
-        },
-        Stage::Reviewed => match ReviewCheck::judge(state_dir, id) {
-            ReviewCheck::Passed => None,
-            found => Some(found.as_str()),
-        },
-        Stage::Landed
-        | Stage::Intake
-        | Stage::Blocked
-        | Stage::Spawned
-        | Stage::RateLimited
-        | Stage::Implemented => None,
+/// 局面の出力の便の部品（case-lifecycle §2.1）から読む: 手番が seat なら理由の語（理由が無ければ `-`）で、古い周は `:stale` を添える。
+/// seat でない部品は古い周だけ語 `stale`（古い手番で黙らない・fail-open）。部品の無い便は送らない。出力の file が在って読めない周は
+/// `unreadable`、file が無い周は送らない（局面を一度も書いていない置き場の静かな終端に行を足さない）。
+fn word_of(output: &lifecycle_read::Lifecycle, run: &str) -> Option<String> {
+    let found = match output {
+        lifecycle_read::Lifecycle::Read(found) => found,
+        lifecycle_read::Lifecycle::Unreadable => return Some("unreadable".to_owned()),
+        lifecycle_read::Lifecycle::Absent => return None,
+    };
+    let part = found.parts.iter().find(|part| part.part == crate::case::Kind::Run && part.id == run)?;
+    let word = part.reason.as_deref().unwrap_or("-");
+    match (part.turn == crate::case::Turn::Seat, stale_by(found, lifecycle_read::Input::Ledger)) {
+        (true, false) => Some(word.to_owned()),
+        (true, true) => Some(format!("{word}:stale")),
+        (false, true) => Some("stale".to_owned()),
+        (false, false) => None,
     }
+}
+
+/// 出力が古いか（古さの印と、`skip` 以外の入力の今の印が違う理由・比べる印は呼び手ごとに違う・case-lifecycle §15 の表）。
+fn stale_by(found: &lifecycle_read::Found, skip: lifecycle_read::Input) -> bool {
+    found.stale.iter().any(|reason| *reason != lifecycle_read::Reason::Differs(skip))
+}
+
+/// idle の行の memo の要約（設計 dispatcher.md §43 行 au・比べる印は台帳）。
+///
+/// 出力が無いか読めない周は ` memos=unreadable`。読めた周は ` memos=<開いた数>:<memo-actionable の数>[:stale][ next=<memo id>:<語>]` で、
+/// 開いた数が 0 で古くない周は key を出さない。`next` は memo-actionable のうち since の古い順（since の無い部品は後・同じなら id の字の順）の先頭 1 本、
+/// 語はその理由の語（理由が verdict の memo は行 ao の読みの最新の判定の語・置き場か file が無ければ `-`・読めなければ `unreadable`）。
+fn memos_of(output: &lifecycle_read::Lifecycle, state_dir: &std::path::Path) -> notify::Memos {
+    let lifecycle_read::Lifecycle::Read(found) = output else {
+        return notify::Memos { line: " memos=unreadable".to_owned(), actionable: false };
+    };
+    let memos = || found.parts.iter().filter(|part| part.part == crate::case::Kind::Memo);
+    let open = memos().filter(|part| !part.closed).count();
+    let waiting: Vec<&crate::case::Part> = memos().filter(|part| part.phase == crate::case::Phase::MemoActionable).collect();
+    let stale = stale_by(found, lifecycle_read::Input::Events);
+    let next = waiting.iter().min_by_key(|part| {
+        let since = part.since.as_deref().and_then(crate::fleet::epoch_of);
+        (since.is_none(), since, part.id.as_str())
+    });
+    fn word<'p>(state_dir: &std::path::Path, part: &'p crate::case::Part) -> &'p str {
+        match part.reason.as_deref() {
+            Some(crate::ledger::phase::REASON_VERDICT) => match queue::memo::judgement(state_dir, &part.id) {
+                queue::memo::Judgement::Absent => "-",
+                queue::memo::Judgement::Unreadable => "unreadable",
+                queue::memo::Judgement::Judged(verdict) => verdict.word.as_str(),
+            },
+            Some(other) => other,
+            None => "-",
+        }
+    }
+    let line = if open == 0 && !stale {
+        String::new()
+    } else {
+        let tail = if stale { ":stale" } else { "" };
+        let next = next.map_or_else(String::new, |part| format!(" next={}:{}", part.id, word(state_dir, part)));
+        format!(" memos={open}:{}{tail}{next}", waiting.len())
+    };
+    notify::Memos { line, actionable: !waiting.is_empty() }
 }
 
 /// **自分が駆動した便**（`pipe run` / `pipe resume` が名乗る・設計 §5「渡す周と渡さない周」）。
