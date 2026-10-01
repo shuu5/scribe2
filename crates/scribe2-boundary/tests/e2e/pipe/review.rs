@@ -679,6 +679,8 @@ fn pipe_review_resume_from_intake_reviews_before_spawning() {
 }
 
 // ───── 事前審査の先撃ち（設計 dispatcher.md §27 形 aa・行 aa・`s2-07l.718`・接頭辞 `pipe_prelens_`） ─────
+// flip-check: moved s2-07l.736.33.10
+// 先撃ちの私有の 4 本（materialize・declare・requirements_of・digest）は pipe の review の子 module `tree` へ純移動した（歯は足さない）。
 //
 // 依存 A（行 a・held）を blocks で待つ clean な行 b / c に、起こす側の周（`pipe dispatch`）が lens を裏で先に撃つ。偽 lens は起動の
 // たびに回数の file へ 1 行を足す。base には先撃ちが無い＝偽 lens は 1 回も起きず置き場も無い（RED）。

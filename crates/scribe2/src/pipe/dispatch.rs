@@ -39,7 +39,7 @@ pub(crate) mod group;
 pub(crate) mod facts;
 
 /// 依存を待つ行に受付の判定を予想の base で先に撃つ事前審査（設計 §27・契約表の行 x）。
-mod precheck;
+pub(in crate::pipe) mod precheck;
 
 /// 事前審査の確定を根で束ねる直しの束（設計 §27・契約表の行 y・終端の周の知らせが集合の変化を読む）。
 pub(crate) mod bundle;

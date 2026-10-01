@@ -92,7 +92,7 @@ fn live_of(state_dir: &Path, state: &State, bead: &str) -> Option<(String, Stage
 
 /// 祖先 1 つの重ね方（形 1・先撃ちの実体化も同じ層を当てる・行 aa）。
 #[derive(Clone)]
-pub(super) enum Layer {
+pub(in crate::pipe) enum Layer {
     /// 宣言の予想: write-set の `+` を tracked に足し `~` を除く（本文は持たない）。項目は動く file に入る。
     Declared(Vec<String>),
     /// Gated PASS の便の実物: worktree の base..HEAD の差分で tracked を足し引きし、本文を置き換える（動く file に入れない）。
