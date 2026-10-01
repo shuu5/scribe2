@@ -937,7 +937,7 @@ done = "(1) seat ruling bind は結ぶ前に repo の台帳の印を読み、Ok 
   - 管理 tick は systemd の user の timer の oneshot で走り、その PATH に台帳 client の `bd` が無い。PATH に bd の無い env で `fleet lifecycle write` を撃つと `lifecycle=unreadable`（理由 `ledger`）、`--bd` に絶対 path を渡すと書けた（2026-10-01 の実測）。
   - 入力の印の読み（`crates/scribe2/src/fleet/lifecycle_mark.rs`）: 台帳は `.beads` の manifest の 1 file（embedded）か `issues.jsonl` の stat（files）・main は `refs/remotes/origin/main` の loose の ref か packed-refs の読みで、bd も git も撃たない。順の比べ（`main_order`）だけが git を撃つ。
   - 既存の tick の歯 `seat_tick_rewrites_lifecycle_` の置き場の登録 row の anchor は在らない path（`/repo`）で、台帳の印も main の印も読めない。
-- 約束（番号は done と 1:1）:
+- 約束（番号は done の (1)〜(5) と 1:1・約束 6 は done (7)・done (6) は既存の歯 `seat_tick_rewrites_lifecycle_` の緑）:
   1. rules 行 `lifecycle.full_min_s`（kind `LifecycleFullMinS`・形 Int・値 300・enabled・裁定の字 `user 2026-10-01T15:27Z`・裁定日 2026-10-01）を、埋め込み manifest の `lifecycle.age_h.epic-closable` の行の直後（`memo.notes_max_bytes` の前）に 1 本置き、kind は `ALL` の `LifecycleAgeH` の直後（`MemoNotesMaxBytes` の前）に置く。字面から引け、形は Int だけ。memo の 3 行は manifest と `ALL` の末尾のまま。
   2. 管理 tick の周は、判定・打刻・部分の書き直しの後に、次の 5 つを全部満たす周だけ全部の書き直しを 1 回撃つ。
      - manifest を読めた周（rc 1 の error の周でない）で、target の登録 row が在る。
@@ -950,7 +950,7 @@ done = "(1) seat ruling bind は結ぶ前に repo の台帳の印を読み、Ok 
   3. 撃った周は、返りの 6 値に依らず、置き場の `fleet/lifecycle.tick` を 1 行 `ts=<epoch 秒> wrote=<返りの語>`（語は `Wrote` の語の 6 つ）で一時 file → rename で書く。撃たない周は書かない。読み手は約束 2 の 4 つ目だけ。
   4. tick の rc・stdout の判定行・stderr は、撃った周も撃たない周も変えない（部分の書き直しと同じく返りは字にしない）。
   5. `seat` の使い方の 1 行と help の seat の頁の `tick --state-dir S --target S:W [--rules F]` を `tick --state-dir S --target S:W [--rules F] [--bd B]` にする。help の seat の頁の FORM は使い方の行の逐語の写しのまま（`crates/scribe2-boundary/tests/e2e/main.rs` の `cli_help_pages_match_the_live_form_and_every_subcommand` が一致を測る・本文は変えない）。
-  6. 管理 tick の全部の書き直しは、約束 2 の 5 つを全部満たした周にだけ §20 の数えの 1 本（`crates/scribe2/src/fleet/lifecycle_mark.rs` の census_anchors・行 j）を撃ち、One を返す周だけ撃つ。引数は置き場・登録 row の anchor（repo）・tick がその周の判定の前に読んだ event の列（event log を読み直さない）。Many と Foreign の周は撃たず、撃った記録も書かない（約束 3 の撃たない周）。5 つの比べは今のまま bd も git も撃たない（数えの git は 5 つを満たした周だけ）。done は (8)（done (6)(7) は既存の歯と閉包）。
+  6. 管理 tick の全部の書き直しは、約束 2 の 5 つを全部満たした周にだけ §20 の数えの 1 本（`crates/scribe2/src/fleet/lifecycle_mark.rs` の census_anchors・行 j）を撃ち、One を返す周だけ撃つ。引数は置き場・登録 row の anchor（repo）・tick がその周の判定の前に読んだ event の列（event log を読み直さない）。Many と Foreign の周は撃たず、撃った記録も書かない（約束 3 の撃たない周）。5 つの比べは今のまま bd も git も撃たない（数えの git は 5 つを満たした周だけ）。done は (7)（done (6) は既存の歯）。
 - 閉包: rules 行は id の字で引く（新しい code は `RuleKind` の変種を名指すのは rules の module と歯だけ）。`EventKind`・`Stage`・`WaitReason`・`Turn` を名指さない（§12 の閉包と同じ）。`RuleKind` は touches に置く。
 - 歯:
   - e2e（既存の `crates/scribe2-boundary/tests/e2e/seat/tick.rs`・接頭辞 `seat_tick_full_lifecycle_`）。置き場は既存の tick の fixture（`crates/scribe2-boundary/tests/e2e/seat.rs` の置き場）に、登録 row の anchor を toy repo にする形を足して使う。toy repo と偽 bd は既存の `fleet_lifecycle_` の歯の fixture（`crates/scribe2-boundary/tests/e2e/fleet.rs`・`.beads` の files の形・偽 bd は `--readonly list` に空の列を返す）を開いて使う。どの歯も `--rules` の写しで `lifecycle.full_min_s` を 60 にし、撃つ形を 1 つ以上持つ（base は `--bd` も行の kind も知らず rc 1 で撃たない＝RED）。toy repo は作る時の `vessel init` で自分の tmp の置き場を git の設定 `<NAME>.stateDir` に名乗る（tick の置き場とは別の在る dir＝そのままでは約束 6 の数えが Foreign で撃たない）ので、どの歯も頭でその設定を tick の置き場の dir に書き直し、設定の値が置き場の dir と等しいことを前提として assert する。tick の PATH は本物の git を引く（`seat_tick_rewrites_lifecycle_` の偽の git は rc 0 で空を返し、設定を読めない）。
