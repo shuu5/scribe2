@@ -3,7 +3,7 @@
 - 出所: 持ち主の問い 2026-09-30T11:3xZ〜11:5xZ（逐語は台帳 s2-07l.736.31 の notes）→ epic s2-07l.736.33 → [ADR-0103](../../design-intent/decisions/ADR-0103-contract-rows-pass-row-review-before-merge-and-failed-rows-keep-their-place.html)。材料は 2026-09-28〜09-30 の便 165 本の FAIL / INCONCLUSIVE 76 件の分析（host の file・tracked でない）。推奨の採用は常設の裁定 user 2026-09-28T00:54Z（決めてほしいことは推奨で進める）の適用で、rules 行の値 2 つ（§7 の期限・§6 の値 0）と行の審査の消費（§10）は SRS の追加 round で裁定を取った（値は user 2026-09-30T22:13Z 項 reserve・項 precheck、消費は常設の裁定の適用）。
 - 要件（SRS 0.33）: [FR100](../../design-intent/spec/srs.html#FR100) 行の審査 / [FR101](../../design-intent/spec/srs.html#FR101) merge の門の行の審査の判定 / [FR102](../../design-intent/spec/srs.html#FR102) 行の予約 / [FR103](../../design-intent/spec/srs.html#FR103) 兄弟の待ち / [FR49](../../design-intent/spec/srs.html#FR49) 契約の審査 / [FR68](../../design-intent/spec/srs.html#FR68) 起動の列 / [FR92](../../design-intent/spec/srs.html#FR92) merge の門 / [FR39](../../design-intent/spec/srs.html#FR39) 交差の排他 / [FR44](../../design-intent/spec/srs.html#FR44) 席の入力欄への差し込み（変えない・§3 形 6）。受け入れ基準は AC73〜AC76 と AC22・AC62。
 - 前提: 審査役に読みだけの道具を渡し、作業場所を審査の木（HEAD の commit を detach した一時の worktree）にする設計（同じ epic の別の設計・着地済み・以下「打ち手 0」）。行の審査の lens はその形で撃つ。
-- この設計から出る契約: §11 の 10 行（行 a〜g と、行 a から分けた 3 行＝lens の版の flag の行 h・先撃ちの私有の 4 本の純移動の行 a0・行の審査の記録の読み手と鍵の口と祖先の層の行 a1）。契約表は doc の末尾の区間に在る。
+- この設計から出る契約: §11 の 10 行（行 a〜g と、行 a から分けた 3 行＝lens の版の flag の行 h・先撃ちの私有の 4 本の純移動の行 a0・行の審査の記録の読み手と鍵の口と祖先の層の行 a1）と、§14 の行 i（同じ本文の祖先の節を 2 度写さない）。契約表は doc の末尾の区間に在る。
 
 ## 1. 何を解くか
 
@@ -403,4 +403,53 @@ size = "M"
 growth = ["crates/scribe2/src/pipe/dispatch.rs:10", "crates/scribe2/src/pipe/dispatch/candidates.rs:150", "crates/scribe2/src/pipe/dispatch/reserve.rs:12", "crates/scribe2/src/case/mod.rs:2", "crates/scribe2-boundary/tests/e2e/pipe/dispatch/waiting.rs:500"]
 depends = ["a", "f"]
 done = "(1) 偽 bd と偽の終端の便で、直前の便が Reviewed FAIL の B と同じ section を実装する行の候補が reason=sibling:<B> で待ち、同じ doc の別の section の行の候補は起こされる（兄弟の候補の write-set は (h) を除いて B の行の予約と交差しない）〔pipe_dispatch_sibling_wait_ の (a)〕 (2) B の直前の便の写しから §3 の口 (B) で求めた digest で B の行を載せた ref の記録に載る別の section の行も sibling:<B> で待ち、ref の記録は push 2 回の PR の 2 file の形と直しの PR の 1 file の形の 2 形、B の行を別の digest で載せた ref の記録だけに載る行は起こされる〔(b)・2 形と対照〕 (3) first の印を持つ候補・B が blocks で直に待つ同じ section の候補・blocks を 2 段たどった祖先の候補は起こされ、同じ周の同じ section の印の無い候補は sibling:<B> で待つ〔(c)・3 形と対照〕 (4) 直前の便が Failed・Stopped・unparsed の INCONCLUSIVE の B と、終端の後に新しい便が起きた B は兄弟を待たせず、Gated FAIL と unparsed でない INCONCLUSIVE の B は待たせる。待たせない 4 形は、同じ周に Reviewed FAIL の別の B の兄弟が別の section で sibling で待つ対照を持つ〔(d)・6 形〕 (5) 解けの 8 形（B の行を直して main に commit した周・兄弟自身の今の digest の PASS の記録が B の終端の後に在る周・B への hold・B の終端の後の release・B の close・値 1 の写しで 2 時間前の終端・兄弟自身の forecast と partial の unparsed でない INCONCLUSIVE の記録が B の終端の後に在る周）で候補が起こされ、各形は先に同じ置き場で sibling:<B> で待つことを測る。解けない 4 形（兄弟自身の FAIL の記録が終端の後・PASS の記録が終端の前・actual の unparsed でない INCONCLUSIVE の記録が終端の後・forecast の unparsed の INCONCLUSIVE の記録が終端の後）は sibling:<B> のまま〔(e)・解け 8 形と解けない 4 形〕 (6) 期限の行の無い rules の写しの周は reason=sibling:<B>/unset、値 0 の写しは 100 時間前の終端でも sibling:<B> で待つ〔(g)・2 形〕 (7) 兄弟で依存待ちの候補は dependency のまま。床の検査が合格の周に sibling:<B> で待つ候補は、不合格の周は floor〔(f)・2 形〕 (8) B と同じ section で write-set が B の行の予約と交差する後ろの候補は reserved でなく sibling:<B> で待つ〔(h)〕 (9) 兄弟の待ちの判定は event log の行数を増やさない（各周の前後で events の行数が同じ・周の数と待った候補の数を出す）〔(a)〜(h) の各周〕 (10) 名 sibling は WAIT_REASONS の reserved の後ろで、描きは sibling:<bead> と末尾 /unset の 2 形、局面の表 QUEUED_TURNS は sibling を手番 seat で持ち 12 語になる〔直す既存の歯 pipe_dispatch_wait_reasons_render_the_name_and_the_value・phase_table_queued_reasons_cover_the_wait_reasons・phase_table_turn_of_matches_every_row_of_the_table〕 (11) 行の予約の挙動は変わらない。行 f の歯の fixture の helper だけを直して B の行を 2 つ目の節に置き、歯の本文は変えない〔変わらない既存の歯 pipe_dispatch_row_reservation_ の 7 本〕 base は sibling が無く兄弟が起こされるので (a)〜(h) の待ちの assert が RED、名と variant が無いので 3 本の lib の歯が compile で落ちて RED"
+
+[[contract]]
+id = "i"
+title = "行の審査の宣言の祖先の材料で、節の本文が材料に既に在る本文（行自身の節か先に足した祖先の節）と byte で同じ祖先は、本文の代わりに見出しの 1 行と「（節の本文は上と同じ）」の 1 行だけを足す（§14）"
+req = ["FR100", "FR49"]
+section = "14"
+write-set = ["crates/scribe2/src/pipe/review_ref.rs", "crates/scribe2-boundary/tests/e2e/pipe/review.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail ancestor_body_once_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_review_ref_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
+size = "S"
+growth = ["crates/scribe2/src/pipe/review_ref.rs:20", "crates/scribe2-boundary/tests/e2e/pipe/review.rs:110"]
+done = "(1) 節 1 つの toy の doc で --ref の commit が足した節 1 の行 a・b・c（c の depends が b・b の depends が a・bead なし）の口は rc 0 で、行 c の design.txt は節の本文の印の字をちょうど 1 回・未着地の祖先の頭の 1 行をちょうど 2 回・行 a と b の TOML の写しの id の行を 1 回ずつ持ち、見出しの行 <doc>#b §1 と <doc>#a §1 の直後の行がどちらも「（節の本文は上と同じ）」〔ancestor_body_once_ の (a)・前提の assert: anchor の HEAD は main のまま・HEAD の表に a・b・c が無い・--ref の doc が印の字を 1 回だけ持つ・c の basis が forecast・c の記録の ancestors が a と b を declared で持つ〕 (2) 節 2 つの doc（本文の印は別の字）で節 1 の行 a・b（b の depends が a）と節 2 の行 d（depends が b）を足した口の行 d の design.txt は、節 1 の印をちょうど 1 回・節 2 の印をちょうど 1 回・「（節の本文は上と同じ）」の行をちょうど 1 回持つ〔(b)・前提の assert: d の basis が forecast・記録の ancestors が a と b を declared で持つ〕 (3) 節 1 と節 2 の本文が同じ印の字の doc で節 1 の行 a と節 2 の行 e（depends が a）を足した口の行 e の design.txt は印の字をちょうど 1 回持ち、見出しの行 <doc>#a §1 の直後の行が「（節の本文は上と同じ）」〔(c)・前提の assert: --ref の doc が印の字を 2 回持つ・e の basis が forecast〕 (4) 既存の pipe_review_ref_ の歯は本文を変えずに緑（違う節の祖先の本文を全部持つ末尾の字を測る forecast の歯と、同じ節の祖先を持つ機械の検査の歯を含む）〔verify の 2 行目〕 (5) 新しい code は review_ref.rs の私有の fn の中だけに在り、他の行の touches に在る型 crate::pipe::review::Material を構造として持たず、契約表の検査が findings 0〔verify の 3 行目 contracts check〕 base は祖先の本文を比べずに全部足すので、(a) の行 c は印の字を 3 回、(b) の行 d は節 1 の印を 2 回で「上と同じ」の行を持たず、(c) の行 e は印の字を 2 回持ち、(a)〜(c) が RED"
 <!-- contracts:end -->
+
+## 14. 同じ本文の祖先の節を 2 度写さない（行の審査の祖先の材料・契約表の行 i）
+
+やさしく言うと: 行の審査は、まだ着地していない祖先の行ごとに、その行の TOML と節の本文を lens の材料の末尾に足す（§3 形 3）。同じ節から出た行が depends で鎖になると、同じ本文が祖先の数だけ写り、長い節の行は lens の材料の上限を越えて審査を受けられない。祖先の節の本文が材料に既に在る本文と同じ字なら、2 度目からは見出しの 1 行と「（節の本文は上と同じ）」の 1 行だけを足す。この § は §3 形 3 と §12 の最後の限界の項を狭める（2 か所の字は変えない・§3 を実装する行の鍵を動かさない）。
+
+- 出所: [contract-source.md](./contract-source.md) §66 の行 bv〜bz の、行の審査の前の見積（2026-10-02・host の file・tracked でない）。§66 の本文は約 41 KB で、同じ §66 の未着地の行を祖先に持つ行 bx・by・bz の設計の材料は、§66 の本文を 3 回（bx・by）か 4 回（bz）持ち、上限を越える。§12 の最後の項の 2 つの手のうち、祖先の着地を待つ手は祖先の着地の順に審査が詰まり、行を割る手は 5 行の section を変えて全部の鍵を動かす。
+- 何が起きているか（main 32ff0bf3・verified）:
+  - `crates/scribe2/src/pipe/review_ref.rs` の `stage_row`（:466）が審査の木を作り、`note_of`（:486・呼び出しは :479）の字を Reviewed と同じ組み手 `stage`（`crates/scribe2/src/pipe/review.rs` の :360）に渡す。`note_of` は宣言の祖先ごとに `ANCESTOR_NOTE`（:41）の 1 行・行の TOML の写し（`row_toml`・:500）・祖先の節の本文（`design_material`〔review.rs の :447〕の末尾の空白を落とした字・:491）を足し、本文どうしを比べない。
+  - `stage` は行自身の設計の材料（`design_text`・review.rs の :453。見出しの 1 行 `<doc>#<行 id> §<節>` と本文・:474）の後ろに改行 1 つと note を足す（:369）。`design_text` の本文は goal を持つ行では goal で、読めない周と節の無い周は改行を持たない断りの 1 行になる。
+  - 祖先は表の depends と台帳の blocks を推移でたどり、着地した行で止まる（`crates/scribe2/src/pipe/dispatch/precheck.rs` の `ancestry`）。同じ節の行が鎖を成すと、鎖の末の行の design.txt は同じ本文を「宣言の祖先の数 + 1」回持つ。
+  - lens の子は stated・設計・要件・約束の行・done の項目の byte の和が rules 行 `gate.token_cap`（150000・`rules/manifest.toml` の :178）を越えると、claude を起こさずに INCONCLUSIVE を返す（`crates/scribe2/src/headless/lens.rs` の `prompt_of`・:399・和は :424・断りは :427）。done の対応の表が無い答えは `tip`（review.rs の :636・:646）が理由の型 unparsed にし、`result_of`（review_ref.rs の :599）が ref を fail にし、unparsed の記録は使い回さない（`kept_verdict`・:512）。
+- 見積（inferred・材料の組みを Python で写した値・lens の撃ちは未実測）: 設計の材料は直しの前 → 後で、bv 76 → 76 KB・bw 121 → 80 KB・bx 185 → 103 KB・by 169 → 87 KB・bz 229 → 106 KB。ほかの材料（stated・要件・約束の行・done の項目）の 10〜18 KB を足して bx 約 115・by 約 104・bz 約 121 KB で、どれも上限の内（29 KB 以上の余地）。違う節の祖先（pipeline.md §66 の約 30 KB・本 doc §6 の約 8 KB）は今どおり全部写る。
+- 形（番号は行 i の done と 1:1）:
+  1. **行自身の節と同じ本文**: `note_of` は宣言の祖先ごとに、`ANCESTOR_NOTE` の 1 行と行の TOML の写しを今どおり足す。続く祖先の設計の材料（`design_material` の末尾の空白を落とした字）を最初の改行で見出しの 1 行と本文に割り、本文が行自身の設計の材料の本文と同じ byte なら、本文の代わりに見出しの 1 行と「（節の本文は上と同じ）」の 1 行を足す。行自身の本文は、`stage` が設計の材料に置くのと同じ読み（審査の木の上の `design_material`）から、同じく見出しの 1 行を除き末尾の空白を落とした字。
+  2. **先に足した祖先と同じ本文**: 同じ比べを、同じ note の中で先に本文を全部足した祖先の本文にも当てる（祖先の順は今の層の順のまま）。どれとも違う本文の祖先は、今どおり見出しと本文を全部足し、以後の比べの側に入る。
+  3. **比べるのは本文の byte**: 節の番号・doc・行 id では比べない。別の節（別の doc）でも本文の byte が同じなら畳み、goal を持つ行のように同じ節を指していても本文が違えば畳まない。改行を持たない設計の材料（断りの 1 行）は畳まず、比べる側にも入れない。
+  4. **ほかは変わらない**: `ANCESTOR_NOTE` の字・行の TOML の写し・確定でない finding の行（§3 形 4）・祖先の順と層・行自身の設計の材料は変わらない。祖先の無い行と、どの本文とも違う本文の祖先だけを持つ行の design.txt は 1 byte も変わらない。
+  5. **閉包を広げない**: 新しい code は review_ref.rs の私有の fn（`note_of` と、要れば私有の 1 本）の中だけに置き、本文は素の字で受け渡す。他の行の touches に在る型（`crate::pipe::review::Material`・contract-source.md の行 bc）を構造として持たない。`stage`・`design_material`・`design_text` の署名と本文は変えない（review.rs を write-set に持たない）。
+- 歯（接頭辞 ancestor_body_once_・main 32ff0bf3 の `crates/` と `docs/` で 0 件。設計 doc の nextest の verify の filter 語〔1101 語〕のどれも、歯の名〔module path 込み〕の部分にならない）: e2e の review の歯の file（`crates/scribe2-boundary/tests/e2e/pipe/review.rs`）の、行の審査の口の歯の節に置く（新しい e2e の module も、新しい src の file の in-file の歯も作らない）。置き場は既存の helper（行の審査の置き場・行の欄・doc・設計の PR の commit・口の撃ち・stdout の row の行・行の記録・design.txt の読み）で組み、偽 bd の台帳は空（行は bead を持たない）。節の本文は、行の TOML と見出しに現れない印の字の 1 行にし、数えは design.txt の中の印の字の出現の回数で測る（字の衝突で数えが空虚にならないように、--ref の doc が印の字を節の数だけ持つことを前提の assert にする）。
+  - (a) 節 1 つの doc。--ref の commit が節 1 の行 a・b・c を足す（c の depends が b・b の depends が a）。口は rc 0。前提: anchor の HEAD は main のまま・HEAD の表に a・b・c が無い・c の basis が forecast・c の記録の ancestors が a と b を declared で持つ。c の design.txt は印の字をちょうど 1 回・未着地の祖先の頭の 1 行（`ANCESTOR_NOTE` の字）をちょうど 2 回・行 a と b の TOML の写しの id の行を 1 回ずつ持ち、見出しの行 `<doc>#b §1` と `<doc>#a §1` の直後の行がどちらも「（節の本文は上と同じ）」。
+  - (b) 節 2 つの doc（本文の印は別の字）。--ref の commit が節 1 の行 a・b（b の depends が a）と節 2 の行 d（depends が b）を足す。前提: d の basis が forecast・記録の ancestors が a と b を declared で持つ。d の design.txt は節 1 の印をちょうど 1 回・節 2 の印をちょうど 1 回・「（節の本文は上と同じ）」の行をちょうど 1 回持つ（違う節の祖先の本文は 1 回だけ全部写り、2 本目の同じ本文が畳まれる）。
+  - (c) 節 2 つの doc で、節 1 と節 2 の本文が同じ印の字。--ref の commit が節 1 の行 a と節 2 の行 e（depends が a）を足す。前提: --ref の doc が印の字を 2 回持つ・e の basis が forecast。e の design.txt は印の字をちょうど 1 回持ち、見出しの行 `<doc>#a §1` の直後の行が「（節の本文は上と同じ）」。
+  - 既存の歯（字を変えずに緑・verify の 2 行目）: pipe_review_ref_ の全部。うち forecast の歯（節 1 の行 x と節 2 の祖先 y・本文が違う）は y の本文を全部持つ末尾の字の一致で、形 2 の「違う本文は今どおり」と形 4 を測る。機械の検査の歯（節 1 の行 d と同じ節の祖先 e）は design.txt の暫定の finding の行だけを測るので、畳んだ後も緑。
+  - 変異の A/B（判定の順・条件 1 つに歯 1 本）: 比べずに全部足す（base）→ (a)(b)(c)。行自身の本文とだけ比べる → (b)。先に足した祖先とだけ比べる → (a)（先の祖先の本文が全部写り、印が 2 回）。節の番号か (doc, 節) で比べる → (c)。同じ本文の祖先を丸ごと落とす（頭の 1 行と TOML も落とす）→ (a) の頭の行と id の行の数。比べずにいつも畳む → (b) の節 1 の印が 0 回・既存の forecast の歯。見出しの 1 行を落とす → (a)(c) の見出しの assert。
+- base で RED の理由: 歯は base に在る helper と口だけを使い、compile は通って assert が落ちる（機能不在）。base は祖先の本文を比べずに全部足すので、(a) の行 c は印の字を 3 回、(b) の行 d は節 1 の印を 2 回で「上と同じ」の行を持たず、(c) の行 e は印の字を 2 回持つ。歯は既存の e2e の歯の file に足すだけで、file の歯の区間が base で赤いので retroactive の札は要らない。
+- 触らない: 祖先の層と順（`ancestry`）・`ANCESTOR_NOTE` の字・行の TOML の写し・`stage`・`design_material`・`design_text`・行の digest（§3 形 2・行自身の節の本文から求め、note を含まない）・判定の鍵の式（§9・材料の鍵は材料の dir の全 file の digest のまま）・記録の形（§9）・Reviewed の段（note を足さない・使い回すのは basis が actual の記録だけで、宣言の祖先を持たない）・先撃ちの予想の印（別の 1 行）・lens の子と rules 行 `gate.token_cap`。§3 形 3 と §12 の最後の項の字は変えない。
+- 限界（§12 の最後の項を狭める）:
+  - 畳むのは byte で同じ本文だけ。違う節の宣言の祖先が多い行と、節が長い行は今どおり上限を越えうる（§12 の最後の項は、同じ本文が重なる分だけ狭まる）。大半が同じで 1 字でも違う本文は畳まない。
+  - 材料の鍵が変わるので、同じ本文の宣言の祖先を持つ行の記録は、binary の入れ替えの後に使い回されず 1 回ずつ審査し直される（判定が古くなるのでなく、費用が 1 回かかる）。
+  - 畳んだ祖先の部分は、本文の在り処を「上」とだけ言う。lens は見出しの 1 行（doc・行 id・節）で、どの本文と同じかを読む。
+- 却下:
+  - **(doc, 節) で比べる**: goal を持つ行（導出物の行）は同じ節を指しても本文が goal で違い、畳むと本文が落ちる。別の節・別の doc の同じ字は畳めない。材料に既に在るかは、在る byte で比べるのが正しい読み。
+  - **祖先の本文を note から外す（TOML だけを足す）**: 違う節の祖先の本文は、祖先が何を作り変えるかを lens に渡す材料で、外すと forecast の審査が目を失う。
+  - **§66 を行ごとの節に割る**: 形の共有の部分が子の節に写り、5 行の section を変えて全部の鍵が動き、子が育てばまた割れる。
+  - **§66 を縮める**: 本文が 4 回写る行 bz は §66 を約 17.6 KB 以下にする必要があり、形の部分だけで約 16.6 KB ある。
+  - **rules 行 `gate.token_cap` を上げる**: 値は user の裁定（NFR1）が要り、上げる PR・入れ替え・戻す PR を繰り返す。重なった本文は上限の内でも lens の費用を焼く。
+  - **同じ本文を digest で名指す**: lens は digest を照らす材料を持たない。見出しの 1 行で足りる。
+- ADR を書かない判じ（1 行）: 憲法条の新しい解釈が無く、外部依存の増減も無く、on-disk の形（§9 の行の記録・ref の記録・材料の file 名）を変えず（design.txt の中身が短くなるだけ）、却下案は本 § に残る。
