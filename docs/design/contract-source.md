@@ -1185,6 +1185,17 @@ size = "M"
 growth = ["crates/scribe2/src/pipe/gate/verify.rs:70", "crates/scribe2/src/pipe/review.rs:12", "crates/scribe2/src/pipe/review/items.rs:40", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs:260", "crates/scribe2-boundary/tests/e2e/pipe/review.rs:110"]
 depends = ["bx", "bv"]
 done = "(1) 契約 file が key done-teeth を持つ便だけ、gate の write-set を照らす段が名の歯（= も @ も ! も前に置かない歯）を、それを選ぶ検証行の crate と scope の便の HEAD の歯の区間で、行 bw の在りかの読み手（tooth_sites）で測る: HEAD に無い歯を「書かれていない歯」、2 か所以上に在る歯を「2 か所の名」、本文（fn の頭から次の #[test] の行まで）が base と同じ歯を「動いていない歯」の見出しの下に名指して段の rc 1（FAIL・段と理由の型と verdict は足さない）。base に無い歯と本文が base と違う歯は通す (2) 既存の歯（= と名）は、便の HEAD の同じ範囲にちょうど 1 つ在ることを測り、消えた歯と 2 か所に増えた歯を名指して段の rc 1 (3) @ と番号の歯と ! と仕組みの名の歯は、この段で測らない（@ は検証行の実走・仕組みは欄の有無に依らない測りが持つ） (4) key の無い契約の便は、名の歯を書かなくてもこの測りで落ちず、段の rc と stderr は今のまま (5) 審査の材料 items.txt は、契約 file が key を持つ周だけ、項目の行ごとに「(n) <本文> ／ 歯: <その番号の要素の歯を , で並べた字>」と宣言の歯を添え、表の指示に「<歯> はその項目の宣言の歯のうち、約束を外した実装で落ちる 1 本・無ければ -」と「! の仕組みの歯は構造の制約の項目にだけ当たり、挙動の約束に仕組みの歯しか無ければ -」を足す。key の無い契約の材料は 1 字も変えない (6) lens の表の歯が、その番号の宣言の歯（= の有無は問わない）の外の項目は、形の合わない項目に数えて判定を INCONCLUSIVE に倒す（§64 形 4 と同じ倒し）。key の無い契約の判定は §64 のまま (7) 足した歯の名は、ほかの行の歯の置き場を広げない（設計 doc の検証行の filter 語 contract_ などを名の部分に持たない） 歯: e2e の done_teeth_gate_（gate.rs・条件 1 つに歯 1 本: (1) の書かれていない歯・動いていない歯・2 か所の名の 3 本、(2) の消えた既存の歯の 1 本、全部を書いた便が PASS で @ と ! の要素を持っても段 ① が rc 0 の 1 本〔(1)(2)(3)〕、key の無い契約の便が名の歯を書かずに PASS の 1 本〔(4)〕）、lib の done_teeth_review_（review.rs の既存の mod tests・(5) の key の有無 2 通りの材料の字に 1 本・(6) の宣言の外の歯を形の合わない項目に数える表の読みに 1 本）、e2e の done_teeth_review_（review.rs・偽の lens が宣言の外の歯を返した便が INCONCLUSIVE の 1 本）。(4) の段の今のままは verify の 4〜5 行目の既存の歯（本文を変えない）、(7) は verify の 6 行目が測る。base は段 ① が key を読まず材料が歯を添えないので新しい歯は RED"
+
+[[contract]]
+id = "ca"
+title = "焼き直しの門の teeth-outside-write-set の物差しは at の path の形の項目から # の後ろと末尾の行の番号を剥がした file の字面で write-set と照らし、断りの理由は剥がした file を重複なしで名指す（§68・§35 の物差しの項目の字面の側）"
+req = ["FR49", "NFR4"]
+section = "68"
+write-set = ["crates/scribe2/src/pipe/review/judgement.rs", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_repeat_"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/review/judgement.rs:20", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs:75"]
+done = "(1) at が # の後ろを持つ path の項目（src/other.rs の後ろに # と歯の名）の teeth-outside-write-set の後、write-set に src/other.rs を足した契約が受付を通る (2) at が末尾に : と行の番号を持つ path の項目（src/other.rs の後ろに :12）の後、write-set に src/other.rs を足した契約が受付を通る (3) 同じ file に # の後ろの違う 2 項目と § の番号の後、file を足さない契約は finding-unaddressed で断られ、理由は剥がした file の字面を名指して # の後ろの字を持たず、数は「測った 1 件・測れない 1 件」 (4) 既存の pipe_intake_repeat_ の歯が本文を変えずに緑"
 <!-- contracts:end -->
 
 
@@ -2344,3 +2355,23 @@ done = "(1) 契約 file が key done-teeth を持つ便だけ、gate の write-s
   - code-facts を契約 file へ写す key は足さない（reverse-index.md §7 (c) は行の欄を表の検査・受付・起動の列で測り、契約 file は読まない）。
   - 2 欄の値は ContractRow に載らないので、live な行の書き換えを止める hook の guard と、着地の列の settled の鍵（生成した契約 file の字）は、2 欄だけの変化を見ない。field を足すのは §66 の行 (1) と reverse-index.md の行 e。
 - ADR: 書かない（欄と key の形は ADR-0104・ADR-0105 が決めた。本 § はその読み手を先に置く段）。
+
+## 68. 焼き直しの門の teeth-outside-write-set の物差しは、at の path の形の項目から # の後ろと末尾の行の番号を剥がした file の字面で測る（契約表の行 ca・§35 の物差しの項目の字面の側・便 `s2-07l.738.39.6`）
+
+やさしく言うと: 審査役が「この歯は write-set の外の file にある」と指すとき、file の名の後ろに # と歯の名を付けて書くことがある。器はその字面のまま write-set と比べるので、file を write-set に足しても「直していない」と読み、受付が永遠に断る。比べる前に # の後ろ（と末尾の行の番号）を剥がし、file だけで比べる。
+
+- 何が起きているか（orchestrator の実測 2026-10-01・便 `s2-07l.738.39.6` の審査 FAIL の後の preflight・verified）: lens が teeth-outside-write-set の at に 4 項目を書いた。e2e の seat.rs の helper と歯の 2 つと、polarity.rs の歯 1 つは、どれも path の後ろに # と名を付けた形。残る 1 つは設計 doc の行と § の組で、空白を持つ。docs で write-set に seat.rs と polarity.rs を足しても、`pipe preflight` は finding-unaddressed で断った。理由は 3 項目を # の後ろごと名指し、「測った 3 件・測れない 1 件」と数えた。
+- 現物（main e41f0368・verified）: `crates/scribe2/src/pipe/review/judgement.rs` の `path_shaped` は、空白を持たず / を含む字面を path と読む。だから path の後ろに # と名を付けた項目は測る側に入る。`teeth_unaddressed` はその字面のまま `covered`（`crates/scribe2/src/pipe/refuse.rs`）へ渡し、`covered` は # の後ろを含む字面を write-set の項目と比べる。どんな契約でも covered にならない。§35 が path でない項目で塞いだのと同じ型（永遠に断る）が、項目の字面の側に残っていた。lens の雛形（`crates/scribe2/src/headless/lens-contract.txt`）は at を「path か識別子か §」と書く。path の後ろに # と名を付けた形は、path と識別子の組み合わせとして雛形の内側で起きる。
+- 形（番号は行 ca の done と対応）:
+  1. **剥がし**: 空白を持つ項目は従来どおり測れない側に置く（剥がす前に決める・設計 doc の行と § の組を path に読まない）。空白を持たない項目は、最初の # から後ろを剥がし、続けて末尾の「: と数字」を剥がす（: の後ろが数字と : と - だけの形・行と列と行の範囲）。残った字面を、その項目の file の字面とする。剥がした字面が空なら測れない側。
+  2. **測る**: path の形か（`path_shaped` の tracked の file との照合と / の読み）と、write-set に在るか（`covered`）を、剥がした file の字面で測る。+ の接頭辞の読みは従来どおり。
+  3. **名指しと数**: 断りの理由に出す項目は剥がした file の字面（辞書順・重複なし）。「測った n 件」の n も、剥がした後の重複なしの file の数。測れない m 件の数え方は従来どおり（項目の重複なしの数）。
+  4. **変えない**: `covered` と `normalize`（write-set のほかの読み手が共有する）・`path_shaped` の 3 形の読み・literal-mismatch と section-material-missing の物差し・同型 N 回の門・lens の雛形・`FindingKind` の 7 語。剥がしは teeth-outside-write-set の物差しの中だけに置く。
+- 歯（e2e・`crates/scribe2-boundary/tests/e2e/pipe/intake.rs`・接頭辞 pipe_intake_repeat_teeth_outside_write_set_at_・既存の `failed_runs` / `Again` / `assert_refused` / `write_set_contract` の型・verify の行は既存の pipe_intake_repeat_ の歯ごと撃つ）。# の後ろの名は、fixture のほかの字面（設計の pointer の anchor など）と衝突しない長い名にする。
+  - (a) done (1): at が src/other.rs の後ろに # と長い歯の名を付けた 1 項目の後、write-set に src/lib.rs と src/other.rs を持つ契約が通る。base は項目が covered にならず断る → RED。
+  - (b) done (2): at が src/other.rs の後ろに :12 を付けた 1 項目の後、同じ write-set の契約が通る。base は断る → RED。
+  - (c) done (3): at が src/other.rs の後ろに # と違う 2 つの長い名を付けた 2 項目と §33 の後、write-set が src/lib.rs だけの契約は finding-unaddressed で断られる。理由は teeth-outside-write-set と src/other.rs と「測った 1 件・測れない 1 件」を持ち、2 つの長い名のどちらも持たない。base は 2 項目を字面のまま名指し、「測った 2 件・測れない 1 件」と数える → RED。
+  - done (4) は、既存の e2e の pipe_intake_repeat_ の歯が本文を変えずに緑であることで測る（新しい歯を置かない）。lib の pipe_review_unaddressed_ の歯（`crates/scribe2/src/pipe/review.rs` の tests）は # も末尾の行の番号も持たない項目だけを渡すので、剥がしの後も同じ字で緑のまま。review.rs は未着地の行の write-set に在るので、本行の write-set と検証行には入れない（done の 8 門の nextest が撃つ）。
+- 却下: lens の雛形に「at の path は file の字面だけ」と書く（過去の便の at は書き換わらず、`s2-07l.738.39.6` が止まったまま・lens が字を守る保証も無い）／`covered` に剥がしを入れる（write-set の閉包や交差の読み手と共有で、契約の write-set の項目に # を許すことになる）／# の後ろの名を literal-mismatch の物差しで別に測る（kind の違う物差しを混ぜる・§23 (3) の kind ごとに 1 関数）。
+- 限界: 空白を持つ項目（設計 doc の path の後ろに # と行の id と空白と § を付けた形）は、今までどおり測れない側に残す。空白を持たない設計 doc の pointer は file として測るので、契約の write-set に設計 doc が無ければ断りは残る（剥がす前も断っていた）。新しく測る側に入るのは、/ を持たず剥がした字面が tracked の file に当たる項目（Cargo.toml の後ろに # と key を付けた形）だけで、その file が write-set に無ければ断る。
+- ADR: 書かない（物差しの読みの直し・§35 の型の延長）。
