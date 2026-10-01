@@ -2281,8 +2281,8 @@ done = "(1) 契約 file が key done-teeth を持つ便だけ、gate の write-s
     - [pipeline.md](./pipeline.md) 行 bh（`crates/scribe2/src/pipe/spawn.rs`）→ 行 (4)。
     - [pipeline.md](./pipeline.md) §66 の終わりの門の行（`crates/scribe2/src/pipe/gate/verify.rs` の run_checks_admitted が段 ① を撃ち直す）→ 行 (4)・行 (3)。行 (4)・行 (3) の段 ① の断りは、終わりの門の撃ち直しにもそのまま効く。
     - 行 (0) → row-review.md の行 b（`crates/scribe2/src/pipe/declaration/optional_keys.rs` と DECLARED_KEYS の pin の歯）。行 (0) は SRS の round を待たないので先に着地し、行 b は teeth-check を含めて pin を数え直す。
-    - row-review.md の行 a・行 c（`crates/scribe2/src/pipe/review.rs`・§64 の材料）→ 行 (3)。row-review.md の行 e（`crates/scribe2/src/headless/lens.rs`）→ 行 (1)。row-review.md の行 d（`.vessel.toml`）→ 行 (2)。
-    - 設計 doc の merge の順は pipeline.md の §64〜§66 の PR → row-review.md の PR → 本 § の PR。decisions の README の本数と表・ADR の前後の繋がり・constitution の被参照は、最後の PR が folio の fix と build で作り直す。
+    - row-review.md の行 a0・行 a・行 c（`crates/scribe2/src/pipe/review.rs`・§64 の材料）→ 行 (3)。row-review.md の行 e（`crates/scribe2/src/headless/lens.rs`）→ 行 (1)。row-review.md の行 d（`.vessel.toml`）→ 行 (2)。
+    - 設計 doc の PR の順は問わない（行の順は台帳の blocks が持つ）。ADR の状態・decisions の README・constitution の被参照は SRS 0.33 の PR で揃っている。
   - 歯の接頭辞は `done_teeth_` で始め、行ごとに分ける: 行 (4) `done_teeth_place_only_`・行 (1) の照らし `done_teeth_table_`・写し `done_teeth_copy_`・行 (2) `done_teeth_base_`・行 (3) `done_teeth_gate_` と `done_teeth_review_`（どれもほかのどれの部分でもない）。2026-10-01 の main で、fn の名に `done_teeth` を持つ歯は 0 本。設計 doc の検証行の filter 語 910 語のうち接頭辞の部分に当たるのは行 o の `table_`（`done_teeth_table_` の部分・行 o の write-set は table.rs と table/check.rs を持ち、照らしの lib の歯はその 2 file に置く）だけ。接頭辞の後ろの語は `contract_` などの filter 語を部分に持たせない（各行の verify の最後の契約表の検査が置き場の外れとして測る）。
 - ADR を書く理由: ADR の条件 3（契約表の行の欄・契約 file の key・vessel 宣言の key の 3 つの跨版の形）と 4（却下案）。
 - 却下（詳しくは ADR-0104）:
