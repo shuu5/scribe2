@@ -901,7 +901,7 @@ done = "(1) 埋め込み manifest に rules 行 lifecycle.full_min_s（kind Life
 - 歯: phase.rs の既存の mod tests に lib の歯を 1 本置く（接頭辞 phase_event_links_on_）。(a) 値 b-6/2・b-6/2/unset・b-6 の reserved の 3 契約の links.on が、どれも b-6 だけ。既存の歯 phase_event_links_on_follows_dependency_and_overlap_partner は本文を変えずに緑。
 - 触らない: 列の理由の語と値の字（dispatch の `WaitReason`）・手番の表（§3）・links の 8 key の名・dispatch ls の行。
 
-## 19. 管理 tick が台帳か main の印の動いた周に全部を書き直す（契約表の行 i・下限は rules 行 `lifecycle.full_min_s`・FR90 / FR27・memo `s2-07l.738.42.1`）
+## 19. 管理 tick が台帳か main の印の動いた周に全部を書き直す（契約表の行 i・下限は rules 行 `lifecycle.full_min_s`・FR90 / FR27・[ADR-0108](../../design-intent/decisions/ADR-0108-the-management-tick-rewrites-case-positions-when-the-ledger-or-main-moves.html)（proposed）・memo `s2-07l.738.42.1`）
 
 やさしく言うと: 局面の出力を全部書き直すのは、便の列を回す周・land の終端・口を撃った時だけで、便を回さない置き場（隣の project の板が読む置き場）では台帳が変わっても出力が古いまま残る。管理 tick の周に、台帳と main の印（小さい file の読みだけ）を出力の印と比べ、違っていれば全部を書き直す。重い書き直しが続かないように、前の全部の書き直しから最短でも rules 行の秒数（300 秒）を空ける。
 
@@ -948,6 +948,7 @@ done = "(1) 埋め込み manifest に rules 行 lifecycle.full_min_s（kind Life
   - 台帳か main の変化が出力に入るのは、最長で下限の 300 秒と tick の周期（`seat.tick_interval_s`）の和の後。
   - 書き直しの間（空いた host で約 4 秒・gate が走る host で約 14 秒）は lock を持つので、ほかの書き手は `Busy` で飛び、次の周が拾う。
   - 撃った記録は返りに依らず書くので、`Busy`・`Unreadable` の周も次の試みは下限の後になる。
+  - 撃つ周の tick の process は、書き直しの間だけ約 275 MB の RSS と 4〜14 秒の延長を抱える。判定と合図の注入は書き直しの前に済むが、書き手が panic すればその周の tick は判定行を出さずに異常終了する（src は unwrap と expect を lint で持たない）。
   - 1 つの置き場に anchor の違う席が 2 つ以上在ると、tick ごとに違う repo の印と比べ、下限ごとに違う repo で書き直しうる（§12 の限界の multi-anchor と同じ・後の行）。
   - systemd の timer の PATH に bd が無い host では、行 ad が unit に台帳 client を載せるまで記録が `wrote=unreadable` のまま。
 - 却下:

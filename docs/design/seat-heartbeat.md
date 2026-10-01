@@ -763,7 +763,7 @@
   - 共通の helper を割らずに、撃つたびに出力を書く案。新しい歯の fixture と書き直しの歯 2 本の fixture を上書きし、出力の無い置き場も作れない。
   - tick が未仕分けの発話を自前で数える案。doctor と 2 本の数え方になる（FR94）。
 
-## 25. tick の unit が台帳 client を運ぶ — host の面の `[[tick]]` に任意の key `bd`（絶対 path）を足し、受けた導出だけ ExecStart の末尾に `--bd` を載せる（契約表の行 ad・§3 / §5 の続き・[FR64](../../design-intent/spec/srs.html#FR64) / FR90 / FR59・AC18・ADR-0108・memo `s2-07l.738.42.1`）
+## 25. tick の unit が台帳 client を運ぶ — host の面の `[[tick]]` に任意の key `bd`（絶対 path）を足し、受けた導出だけ ExecStart の末尾に `--bd` を載せる（契約表の行 ad・§3 / §5 の続き・[FR64](../../design-intent/spec/srs.html#FR64) / FR90 / FR59・AC18・[ADR-0108](../../design-intent/decisions/ADR-0108-the-management-tick-rewrites-case-positions-when-the-ledger-or-main-moves.html)（proposed）・memo `s2-07l.738.42.1`）
 
 やさしく言うと: 管理 tick は systemd の user の timer が周期で撃つ。その timer の PATH には台帳 client（`bd`）が無いので、case-lifecycle.md §19（行 i）が足す「台帳か main が動いた周の全部の書き直し」は台帳を読めず、撃った記録が `wrote=unreadable` のまま残る。行 i は `seat tick` に `--bd B` で client の場所を渡す口を足すが、tick を撃つ unit の本文は器が導出するので、器が unit に `--bd` を書けなければ渡す手が無い。client の場所は host に 1 つなので、host の面の `[[tick]]` に 1 行 `bd = "<絶対 path>"` を書けるようにし、unit の導出がその値を ExecStart の末尾に載せる。手で入れる口（`seat tick install` / `uninstall`）も `[--bd B]` を受ける。書かない host の unit は今と 1 byte も変わらない。
 
