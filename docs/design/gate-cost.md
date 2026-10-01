@@ -944,6 +944,41 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - host の core 数の読みは `health.rs` の `host_cores` の 1 本（`Cpus_allowed_list` を数える純関数は `cores_of`）で、受付・遮断器・箱の上限（`confine/cpu.rs`）が読む。`available_parallelism` の読みは本文書の他の § の「現物」の記述にだけ残り、器の code には無い。
 - `Caps` は 4 本目 `mutants_jobs` を埋め込み manifest から読む（`Caps::of` は 4 行のどれかが欠ければ理由付きの Err＝包まない）。`--rules` の上書きは効かない。
 
+## 46. cap を超える周だけ、lens に渡す diff の「削除だけの run」を最も浅い字下げの行と印 1 行に畳む — 先撃ちの退役で消す歯と module が cap を超えた（契約表の行 aq・`s2-07l.736.33.16` の便 202459Z の Gated INCONCLUSIVE）
+
+やさしく言うと: 大きく消すだけの便は、消した行が diff の半分以上を占めて、審査役（lens）に渡せる量（cap）を超え、判定に届かない。cap を超える周に限り、消すだけの塊は最も浅い字下げの行（関数の頭や閉じ）だけを残し、深い行は「何行省いた」の印 1 行にまとめて渡す。足した行と書き換えた行は今までどおり全部渡す。
+
+- 出所（orchestrator の実測 2026-10-01T22:0xZ・verified）: `s2-07l.736.33.16`（row-review §6 行 e・先撃ちの退役の段 2）の便 202459Z は verify の赤 0 のまま Gated INCONCLUSIVE（evidence「diff 189728 byte が cap 150000 を超えた」）。diff は 21 file・+153/−1675 で、`crates/scribe2-boundary/tests/e2e/pipe/review.rs` の −1073 と `crates/scribe2/src/pipe/dispatch/prelens.rs` の丸ごとの削除 −367 が大半を占める。`+` 行に接しない削除の塊（context か hunk の端に挟まれた `-` の連続）は 101331 byte で全体の 53%。rename の対が無いので §41 / §42 の畳みは 1 つも効かない。本節の形 1 の写し（16 行以上の run・最も浅い字下げの行を残す）で数えると、lens の本文は 135395 byte（cap の 90%）で、省く行は 986 本。消した fn の頭・属性・閉じの `}`・doc の行は残る。
+- 現物（main f71a9cdd・verified）: `crates/scribe2/src/pipe/gate.rs` の `measure` は diff の周だけ `crates/scribe2/src/pipe/gate/lens.rs` の `fold_renamed_paths` を通して lens 用の本文を作り、`decide` がその byte を rules 行 `gate.token_cap` と比べる。通知は `crates/scribe2/src/pipe/gate/record.rs` の `record_notice` が `verify.stderr.log` へ 1 行で書く（字面は `notice_line`・畳んだ周は末尾に ` elided=<hunk 数>/<行数>`）。
+- 形（番号は done と 1:1）:
+  1. **pure な 1 本**（置き場は `crates/scribe2/src/pipe/gate/lens.rs`・入力は diff の字面だけ・git を呼ばない・言語に依らない）: hunk の本文の中の**削除の run**（`-` 行の連続）のうち、次の 2 つを満たすものを畳む。git の「No newline at end of file」の `\` 行は run を切らず、行に数えない。
+     - (i) `-` 行が 16 本以上。
+     - (ii) run の直前と直後の行がどちらも `+` 行でない（context か hunk の端）。置き換えの塊は畳まない。
+     - 畳み方: run の空でない `-` 行の字下げ（行頭の空白と tab の数・どちらも 1 字）の最小値を m とする。字下げが m の `-` 行は順のまま残し、それ以外（m より深い行と、空白だけの行）を省く。run の末尾に印 1 行 `~ 削除だけの run（-N 行）から字下げの深い行と空行 M 行を省いた` を置く（N は run の `-` 行の数・M は省いた行の数）。run の `\` 行は出さない。M が 0 の run は逐語のまま（印を置かず、数えない）。
+     - header（`diff --git` / `index` / `deleted file mode` / `---` / `+++` / `@@`）と context 行と `+` 行は 1 字も変えない。戻りは（畳んだ本文, 畳んだ run 数, 省いた行数）。
+  2. **cap を超える周だけ**: `measure` は、§41 / §42 の畳みの後の本文の byte が rules 行 `gate.token_cap` を超える周だけ形 1 を通す。超えない周は形 1 を撃たず、本文は今のまま。`decide` の cap の照合と lens の stdin は形 1 の後の本文で、畳んでも cap を超える周は今までどおり INCONCLUSIVE（evidence の byte は畳んだ本文の byte）。`verdict.json` の `diff_bytes`・`patch_id`・検出線の持ち越しは生 diff のまま（NFR1）。純移動の要約の周は 1 字も変わらない。
+  3. 通知: 形 1 で畳んだ run が 1 つ以上の周だけ、`verify.stderr.log` の通知の行の末尾に ` pruned=<run 数>/<省いた行数>` を足す（`elided=` が在る周はその後ろ）。0 の周と形 1 を撃たない周は今の字面のまま。足すのは `record_notice` が書く行の末尾だけで、`notice_line` の字面とその既存の歯は変えない。gate の stdout の `bytes=` は lens に渡した本文の byte。
+  4. 歯（e2e は `crates/scribe2-boundary/tests/e2e/pipe/gate/pure_move.rs`・接頭辞 `pipe_gate_prune_`。toy repo の file は言語に依らない字下げの text で、cap は rules の写しで小さくする）:
+     - (a) 2 つの file の削除を同じ便で gate する。1 つは丸ごと消す file（40 行・字下げ 0 の頭と閉じの行と字下げ 4 の本文の行）、もう 1 つは中の 20 行の塊（字下げ 0 の頭と閉じ・字下げ 4 の本文）を消す file。cap は「生 diff は超え、畳んだ本文は収まる」値。lens が呼ばれ verdict は lens の値（PASS）。lens の stdin に両 run の字下げ 0 の行と印 2 行が在り、字下げ 4 の本文の行が無い。`deleted file mode` と `@@` の header は残る。通知の末尾は ` pruned=2/<省いた行数>`、`bytes=` は stdin の byte で cap 以下、`diff_bytes` は生 diff の byte。
+     - (b) (a) と同じ便を既定の cap（生 diff が収まる）で gate した周は、lens の stdin が生 diff そのもので通知に `pruned=` が無い。同じ歯の中で (a) の cap の周は畳む（cap を超える周だけの歯・対照の周が base で RED）。
+     - (c) 消す run が 15 行で、cap は「畳めば収まり、畳まなければ超える」値 → INCONCLUSIVE（evidence に cap）で通知に `pruned=` が無い。同じ歯の中で、同じ形の 16 行の run は畳まれて lens が呼ばれる（本数の線の歯）。
+     - (d) 20 行の削除の run の直後に `+` 行が続く塊（置き換え）→ INCONCLUSIVE で通知に `pruned=` が無い。同じ歯の中で、`-` と `+` の間に context を 1 行挟んだ形は畳まれる（`+` に接しない条件の歯）。
+     - (e) 畳んでも cap を超える値 → INCONCLUSIVE のまま。evidence の byte は畳んだ本文の byte（生 diff の byte より小さい）で、通知に `pruned=` が在る（畳みは判定を緩めない）。
+     - unit（`crates/scribe2/src/pipe/gate/lens.rs` の既存の歯の区間・接頭辞 `lens_prune_`）: (f) tab 1 字と空白 1 字を同じ幅に数え、空白だけの行は省く側、`\` 行は run を切らず数えず出さず、最も浅い字下げの行は順のまま残る。(g) 全行が同じ字下げで空行の無い run は逐語で数えない。context を挟んだ 2 つの run は別に数える（run 数 2・省いた行数は和）。
+     - 変異の A/B（判定の順は cap → 本数 → `+` に接しない → 字下げ・条件 1 つに歯 1 本）: cap の条件を外すと (b) が落ちる。本数の線を外すと (c) が落ちる。`+` に接しない条件を外すと (d) が落ちる。最も浅い行も省くと、または深い行を残すと (a) が落ちる。空白だけの行を残すと (f) が落ちる。(e) は畳んだ後の照合が今の `decide` のままであることを固定する回帰の歯。
+     - §41 / §42 の歯（`pipe_gate_elide_` と `gate_elide_dir_pairs_`）は 1 字も変えずに緑。
+- base で RED の理由: (a)〜(e) は、base が削除の run を畳まず、cap を超える周が INCONCLUSIVE で lens を呼ばず、通知に `pruned=` が無い（機能不在）。(f)(g) は base に無い関数を呼ぶ compile error（機能不在）。
+- 触らない: §41 / §42 の畳み（path の絞り・段・dir の対）・rules 行 `gate.token_cap` の値・`crate::pipe::move_proof`・機械検証の段と判定順（[pipeline.md](./pipeline.md) §5.3）・`notice_line` の字面・`verdict.json` の key 列・lens の起動の形。
+- 却下:
+  - **`gate.token_cap` を一時的に上げる**（`s2-07l.375` の型）: §41 の却下 1 と同じ。値の線と裁定が動き、機械的に消した行で審査を薄める。
+  - **削除の塊を丸ごと印 1 行にする**: 何を消したか（どの fn・どの歯）を lens が読めず、契約が名指していない歯を消す誤りを隠す。最も浅い字下げの行は item の頭と閉じで、どれを消したかを名指す。
+  - **丸ごと消した file だけを畳む**: 本便では 21196 byte しか減らず、cap を超えたまま（file の中の大きな削除が主）。
+  - **cap に依らず常に畳む**: cap に収まる便は今のまま全部を読めるので、読める量を減らす理由が無い。畳むのは、INCONCLUSIVE の代わりに審査へ届かせる周だけ。
+  - **言語ごとの item の読み（Rust の `fn` 等）で残す行を選ぶ**: 器は言語に依らない。Rust・TS・Python の字下げは、どれも item の深さを表す。
+  - **本数の線を rules 行にする**: 判定の線でなく、cap を超える周にだけ効く入力の縮め方の値である。値を動かす裁定の線を増やさない（§41 の path の絞りと同じく code の定数）。
+- 限界: 字下げで item の深さを表さない file（1 行に詰めた data・生成物）の削除は、最も浅い行がほぼ全部になり縮まない。本便の形は cap の 90% までしか縮まないので、runner の直しで足す行が 14 KB を超えると再び INCONCLUSIVE になる（そのときは write-set を割るか、別の畳みを要する）。
+- 着地の後: PATH の binary を `swap-binary.sh` で入れ替え、`s2-07l.736.33.16` の便を gate し直す。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1371,4 +1406,15 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail cpu_width_", "carg
 size = "M"
 growth = ["crates/scribe2/src/pipe/confine.rs:25"]
 done = "(1) health.rs が pub な host_cores を持ち、/proc/self/status の Cpus_allowed_list の区間の列を数える pure 関数 1 本で読み（読めない・形が違う・0 は None・available_parallelism と環境変数を読まない）、受付と遮断器がこの 1 本を読み、admission.rs の host_cores の複製が無い (2) gate の verify.rs の admitted が Admit の在る周に共通 verify・検出線・契約の verify の行を全部受付に通し、{jobs} を持たない行は包めるかに依らず want 1 を求め、{jobs} を持つ行の want と丸めと受付の式・札・待ち・縮退・測れない周は不変 (3) land の主実測・着地の列の候補の木・intake の base の実測は Admit を持たないまま (4) confine.rs の scope_args が CPU の重みと CPU の上限（%）の 2 つの Option を受ける 1 関数で（上限の導出の pure な関数 1 本と 1 job の値段の読み口は confine.rs の子の module cpu.rs に在り、confine.rs の差は欄・引数・呼び出し・mod の宣言だけ）語の順が MemoryMax → CPUWeight → CPUQuota → OOMPolicy、Wrap が欄 width（受付が配った幅の thread 数）を持ち、便の箱の CPUQuota は width が在れば width × 100%（縮退と測れない周の Grant は 100%）・無ければ 1 job の値段（Cpu::priced の thread 数・core 数は (1) の 1 本・gate.mutants_jobs は埋め込みの manifest から Caps の 4 本目として読む）× 100%・core 数を読めない周は CPUQuota の 2 語を置かず、probe は width の無い形で撃ち、席の頭の語列は 1 字も変わらない (5) Wrap の構築点（verify.rs の fire は Grant の jobs × threads・admitted の試しと base_run.rs・review.rs・spawn.rs・gate.rs・headless/mod.rs は None）が全部 width を埋める (6) rules 行を足さず gate.cpu_weight は便の箱に付けたまま 歯: lib の cpu_width_（health.rs の Cpus_allowed_list の読みの表・confine/cpu.rs の scope_args の 4 形の全文と順と便の箱の上限の導出）と e2e の cpu_width_（pipe/gate/confine.rs の偽 systemd-run の記録で、{jobs} を持たない共通 verify と契約の verify の record が slot= を持ち箱が 1 job の値段の CPUQuota・{jobs} の行の箱が置換した jobs × threads × 100%・land の主実測は slot= 無しで 1 job の値段・縮退した周は 100%・runner と lens の箱が 1 job の値段）が base で RED。直す既存の歯: confine_collect_scope_args_carry_collect_once_in_order・confine_scope_args_two_forms_differ_only_by_cpu_weight（名は不変）・rule_read_confine_caps_of_reads_all_three_rows・e2e の gate.rs の host_cores の oracle（Cpus_allowed_list の同じ読み）と helper slot_row（{jobs} の行の record を cmd で選ぶ）・pipe_slots_ticket_lives_only_during_the_jobs_line の (4)（{jobs} の無い行の間も自便の札 1 枚・jobs 1）・受付の歯の宣言の順を {jobs} の行 → {jobs} の無い行に入れ替え（gate.rs の commit_slot_vessel_line の共通 verify の配列）、待ちと回収と縮退を測る pipe_slots_ の歯（wait_ends_early・two_projects の回収・waits_then_degrades・threads_degraded）が {jobs} の行の record（slot_row）だけを読み、{jobs} の無い行の record を読むのは (4) の jobs 1 だけ。gate.rs は test 区間の行頭に flip-check: retroactive の札を置く"
+
+[[contract]]
+id = "aq"
+title = "cap を超える周だけ、lens に渡す diff の削除だけの run（16 行以上の - の連続で前後が + 行でない）を最も浅い字下げの行と印 1 行に畳み、通知の末尾に pruned=<run 数>/<行数> を足す（§46・s2-07l.736.33.16 の便 202459Z）"
+req = ["FR9", "NFR1"]
+section = "46"
+write-set = ["crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate/pure_move.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_gate_prune_", "cargo nextest run -p scribe2 --lib --no-tests=fail lens_prune_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_gate_elide_", "cargo nextest run -p scribe2 --lib --no-tests=fail gate_elide_dir_pairs_"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/gate/lens.rs:130", "crates/scribe2/src/pipe/gate.rs:10", "crates/scribe2/src/pipe/gate/record.rs:12", "crates/scribe2-boundary/tests/e2e/pipe/gate/pure_move.rs:260"]
+done = "(1) lens.rs の pure な 1 本が diff の字面だけを読み、hunk の中の - 行の連続（\\ 行は run を切らず数えない）のうち 16 本以上で直前と直後がどちらも + 行でない run を畳む。run の空でない - 行の字下げ（空白と tab を 1 字）が最小の行を順のまま残し、深い行と空白だけの行を省いて、run の末尾に印 1 行「~ 削除だけの run（-N 行）から字下げの深い行と空行 M 行を省いた」を置く。\\ 行は出さず、M が 0 の run は逐語で数えず、header と context と + 行を変えず、（本文, run 数, 省いた行数）を返す〔lens_prune_ の (f)(g)〕 (2) measure は §41・§42 の畳みの後の本文の byte が gate.token_cap を超える周だけ (1) を通し、超えない周の本文は今のまま。cap の照合と lens の stdin は (1) の後の本文で、畳んでも超える周は INCONCLUSIVE（evidence は畳んだ本文の byte）、verdict.json の diff_bytes は生 diff の byte〔pipe_gate_prune_ の (a)(b)(e)〕 (3) (1) で畳んだ run が 1 つ以上の周だけ通知の行の末尾に pruned=<run 数>/<省いた行数> を足し（elided= の後ろ）、0 の周と撃たない周は今の字面のまま、notice_line は変えない〔(a) の pruned=2/<数>・(b)(c)(d) の対照の周に pruned= が無い〕 (4) 本数の線と + に接しない条件は歯で測る〔(c) 15 行の run は畳まず INCONCLUSIVE で同じ歯の 16 行の run は畳む・(d) + に接する run は畳まず同じ歯の context を挟んだ形は畳む〕 (5) §41・§42 の歯 pipe_gate_elide_ と gate_elide_dir_pairs_ は 1 字も変えず緑 歯: pipe_gate_prune_（e2e・(a)〜(e) の 5 本）と lens_prune_（unit・(f)(g) の 2 本）が base で RED（機能不在: base は削除の run を畳まず cap を超える周が INCONCLUSIVE で通知に pruned= が無い・unit は base に無い関数を呼ぶ compile error）"
 <!-- contracts:end -->
