@@ -3030,7 +3030,7 @@ fn moving_line(row: &str, current: &str) -> String {
 
 /// embedded の台帳の manifest（root `rootA`・gc の世代 `gc0`・journal 1 つの chunks が `chunks`）。
 fn stale_manifest(chunks: u64) -> String {
-    format!("5:nbs:__DOLT__:lock:rootA:gc0:{}:{chunks}", "v".repeat(32))
+    format!("5:__DOLT__:{}:rootA:gc0:{}:{chunks}", "l".repeat(32), "v".repeat(32))
 }
 
 /// manifest の fixture が持つ台帳の印（書きの前の値）。

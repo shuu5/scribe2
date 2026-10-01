@@ -129,12 +129,15 @@ fn store_of(path: &Path) -> Store {
     }
 }
 
-/// manifest（`:` で割った 1 行・5 つ目が root・6 つ目が gc の世代・7 つ目から「file 名:chunk 数」の組）から [`Ledger::Noms`]。
+/// manifest（`:` で割った 1 行・2 つ目が `__DOLT__`・4 つ目が root・5 つ目が gc の世代・6 つ目から「file 名:chunk 数」の組）から [`Ledger::Noms`]。
 fn noms_of(path: &Path) -> Option<Ledger> {
     let text = fs::read_to_string(path).ok()?;
     let fields: Vec<&str> = text.trim_end_matches('\n').split(':').collect();
-    let (root, collected) = (fields.get(4)?, fields.get(5)?);
-    let specs = fields.get(6..)?;
+    if fields.get(1) != Some(&"__DOLT__") {
+        return None;
+    }
+    let (root, collected) = (fields.get(3)?, fields.get(4)?);
+    let specs = fields.get(5..)?;
     if root.is_empty() || !specs.len().is_multiple_of(2) {
         return None;
     }
@@ -776,7 +779,7 @@ mod tests {
     use std::cmp::Ordering;
     use std::path::{Path, PathBuf};
 
-    /// `gc` の世代（fixture の manifest の 6 つ目）。
+    /// 1 つ目の sha。
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     /// もう 1 つの sha。
@@ -801,35 +804,81 @@ mod tests {
         repo
     }
 
-    /// journal だけを持つ manifest は root・gen・chunks を組み、journal は gen の材料に入らず chunks の和には入る。
+    /// 実物の bd の manifest の 1 行（`5:<second>:<lock>:<root>:<gc の世代>:` の後に `pairs`）。
+    fn real_manifest(second: &str, root: &str, collected: &str, pairs: &str) -> String {
+        format!("5:{second}:{}:{root}:{collected}:{pairs}", "l".repeat(32))
+    }
+
+    /// 32 桁の root。
+    fn root_of_32() -> String {
+        "0123456789abcdef0123456789abcdef".to_owned()
+    }
+
+    /// 32 桁の table の file 名（`seed` の字を並べる・journal の名 `v…` と違う）。
+    fn table_name(seed: char) -> String {
+        seed.to_string().repeat(32)
+    }
+
+    /// 実物の形の組（table 2 つと journal 1 つ）。
+    fn real_pairs() -> String {
+        format!("{}:10:{}:5:{}:7", table_name('a'), table_name('b'), "v".repeat(32))
+    }
+
+    /// 実物の bd の manifest（2 つ目が `__DOLT__`・root は 4 つ目・gc の世代は 5 つ目・6 つ目から組）を読める。
+    #[test]
+    fn lifecycle_mark_ledger_reads_the_real_bd_manifest_form() {
+        let zeros = "0".repeat(32);
+        let manifest = real_manifest("__DOLT__", &root_of_32(), &zeros, &real_pairs());
+        let Some(Ledger::Noms { root, generation, chunks }) = read_ledger(&noms_repo("real-form", &manifest)) else {
+            panic!("実物の形の manifest を読める");
+        };
+        assert_eq!(root, root_of_32(), "root は 4 つ目の字");
+        assert_eq!(chunks, 22, "chunks は組の数の和");
+        let keyed = format!("{zeros}\n{}\n{}", table_name('a'), table_name('b'));
+        assert_eq!(generation, crate::hook::vessel::digest::fnv1a_64(keyed.as_bytes()), "gen は gc の世代と journal でない file 名の digest");
+    }
+
+    /// journal だけ・table つき・gc の世代違いの 3 形は同じ root を返し、gen と chunks は材料の通りに決まる。
     #[test]
     fn lifecycle_mark_ledger_noms_reads_the_manifest_of_three_shapes() {
-        let journal = format!("5:nbs:__DOLT__:lock:rootA:gc0:{}:7", "v".repeat(32));
-        let Some(Ledger::Noms { root, generation, chunks }) = read_ledger(&noms_repo("noms-journal", &journal)) else {
+        let zeros = "0".repeat(32);
+        let journal = format!("{}:7", "v".repeat(32));
+        let Some(Ledger::Noms { root, generation, chunks }) = read_ledger(&noms_repo("noms-journal", &real_manifest("__DOLT__", &root_of_32(), &zeros, &journal))) else {
             panic!("journal だけの manifest を読める");
         };
-        assert_eq!((root.as_str(), chunks), ("rootA", 7), "root と chunks");
-        assert_eq!(generation, crate::hook::vessel::digest::fnv1a_64(b"gc0"), "gen は gc の世代だけの digest（journal を除く）");
-        let with_table = format!("{journal}:tbl1:10:tbl2:5");
-        let Some(Ledger::Noms { generation: table_gen, chunks: table_chunks, .. }) = read_ledger(&noms_repo("noms-table", &with_table)) else {
+        assert_eq!((root.as_str(), chunks), (root_of_32().as_str(), 7), "root と chunks");
+        assert_eq!(generation, crate::hook::vessel::digest::fnv1a_64(zeros.as_bytes()), "gen は gc の世代だけの digest（journal を除く）");
+        let Some(Ledger::Noms { root: table_root, generation: table_gen, chunks: table_chunks }) =
+            read_ledger(&noms_repo("noms-table", &real_manifest("__DOLT__", &root_of_32(), &zeros, &real_pairs())))
+        else {
             panic!("table file つきの manifest を読める");
         };
-        assert_eq!(table_chunks, 22, "chunks は journal を含む和");
-        assert_eq!(table_gen, crate::hook::vessel::digest::fnv1a_64(b"gc0\ntbl1\ntbl2"), "gen は gc の世代と journal を除く名を改行でつないだ digest");
-        let gc1 = format!("5:nbs:__DOLT__:lock:rootA:gc1:{}:7:tbl1:10:tbl2:5", "v".repeat(32));
-        let Some(Ledger::Noms { generation: next_gen, .. }) = read_ledger(&noms_repo("noms-gc", &gc1)) else {
-            panic!("gc の世代つきの manifest を読める");
+        assert_eq!((table_root, table_chunks), (root_of_32(), 22), "root は同じで chunks は journal を含む和");
+        let keyed = format!("{zeros}\n{}\n{}", table_name('a'), table_name('b'));
+        assert_eq!(table_gen, crate::hook::vessel::digest::fnv1a_64(keyed.as_bytes()), "gen は gc の世代と journal を除く名を改行でつないだ digest");
+        let Some(Ledger::Noms { root: next_root, generation: next_gen, chunks: next_chunks }) =
+            read_ledger(&noms_repo("noms-gc", &real_manifest("__DOLT__", &root_of_32(), &"1".repeat(32), &real_pairs())))
+        else {
+            panic!("gc の世代違いの manifest を読める");
         };
+        assert_eq!((next_root, next_chunks), (root_of_32(), 22), "root と chunks は同じ");
         assert_ne!(next_gen, table_gen, "gc の世代が違えば gen が違う");
     }
 
-    /// manifest が読めない形（欄が足りない・組が奇数・数でない）と metadata の崩れは読めない（`None`）。
+    /// manifest が読めない形（2 つ目が `__DOLT__` でない・欄が足りない・組が奇数・数でない・root が空）と metadata の崩れは読めない（`None`）。
     #[test]
     fn lifecycle_mark_ledger_refuses_broken_manifests_and_metadata() {
-        for (name, manifest) in [("short", "5:nbs:x:y"), ("odd", "5:nbs:__DOLT__:lock:r:gc:tbl"), ("nan", "5:nbs:__DOLT__:lock:r:gc:tbl:many"), ("noroot", "5:nbs:__DOLT__:lock::gc:tbl:1")] {
+        let zeros = "0".repeat(32);
+        let readable = real_manifest("__DOLT__", &root_of_32(), &zeros, &real_pairs());
+        assert!(matches!(read_ledger(&noms_repo("readable", &readable)), Some(Ledger::Noms { .. })), "対照: 2 つ目が __DOLT__ なら読める");
+        let ld = real_manifest("__LD_1__", &root_of_32(), &zeros, &real_pairs());
+        let odd = real_manifest("__DOLT__", &root_of_32(), &zeros, &format!("{}:10:{}", table_name('a'), table_name('b')));
+        let nan = real_manifest("__DOLT__", &root_of_32(), &zeros, &format!("{}:many", table_name('a')));
+        let noroot = real_manifest("__DOLT__", "", &zeros, &real_pairs());
+        for (name, manifest) in [("ld", ld.as_str()), ("short", "5:__DOLT__:lock"), ("odd", odd.as_str()), ("nan", nan.as_str()), ("noroot", noroot.as_str())] {
             assert_eq!(read_ledger(&noms_repo(name, manifest)), None, "{name}");
         }
-        let repo = noms_repo("broken-meta", "5:nbs:__DOLT__:lock:r:gc:tbl:1");
+        let repo = noms_repo("broken-meta", &readable);
         put(&repo.join(".beads/metadata.json"), "{");
         assert_eq!(read_ledger(&repo), None, "metadata.json が読めない");
         put(&repo.join(".beads/metadata.json"), r#"{"dolt_mode":"embedded"}"#);
