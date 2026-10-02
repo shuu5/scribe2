@@ -40,6 +40,9 @@ const CLOSED: &str = "closed";
 /// 宣言の祖先の材料の頭の 1 行（設計の材料の末尾に足す・設計 §3 形 3）。
 const ANCESTOR_NOTE: &str = "次の行は未着地の祖先で、その write-set の file はこの祖先が作る・変える";
 
+/// 祖先の節の本文が材料に既に在る本文と byte で同じとき、本文の代わりに足す 1 行（設計 §14）。
+const SAME_BODY: &str = "（節の本文は上と同じ）";
+
 /// 行の記録の file の名（置き場の行の記録の dir の中・読み手 [`super::row_review`] と同じ字）。
 const RECORD: &str = "record";
 
@@ -476,19 +479,32 @@ fn stage_row(ctx: &Ctx<'_>, at: (usize, &Row), staging: (&[Ancestor], Option<(Co
     let source = slot.join("contract.toml");
     std::fs::write(&source, &body).map_err(|err| format!("{} を書けない: {err}", source.display()))?;
     let dir = slot.join(REVIEW_DIR);
-    let note = note_of(ctx, layers, findings);
+    let note = note_of(ctx, &design_material(&tree.path, &contract.design), layers, findings);
     let (copy, promised) = stage(&tree.path, (&contract, &source), &requirements, &dir, &note)?;
     Ok(Staged { tree, materials: digest(&dir)?, dir, contract: copy, done: contract.done, promised })
 }
 
 /// 設計の材料の末尾に足す字: 宣言の祖先ごとに「未着地の祖先」の 1 行・祖先の行の TOML の写し・祖先の節の本文、続けて確定でない
-/// finding（暫定と測れない）の断りの名・在り処・理由を 1 行ずつ。
-fn note_of(ctx: &Ctx<'_>, layers: &[Ancestor], findings: &[Finding]) -> String {
+/// finding（暫定と測れない）の断りの名・在り処・理由を 1 行ずつ。祖先の節の本文が材料に既に在る本文（`own` は行自身の設計の材料・先に足した祖先の
+/// 本文）と byte で同じなら、本文の代わりに見出しの 1 行と [`SAME_BODY`] の 1 行だけを足す（設計 §14）。
+fn note_of(ctx: &Ctx<'_>, own: &str, layers: &[Ancestor], findings: &[Finding]) -> String {
     let mut lines = Vec::new();
+    let mut seen: Vec<String> = own.trim_end().split_once('\n').map(|(_, body)| body.to_owned()).into_iter().collect();
     for (id, _, _) in layers.iter().filter(|(_, standing, _)| *standing == Standing::Declared) {
         lines.push(ANCESTOR_NOTE.to_owned());
         lines.extend(row_toml(ctx.table, id));
-        lines.push(design_material(ctx.table, id).trim_end().to_owned());
+        let section = design_material(ctx.table, id).trim_end().to_owned();
+        match section.split_once('\n') {
+            Some((head, body)) if seen.iter().any(|known| known == body) => {
+                lines.push(head.to_owned());
+                lines.push(SAME_BODY.to_owned());
+            }
+            Some((_, body)) => {
+                seen.push(body.to_owned());
+                lines.push(section);
+            }
+            None => lines.push(section),
+        }
     }
     for found in findings.iter().filter(|found| found.certainty != Certainty::Firm) {
         lines.push(format!("予想の base の断り（{}）: {} {} {}", found.certainty.as_str(), found.name, found.at, found.reason));
