@@ -19,7 +19,8 @@ use crate::name::NAME;
 use crate::pipe::cli::{live_runs, LiveRun, Tag};
 use crate::pipe::land::MAIN_REF;
 use crate::pipe::question_of_run;
-use crate::pipe::table::{form_of, promises_of, read_table, ContractRow, PromiseRow, BEGIN, DESIGN_DIR};
+use crate::pipe::declaration::TablePlaces;
+use crate::pipe::table::{design_docs, form_of, promises_of, read_table, ContractRow, PromiseRow, BEGIN};
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::path::{Component, Path, PathBuf};
 
@@ -506,16 +507,19 @@ pub fn decide(scene: &Scene) -> LiveRowDecision {
     }
 }
 
-/// 編集の門（設計 §15 形 3）: 対象が置き場の同じ worktree の docs/design/ の下の表の doc の周だけ置き場を読み、変更前 =
-/// disk の本文・変更後 = 道具の入力を当てた本文で比べる。
+/// 編集の門（設計 §15 形 3・§69 行 cd）: 対象が `form_of` の読める path で置き場の同じ worktree の root を解けた周に、その root の
+/// HEAD の宣言の置き場（[`compared`]）に入る周だけ置き場を読み、変更前 = disk の本文・変更後 = 道具の入力を当てた本文で比べる。
 fn decide_edit(scene: &Scene) -> LiveRowDecision {
     let Some((path, before, after)) = edited(scene) else {
         return LiveRowDecision::Pass;
     };
-    let Some((root, doc)) = design_doc(&path, scene.state_dir) else {
+    let Some((root, doc)) = root_of(&path, scene.state_dir) else {
         return LiveRowDecision::Pass;
     };
     if doc.ends_with(".md") && !has_region(&before) && !has_region(&after) {
+        return LiveRowDecision::Pass;
+    }
+    if compared(&root, std::slice::from_ref(&doc)).is_empty() {
         return LiveRowDecision::Pass;
     }
     let Ok(runs) = live_runs(scene.state_dir) else {
@@ -539,7 +543,7 @@ fn edited(scene: &Scene) -> Option<(PathBuf, String, String)> {
     let input = tree.get("tool_input")?;
     let file = input.get("file_path").and_then(Tree::as_str)?;
     let path = normalized(&scene.cwd.join(file));
-    if !path.to_string_lossy().contains(DESIGN_DIR) || form_of(&path.to_string_lossy()).is_err() {
+    if form_of(&path.to_string_lossy()).is_err() {
         return None;
     }
     let before = std::fs::read_to_string(&path).unwrap_or_default();
@@ -580,8 +584,8 @@ fn normalized(path: &Path) -> PathBuf {
     found
 }
 
-/// path の worktree の root と repo 相対 path（置き場が hook の置き場と同じで、docs/design/ の下の周だけ）。
-fn design_doc(path: &Path, state_dir: &Path) -> Option<(PathBuf, String)> {
+/// path の worktree の root と repo 相対 path（置き場が hook の置き場と同じ周だけ）。
+fn root_of(path: &Path, state_dir: &Path) -> Option<(PathBuf, String)> {
     let existing = path.ancestors().skip(1).find(|dir| dir.is_dir())?;
     let root = vessel::repo_root(existing)?;
     if !same_place(&vessel::state_dir(&root)?, state_dir) {
@@ -589,7 +593,16 @@ fn design_doc(path: &Path, state_dir: &Path) -> Option<(PathBuf, String)> {
     }
     let real = existing.canonicalize().ok()?.join(path.strip_prefix(existing).ok()?);
     let rel = real.strip_prefix(&root).ok()?.to_string_lossy().into_owned();
-    rel.starts_with(DESIGN_DIR).then_some((root, rel))
+    Some((root, rel))
+}
+
+/// 比べる path の列（**1 本**・設計 §69 行 cd）: root の HEAD の宣言を [`TablePlaces::at`] で読み、repo 相対 path の列のうち
+/// [`design_docs`] の列に入るものを返す（入力の順）。宣言を読めない周は既定に倒さず、`form_of` の読める path を全部返す。
+fn compared(root: &Path, paths: &[String]) -> Vec<String> {
+    match TablePlaces::at(root, "HEAD").items() {
+        Some(items) => design_docs(paths, items).into_iter().cloned().collect(),
+        None => paths.iter().filter(|path| form_of(path).is_ok()).cloned().collect(),
+    }
 }
 
 /// 2 つの置き場が同じか（実体 path で比べ、解けなければ字面）。
@@ -601,7 +614,7 @@ fn same_place(left: &Path, right: &Path) -> bool {
 }
 
 /// commit の門（設計 §15 形 4）: git の commit の segment ごとに、解けない対象は live な便の有無で断り、解けた対象は
-/// HEAD との差（index と作業の木の和・rename は旧 path と新 path の 2 つ）の docs/design/ の doc を比べる。
+/// HEAD との差（index と作業の木の和・rename は旧 path と新 path の 2 つ）の置き場の doc（[`compared`]）を比べる。
 fn decide_commit(scene: &Scene) -> LiveRowDecision {
     let command = scene.command.unwrap_or_default();
     let commits: Vec<GitSegment> =
@@ -637,7 +650,7 @@ fn unresolved_commit(scene: &Scene) -> LiveRowDecision {
     LiveRowDecision::Deny { what: "dir-unresolved".to_owned(), line }
 }
 
-/// 解けた対象の commit: 同じ置き場の worktree で、HEAD との差に docs/design/ の表の doc が在り、live な便が 1 本以上の
+/// 解けた対象の commit: 同じ置き場の worktree で、HEAD との差に置き場の表の doc が在り、live な便が 1 本以上の
 /// 周だけ、変更前 = HEAD の blob・変更後 = index の blob と作業の木の本文の両方で比べる。
 fn resolved_commit(scene: &Scene, dir: &Path) -> LiveRowDecision {
     let Some(root) = vessel::repo_root(dir) else {
@@ -649,8 +662,7 @@ fn resolved_commit(scene: &Scene, dir: &Path) -> LiveRowDecision {
     let Some(changed) = changed_paths(&root) else {
         return unresolved_commit(scene);
     };
-    let docs: Vec<String> =
-        changed.into_iter().filter(|path| path.starts_with(DESIGN_DIR) && form_of(path).is_ok()).collect();
+    let docs = compared(&root, &changed);
     if docs.is_empty() {
         return LiveRowDecision::Pass;
     }

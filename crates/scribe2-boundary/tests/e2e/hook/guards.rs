@@ -2478,8 +2478,13 @@ fn live_place() -> (TmpDir, TmpDir) {
 
 /// live な便 1 本を置く（段の記帳・写しの契約・判定の file〔`verdict` が在れば Gated の verdict.json と Reviewed の
 /// review.json〕・repo の書き留め）。
-#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
 fn live_run(state: &Path, repo: &Path, (run, stage, row): (&str, &str, &str), verdict: Option<&str>) {
+    live_run_in(state, repo, LIVE_DOC, (run, stage, row), verdict);
+}
+
+/// [`live_run`] の行が `doc` の表に在る形。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn live_run_in(state: &Path, repo: &Path, doc: &str, (run, stage, row): (&str, &str, &str), verdict: Option<&str>) {
     let out = Command::new(bin())
         .args(["fleet", "record", "--kind", "RunStage", "--run", run, "--bead", "s2-live", "--stage", stage])
         .args(["--detail", "e2e", "--state-dir"])
@@ -2490,7 +2495,7 @@ fn live_run(state: &Path, repo: &Path, (run, stage, row): (&str, &str, &str), ve
     fs::create_dir_all(vessel::pipe::run_dir(state, run)).expect("run dir を作れる");
     let contract = format!(
         "goal = \"g\"\ndone = \"d\"\nsize = \"S\"\nowner = \"generated\"\ndisposition = \"A-now\"\n\
-         write-set = [\"{LIVE_DOC}\"]\nverify = [\"cargo test\"]\nreq = [\"FR1\"]\ndesign = \"{LIVE_DOC}#{row}\"\n"
+         write-set = [\"{doc}\"]\nverify = [\"cargo test\"]\nreq = [\"FR1\"]\ndesign = \"{doc}#{row}\"\n"
     );
     fs::write(vessel::pipe::contract_path(state, run), contract).expect("写しを書ける");
     fs::write(vessel::pipe::repo_path(state, run), format!("{}\n", repo.display())).expect("repo を書ける");
@@ -2763,6 +2768,88 @@ fn live_row_merge_head_passes_only_the_rows_main_already_has() {
     let ancestor = Command::new("git").arg("-C").arg(&repo).args(["merge-base", "--is-ancestor", "MERGE_HEAD", "main"]).status();
     assert!(ancestor.is_ok_and(|found| !found.success()), "MERGE_HEAD は main の祖先でない");
     assert_live_row_deny(&state, &live_hook(&repo, &bash_payload(&repo, "git commit -m m")), "changed");
+    clean(&[&repo, &state]);
+}
+
+// ─────────────── 走っている便の行の門の置き場（設計 contract-source.md §69 行 cd・接頭辞 `hook_live_tables_`） ───────────────
+//
+// 門は worktree の root の HEAD の宣言の `contract-tables`（と既定の docs/design/ 直下の `.md`）に入る path だけを比べる。
+
+/// 宣言の key で名乗る置き場の dir。
+const TABLES_DIR: &str = "contracts/";
+
+/// 表の file（版の宣言と行 a / b / c）。
+fn tables_text() -> String {
+    let rows: Vec<String> = ["a", "b", "c"].iter().map(|id| live_row_text(id)).collect();
+    format!("schema = 1\n\n{}", rows.join("\n"))
+}
+
+/// 宣言（`extra` は key の行）と `files` の表を commit した toy と、紐づけた置き場。
+fn tables_place(extra: &str, files: &[&str]) -> (TmpDir, TmpDir) {
+    let repo = git_repo();
+    rr_put(&repo.join(DECL_FILE), rr_decl(extra).as_bytes());
+    for file in files {
+        rr_put(&repo.join(file), tables_text().as_bytes());
+    }
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "tables"]);
+    let state = linked(&repo);
+    (repo, state)
+}
+
+/// `file` の行 a の done を Edit で変える payload を撃つ。
+fn tables_edit(repo: &Path, file: &str) -> Output {
+    live_hook(repo, &edit_payload(repo, &repo.join(file), "done = \"d-a\"", "done = \"e-a\""))
+}
+
+/// 作業の木の `file` の行 a の done を変える（`git commit -am` が見る差）。
+fn tables_dirty(repo: &Path, file: &str) {
+    let text = fs::read_to_string(repo.join(file)).unwrap_or_default();
+    rr_put(&repo.join(file), text.replace("d-a", "e-a").as_bytes());
+}
+
+/// 宣言を書き直して commit する。
+fn tables_declare(repo: &Path, extra: &str) {
+    rr_commit_decl(repo, &rr_decl(extra));
+}
+
+/// (a)(b)(c)(d) key で `contracts/` を名乗る toy は、置き場の便の行を変える Edit と commit を changed で断り、置き場の外の写しは通す。
+/// 便を置いた後に key の値を壊した commit では、宣言を読めない周が form_of の読める path を全部比べて同じ Edit と commit を断る。
+#[test]
+fn hook_live_tables_declared_place_gates_edit_and_commit_and_unreadable_declaration_compares_all() {
+    let (repo, state) = tables_place("contract-tables = [\"contracts/\"]\n", &["contracts/t.toml", "other/u.toml"]);
+    let (file, copy) = (format!("{TABLES_DIR}t.toml"), "other/u.toml");
+    live_run_in(&state, &repo, &file, ("r-q", "Questioned", "a"), None);
+    assert_live_row_deny(&state, &tables_edit(&repo, &file), "changed");
+    assert_silent(&tables_edit(&repo, copy), "置き場の外の写し");
+    tables_dirty(&repo, &file);
+    assert_live_row_deny(&state, &live_hook(&repo, &bash_payload(&repo, "git commit -am x")), "changed");
+    git(&repo, &["checkout", "-q", "--", &file]);
+    tables_dirty(&repo, copy);
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, "git commit -am x")), "置き場の外の写しの変更");
+    git(&repo, &["checkout", "-q", "--", copy]);
+    tables_declare(&repo, "contract-tables = \"contracts/\"\n");
+    assert_live_row_deny(&state, &tables_edit(&repo, &file), "changed");
+    tables_dirty(&repo, &file);
+    assert_live_row_deny(&state, &live_hook(&repo, &bash_payload(&repo, "git commit -am x")), "changed");
+    clean(&[&repo, &state]);
+}
+
+/// (e) key の無い toy では docs/design/ の下の深い path の表の行を変える Edit と commit は通り、key で `docs/design/sub/` を名乗った
+/// commit の後は同じ Edit と commit が断られる（深さを問わず読む定義も、比べを置き場に絞らない門も 1 つ目を断って落ちる）。
+#[test]
+fn hook_live_tables_default_places_stop_at_the_top_of_docs_design_until_the_key_names_them() {
+    let file = "docs/design/sub/t.toml";
+    let (repo, state) = tables_place("", &[file]);
+    live_run_in(&state, &repo, file, ("r-q", "Questioned", "a"), None);
+    assert_silent(&tables_edit(&repo, file), "key の無い toy の深い path");
+    tables_dirty(&repo, file);
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, "git commit -am x")), "key の無い toy の深い path の commit");
+    git(&repo, &["checkout", "-q", "--", file]);
+    tables_declare(&repo, "contract-tables = [\"docs/design/sub/\"]\n");
+    assert_live_row_deny(&state, &tables_edit(&repo, file), "changed");
+    tables_dirty(&repo, file);
+    assert_live_row_deny(&state, &live_hook(&repo, &bash_payload(&repo, "git commit -am x")), "changed");
     clean(&[&repo, &state]);
 }
 
