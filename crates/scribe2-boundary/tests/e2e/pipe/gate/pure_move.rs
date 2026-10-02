@@ -1,5 +1,5 @@
 // flip-check: moved s2-07l.685
-//! 純移動の機械証明と lens に渡す diff の畳みの族の歯（接頭辞 `pipe_gate_move_` / `pipe_gate_elide_`・設計 docs/design/carry-prep.md §10 行 m）。
+//! 純移動の機械証明と lens に渡す diff の畳みの族の歯（接頭辞 `pipe_gate_move_` / `pipe_gate_elide_` / `pipe_gate_prune_`・設計 docs/design/carry-prep.md §10 行 m）。
 //!
 //! 共有の helper と const と外形 snapshot の歯は親 module（`tests/e2e/pipe/gate.rs`）に在り、`use super::*` で使う。
 //! 歯の本文は親から**挙動不変で移した**もの（`s2-07l.685`）。
@@ -384,4 +384,322 @@ fn pipe_gate_elide_dir_whose_renames_diverge_is_verbatim() {
     let listed = git(&worktree_of(&gated.repo, &gated.id), &["ls-tree", "-r", "--name-only", "HEAD", "tests"]);
     assert_eq!(listed, "", "前提: HEAD の tests/ 配下に path が無い（空の条件は満たす）");
     assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_dir_row("boundary/tests")), "配下の rename が別の dir へ行く");
+}
+
+// ───── cap を超える周の削除の run の畳み（設計 gate-cost.md §46・行 aq・接頭辞 `pipe_gate_prune_`） ─────
+//
+// 削除の toy は `PruneToy` で作る（呼ぶたびに新しい toy repo と state）。1 つの歯で 2 つ以上の周を測るときは、同じ fixture の
+// 便を別の toy でもう 1 本作って gate する（gate を撃てるのは `Implemented` か INCONCLUSIVE の `Gated` だけ）。
+
+/// 削除の歯の toy の定義（base の file 群・HEAD の写し・runner が `git rm` する file・rename の有無）。
+struct PruneToy {
+    /// base に commit する file（path, 本文）。runner が消す file と書き換える file の両方を含み、全部 write-set に素の path で載る。
+    base: Vec<(String, String)>,
+    /// runner が HEAD へ写す file（path, 本文）。
+    head: Vec<(String, String)>,
+    /// runner が `git rm` する file。
+    removed: Vec<String>,
+    /// rename の対（[`ELIDE_OLD`] → [`ELIDE_NEW`]）を足すか。置換の hunk は呼び手が base と HEAD の file で渡す。
+    rename: bool,
+}
+
+/// 削除の歯の gate 1 回の観測。
+struct PruneGate {
+    /// 判定行・lens の stdin（lens が呼ばれない周は空）・生 diff・通知の行。
+    gated: ElideGate,
+    /// gate の rc。
+    rc: i32,
+}
+
+/// 頭（字下げ 0）と閉じ（字下げ 0）と字下げ 4 の本文 `lines - 2` 行の塊（`tag` で行ごとに字面が違い、本文の行は 20 byte 以上）。
+fn prune_block(tag: &str, lines: usize) -> String {
+    let body: String = (0..lines.saturating_sub(2))
+        .map(|number| format!("    {tag} body line {number:02} with some filler words\n"))
+        .collect();
+    format!("block {tag} {{\n{body}}}\n")
+}
+
+/// 前の context の 3 行（`keep <side> <n>`）。
+fn prune_keeps(side: &str, count: usize) -> String {
+    (0..count).map(|number| format!("keep {side} {number}\n")).collect()
+}
+
+/// 1 file を丸ごと消す toy（`lines` 行の塊）。
+fn deleted_file_toy(lines: usize) -> PruneToy {
+    PruneToy {
+        base: vec![("src/gone.txt".to_owned(), prune_block("gone", lines))],
+        head: Vec::new(),
+        removed: vec!["src/gone.txt".to_owned()],
+        rename: false,
+    }
+}
+
+/// 80 行の row の path を置換する docs の hunk（[`pipe_gate_elide_folded_body_within_cap_calls_the_lens`] の形）。
+fn elide_rows(path: &str) -> String {
+    (0..80)
+        .map(|number| format!("| row {number:02} names `{path}` and carries enough words to weigh on the cap |\n"))
+        .collect()
+}
+
+/// (a) の fixture: 丸ごと消す file（40 行）と中の 20 行の塊を消す file を、rename の周（§41 で畳む 1 行の置換の hunk）で。
+fn whole_and_partial_toy() -> PruneToy {
+    let partial = |middle: &str| format!("{}{middle}{}", prune_keeps("a", 6), prune_keeps("b", 6));
+    let (notes_old, notes_new) = (format!("# notes\n\n{}\n", elide_row(ELIDE_OLD)), format!("# notes\n\n{}\n", elide_row(ELIDE_NEW)));
+    PruneToy {
+        base: vec![
+            ("src/whole.txt".to_owned(), prune_block("whole", 40)),
+            ("src/partial.txt".to_owned(), partial(&prune_block("partial", 20))),
+            (ELIDE_NOTES.to_owned(), notes_old),
+        ],
+        head: vec![("src/partial.txt".to_owned(), partial("")), (ELIDE_NOTES.to_owned(), notes_new)],
+        removed: vec!["src/whole.txt".to_owned()],
+        rename: true,
+    }
+}
+
+/// 置き換えの toy: 20 行の塊が、直後の `+` 行（`replaced`）か context を挟んだ `+` 行（`!replaced`）と並ぶ。
+fn replaced_toy(replaced: bool) -> PruneToy {
+    let base = format!("{}{}", prune_block("old", 20), prune_keeps("a", 3));
+    let head = if replaced {
+        format!("new line one\nnew line two\n{}", prune_keeps("a", 3))
+    } else {
+        "keep a 0\nadded line between\nkeep a 1\nkeep a 2\n".to_owned()
+    };
+    PruneToy {
+        base: vec![("src/swap.txt".to_owned(), base)],
+        head: vec![("src/swap.txt".to_owned(), head)],
+        removed: Vec::new(),
+        rename: false,
+    }
+}
+
+impl PruneToy {
+    /// toy repo と state を新しく作り、便を Implemented まで通す: base を commit し、runner は rename と `git rm` と HEAD の写しを
+    /// 1 本の commit にする（write-set は rename の対と base の file 群を素の path で）。
+    #[expect(
+        clippy::expect_used,
+        reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+    )]
+    fn run(&self) -> (PathBuf, PathBuf, String) {
+        let (repo, state) = repo_with_state();
+        let mut written: Vec<(&str, &str)> = self.base.iter().map(|(path, body)| (path.as_str(), body.as_str())).collect();
+        if self.rename {
+            written.push((ELIDE_OLD, "// the renamed module\n"));
+        }
+        for (path, body) in written {
+            let file = repo.join(path);
+            fs::create_dir_all(file.parent().expect("file の親が在る")).expect("base の dir を作れる");
+            fs::write(&file, body).expect("base の file を書ける");
+        }
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "prune-base"]);
+        let staged = state.join("head");
+        fs::create_dir_all(&staged).expect("HEAD の写しの dir を作れる");
+        let mut steps: Vec<String> = Vec::new();
+        if self.rename {
+            steps.push(format!("git mv {ELIDE_OLD} {ELIDE_NEW}"));
+        }
+        steps.extend(self.removed.iter().map(|path| format!("git rm -q {path}")));
+        for (index, (path, body)) in self.head.iter().enumerate() {
+            let copy = staged.join(index.to_string());
+            fs::write(&copy, body).expect("HEAD の file を書ける");
+            steps.push(format!("cp '{}' {path}", copy.display()));
+        }
+        steps.push("git add -A".to_owned());
+        steps.push("git commit -q -m runner".to_owned());
+        let mut listed: Vec<String> = Vec::new();
+        if self.rename {
+            listed.push(format!("\"{ELIDE_OLD}\""));
+            listed.push(format!("\"+{ELIDE_NEW}\""));
+        }
+        listed.extend(self.base.iter().map(|(path, _)| format!("\"{path}\"")));
+        let write_set = format!("write-set = [{}]", listed.join(", "));
+        let design = write_contract(&repo, &["write-set"], &[&write_set]);
+        let id = intake(&repo, &state, &design);
+        let out = spawn_with(&repo, &state, &id, &steps.join(" && "));
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
+        (repo, state, id)
+    }
+
+    /// 新しい toy で便を作って stdin を写す lens で 1 回 gate する。`cap` は生 diff の byte から rules 行 `gate.token_cap` の値を導く
+    /// （`None` は既定の cap）。lens が呼ばれない周の stdin は空。
+    fn gate(&self, cap: Option<&dyn Fn(usize) -> usize>) -> PruneGate {
+        let (repo, state, id) = self.run();
+        let raw = raw_diff(&repo, &id);
+        let seen = state.join("lens-stdin");
+        let lens = recording_lens(&seen);
+        let out = match cap {
+            None => gate_once(&repo, &state, &id, Some(&lens)),
+            Some(derive) => {
+                let value = u64::try_from(derive(raw.len())).unwrap_or(u64::MAX);
+                let rules = write_rules(&repo, "prune-cap.toml", 1, value);
+                gate_with_rules(&repo, &state, &id, &rules, &lens)
+            }
+        };
+        let line = stdout_of(&out);
+        let rc = out.status.code().unwrap_or(-1);
+        let gated = ElideGate {
+            stdin: fs::read_to_string(&seen).unwrap_or_default(),
+            notices: notice_lines(&state, &id),
+            raw,
+            line,
+            repo,
+            state,
+            id,
+        };
+        PruneGate { gated, rc }
+    }
+}
+
+/// 生 diff の byte − 1（(c)(d) の cap・rename が無い toy では §41 の後の本文は生 diff と同じ）。
+fn one_below(raw: usize) -> usize {
+    raw.saturating_sub(1)
+}
+
+/// 畳まなかった周の通知: 1 行で `pruned=` が無い。
+fn assert_no_pruned_notice(gated: &ElideGate, why: &str) {
+    assert_eq!(gated.notices.len(), 1, "{why}: 通知は 1 行: {:?}", gated.notices);
+    assert!(gated.notices.iter().all(|line| !line.contains("pruned=")), "{why}: pruned= が無い: {:?}", gated.notices);
+}
+
+/// cap の超過で INCONCLUSIVE になった周: rc 3・lens を呼ばない・evidence に cap の値・`diff_bytes` は生 diff の byte。
+fn assert_over_cap(observed: &PruneGate, cap: usize, why: &str) {
+    let gated = &observed.gated;
+    assert_eq!(observed.rc, i32::from(RC_INCONCLUSIVE), "{why}: cap 超過は rc 3: {}", gated.line);
+    assert_eq!(gated.stdin, "", "{why}: lens を起動しない");
+    let pairs = verdict_pairs(&gated.state, &gated.id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "{why}");
+    assert!(value_of(&pairs, "evidence").contains(&format!("cap {cap} ")), "{why}: evidence に cap: {}", value_of(&pairs, "evidence"));
+    assert_eq!(value_of(&pairs, "diff_bytes"), gated.raw.len().to_string(), "{why}: diff_bytes は生 diff の byte");
+}
+
+/// 畳まれて lens が呼ばれた周: rc 0・PASS・stdin は lens へ渡した本文で `bytes=` と一致・通知の末尾が `notice`・`diff_bytes` は生 diff。
+fn assert_pruned_pass(observed: &PruneGate, notice: &str, why: &str) {
+    let gated = &observed.gated;
+    assert_eq!(observed.rc, i32::from(RC_OK), "{why}: lens が呼ばれ PASS: {}", gated.line);
+    assert_eq!(token_of(&gated.line, "lens-input="), "diff", "{why}: 前提: diff の周: {}", gated.line);
+    assert_eq!(token_of(&gated.line, "bytes="), gated.stdin.len().to_string(), "{why}: bytes= は stdin の byte: {}", gated.line);
+    assert!(gated.stdin.len() < gated.raw.len(), "{why}: 畳んだ本文は生 diff より小さい");
+    assert_eq!(gated.notices.len(), 1, "{why}: 通知は 1 行: {:?}", gated.notices);
+    assert!(gated.notices.iter().all(|line| line.ends_with(notice)), "{why}: 通知の末尾 `{notice}`: {:?}", gated.notices);
+    let pairs = verdict_pairs(&gated.state, &gated.id);
+    assert_eq!(value_of(&pairs, "verdict"), "PASS", "{why}");
+    assert_eq!(value_of(&pairs, "diff_bytes"), gated.raw.len().to_string(), "{why}: diff_bytes は生 diff の byte");
+}
+
+/// (a) 2 つの file の削除（丸ごと 40 行・中の 20 行）と rename を同じ便で gate し、cap は §41 の畳みの後の本文は超え形 1 の後の
+/// 本文は収まる値（生 diff の半分）→ lens の stdin に両 run の字下げ 0 の行と印 2 行と §41 の印が在り、字下げ 4 の本文の行が無い・
+/// header は残る・通知の末尾は ` elided=1/2 pruned=2/56`。
+#[test]
+fn pipe_gate_prune_keeps_only_the_shallowest_lines_of_deletion_runs() {
+    let observed = whole_and_partial_toy().gate(Some(&|raw| raw / 2));
+    let gated = &observed.gated;
+    assert!(gated.raw.contains("-    whole body line 05"), "前提: 生 diff は深い行を持つ: {}", gated.raw);
+    assert_pruned_pass(&observed, " elided=1/2 pruned=2/56", "(a)");
+    let mark = |run: usize, omitted: usize| format!("~ 削除だけの run（-{run} 行）から字下げの深い行と空行 {omitted} 行を省いた\n");
+    assert!(gated.stdin.contains(&format!("\n-block whole {{\n-}}\n{}", mark(40, 38))), "丸ごと消す file の run: {}", gated.stdin);
+    assert!(
+        gated.stdin.contains(&format!(" keep a 5\n-block partial {{\n-}}\n{} keep b 0\n", mark(20, 18))),
+        "中の塊の run（context は残る）: {}",
+        gated.stdin
+    );
+    assert!(gated.stdin.contains("\n~ rename の置換だけの hunk（-1/+1 行）を省いた\n"), "§41 の印: {}", gated.stdin);
+    assert!(!gated.stdin.contains("body line"), "字下げ 4 の本文の行は lens に渡らない: {}", gated.stdin);
+    assert!(gated.stdin.contains("deleted file mode 100644\n"), "deleted file mode の header は残る: {}", gated.stdin);
+    assert!(gated.stdin.contains("\n@@ -1,40 +0,0 @@\n"), "@@ の行は残る: {}", gated.stdin);
+    assert!(gated.stdin.len() <= gated.raw.len() / 2, "stdin は cap 以下");
+    clean(&[&gated.repo, &gated.state]);
+}
+
+/// (b) 同じ歯の中で 3 本の便をそれぞれ別の toy で gate する。(a) と同じ fixture の便を (a) の cap で gate した周は畳む。同じ
+/// fixture の便を既定の cap（生 diff が収まる）で gate した周は削除の run が逐語で通知に `pruned=` が無い（cap を超える周だけ）。
+/// 3 本目は cap が生 diff の byte より小さく §41 の畳みの後の本文の byte より大きい便で、`pruned=` が無く削除の run が逐語。
+#[test]
+fn pipe_gate_prune_runs_only_when_the_folded_body_exceeds_the_cap() {
+    let over = whole_and_partial_toy().gate(Some(&|raw| raw / 2));
+    assert!(over.gated.notices.iter().all(|line| line.contains(" pruned=")), "cap を超える周は畳む: {:?}", over.gated.notices);
+    clean(&[&over.gated.repo, &over.gated.state]);
+
+    let within = whole_and_partial_toy().gate(None);
+    let gated = &within.gated;
+    assert_eq!(within.rc, i32::from(RC_OK), "既定の cap では lens が呼ばれ PASS: {}", gated.line);
+    assert_no_pruned_notice(gated, "既定の cap");
+    assert!(gated.notices.iter().all(|line| line.ends_with(" elided=1/2")), "§41 の畳みだけ: {:?}", gated.notices);
+    assert!(!gated.stdin.contains("~ 削除だけの run"), "削除の run の印が無い: {}", gated.stdin);
+    let deleted: Vec<&str> = gated.raw.lines().filter(|line| line.starts_with("-    ")).collect();
+    assert_eq!(deleted.len(), 56, "前提: 生 diff の深い削除の行");
+    assert!(deleted.iter().all(|line| gated.stdin.contains(&format!("{line}\n"))), "削除の run は逐語: {}", gated.stdin);
+    clean(&[&gated.repo, &gated.state]);
+
+    let big = PruneToy {
+        base: vec![("src/gone.txt".to_owned(), prune_block("gone", 20)), (ELIDE_NOTES.to_owned(), elide_rows(ELIDE_OLD))],
+        head: vec![(ELIDE_NOTES.to_owned(), elide_rows(ELIDE_NEW))],
+        removed: vec!["src/gone.txt".to_owned()],
+        rename: true,
+    };
+    let third = big.gate(Some(&|raw| raw / 2));
+    let gated = &third.gated;
+    assert_eq!(third.rc, i32::from(RC_OK), "§41 の畳みの後は cap に収まり lens が呼ばれる: {}", gated.line);
+    assert!(gated.stdin.len() < gated.raw.len() / 2, "前提: §41 の後の本文は cap に収まる");
+    assert!(gated.raw.len() / 2 < gated.raw.len(), "前提: cap は生 diff より小さい");
+    assert_no_pruned_notice(gated, "cap の照合は §41 の後の本文");
+    assert!(gated.notices.iter().all(|line| line.ends_with(" elided=1/160")), "80 row の hunk を畳んだ: {:?}", gated.notices);
+    assert!(gated.stdin.contains("（-80/+80 行）を省いた\n"), "§41 の印: {}", gated.stdin);
+    let deleted: Vec<&str> = gated.raw.lines().filter(|line| line.starts_with("-    ")).collect();
+    assert_eq!(deleted.len(), 18, "前提: 生 diff の深い削除の行");
+    assert!(deleted.iter().all(|line| gated.stdin.contains(&format!("{line}\n"))), "削除の run は逐語: {}", gated.stdin);
+    clean(&[&gated.repo, &gated.state]);
+}
+
+/// (c) 消す run が 15 行の便は、cap が生 diff の byte − 1（畳めば収まり畳まなければ超える値）でも畳まず INCONCLUSIVE（evidence に cap）で
+/// 通知に `pruned=` が無い。同じ歯の中で、別の toy の同じ形の 16 行の run の便は畳まれて lens が呼ばれる（本数の線の歯）。
+#[test]
+fn pipe_gate_prune_does_not_fold_a_run_shorter_than_sixteen_lines() {
+    let short = deleted_file_toy(15).gate(Some(&one_below));
+    let cap = short.gated.raw.len().saturating_sub(1);
+    assert!(short.gated.raw.contains("-    gone body line 05"), "前提: 15 行の run: {}", short.gated.raw);
+    assert_over_cap(&short, cap, "15 行");
+    assert_no_pruned_notice(&short.gated, "15 行");
+    clean(&[&short.gated.repo, &short.gated.state]);
+
+    let long = deleted_file_toy(16).gate(Some(&one_below));
+    assert_pruned_pass(&long, " pruned=1/14", "16 行");
+    assert!(long.gated.stdin.contains("-block gone {\n-}\n~ 削除だけの run（-16 行）から字下げの深い行と空行 14 行を省いた\n"), "{}", long.gated.stdin);
+    clean(&[&long.gated.repo, &long.gated.state]);
+}
+
+/// (d) 20 行の削除の run の直後に `+` 行が続く塊（置き換え）の便は、cap が生 diff の byte − 1 でも畳まず INCONCLUSIVE で通知に
+/// `pruned=` が無い。同じ歯の中で、別の toy の `-` と `+` の間に context を 1 行挟んだ形の便は畳まれる（直後が `+` 行でない条件の歯）。
+#[test]
+fn pipe_gate_prune_does_not_fold_a_run_followed_by_added_lines() {
+    let swapped = replaced_toy(true).gate(Some(&one_below));
+    let cap = swapped.gated.raw.len().saturating_sub(1);
+    assert!(swapped.gated.raw.contains("\n-}\n+new line one\n"), "前提: 削除の直後が + 行: {}", swapped.gated.raw);
+    assert_over_cap(&swapped, cap, "置き換え");
+    assert_no_pruned_notice(&swapped.gated, "置き換え");
+    clean(&[&swapped.gated.repo, &swapped.gated.state]);
+
+    let spaced = replaced_toy(false).gate(Some(&one_below));
+    assert!(spaced.gated.raw.contains("\n-}\n keep a 0\n+added line between\n"), "前提: 間に context: {}", spaced.gated.raw);
+    assert_pruned_pass(&spaced, " pruned=1/18", "context を挟む");
+    assert!(spaced.gated.stdin.contains("\n+added line between\n"), "+ 行は残る: {}", spaced.gated.stdin);
+    clean(&[&spaced.gated.repo, &spaced.gated.state]);
+}
+
+/// (e) 畳んでも cap を超える値は INCONCLUSIVE のまま（lens を呼ばない）。evidence の byte は畳んだ本文の byte（生 diff の byte より小さい）
+/// で、通知に `pruned=` が在る（畳みは判定を緩めない）。
+#[test]
+fn pipe_gate_prune_still_refuses_a_body_that_exceeds_the_cap_after_folding() {
+    let observed = deleted_file_toy(40).gate(Some(&|_| 100));
+    let gated = &observed.gated;
+    assert_over_cap(&observed, 100, "畳んでも超える");
+    let omitted: usize = gated.raw.lines().filter(|line| line.starts_with("-    ")).map(|line| line.len() + 1).sum();
+    let mark = "~ 削除だけの run（-40 行）から字下げの深い行と空行 38 行を省いた\n".len();
+    let folded = gated.raw.len() - omitted + mark;
+    assert!(folded < gated.raw.len(), "前提: 畳んだ本文は生 diff より小さい");
+    let pairs = verdict_pairs(&gated.state, &gated.id);
+    assert!(value_of(&pairs, "evidence").contains(&format!("diff {folded} byte が cap 100")), "evidence の byte は畳んだ本文: {}", value_of(&pairs, "evidence"));
+    assert_eq!(gated.notices.len(), 1, "通知は 1 行: {:?}", gated.notices);
+    assert!(gated.notices.iter().all(|line| line.ends_with(" pruned=1/38")), "畳んだ周は pruned= が在る: {:?}", gated.notices);
+    clean(&[&gated.repo, &gated.state]);
 }

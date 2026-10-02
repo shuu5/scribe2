@@ -467,9 +467,21 @@ fn first_line(path: &Path) -> Option<String> {
 /// 置き場が `verify.jsonl` ではなく診断 file なのは、record の**通し番号 `n`** を行数から導く読み手が
 /// 在るためである（[`crate::pipe::land`] の追随が引き継ぎの skip record を書く周）——record でない行を
 /// 混ぜると `n` が飛ぶ。診断 file の読み手は人だけで、通知は段の見出しを持たない 1 行に閉じる。
-pub(super) fn record_notice(entry: &Gate<'_>, input: &LensInput, elided: (u64, u64)) -> Result<(), String> {
+///
+/// 削除の run を 1 つ以上畳んだ周だけ、[`notice_line`] の末尾（` elided=` の後ろ）に ` pruned=<run 数>/<省いた行数>` を足す
+/// （設計 gate-cost.md §46 形 3・0 の周は従来の字面のまま）。
+pub(super) fn record_notice(
+    entry: &Gate<'_>,
+    input: &LensInput,
+    elided: (u64, u64),
+    pruned: (u64, u64),
+) -> Result<(), String> {
     let path = verify_log_path(entry.state_dir, entry.run).with_file_name(STDERR_LOG_FILE);
-    append_line(&path, &notice_line(input, elided), entry.policy).map_err(|err| err.to_string())?;
+    let line = match pruned {
+        (0, _) => notice_line(input, elided),
+        (runs, lines) => format!("{} pruned={runs}/{lines}", notice_line(input, elided)),
+    };
+    append_line(&path, &line, entry.policy).map_err(|err| err.to_string())?;
     Ok(())
 }
 
