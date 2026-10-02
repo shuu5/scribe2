@@ -166,6 +166,96 @@ fn pipe_gate_write_set_prefixed_items_still_name_outside_paths() {
     clean(&[&repo, &state]);
 }
 
+/// 置き場だけの項目の file（base に在る・契約の write-set の `=` の項目）。
+const PLACED_FILE: &str = "src/placed.rs";
+
+/// 見出し（段①が `=` の file の diff を名指す・stderr の 1 行目）。
+const PLACED_HEAD: &str = "契約の write-set の = の file が便の diff に在る:";
+
+/// base に `src/placed.rs` を置き、素の項目 `src/lib.rs` と `=src/placed.rs` の契約を commit して intake した便の id。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn place_only_intake(repo: &Path, state: &Path) -> String {
+    fs::write(repo.join(PLACED_FILE), "// placed\n").expect("置き場だけの file を書ける");
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "placed-base"]);
+    let design = write_contract(repo, &["write-set"], &[r#"write-set = ["src/lib.rs", "=src/placed.rs"]"#]);
+    intake(repo, state, &design)
+}
+
+/// guard（hook の pre-tool-use）へ `file` の Edit を渡した rc。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn edit_rc(worktree: &Path, file: &str) -> Option<i32> {
+    let payload = format!(
+        "{{\"cwd\":\"{}\",\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":\"{file}\"}}}}",
+        worktree.display()
+    );
+    let mut child = bin_cmd()
+        .args(["hook", "pre-tool-use"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary を起動できる");
+    std::io::Write::write_all(child.stdin.as_mut().expect("stdin を開ける"), payload.as_bytes()).expect("payload を書ける");
+    child.wait_with_output().expect("終了を待てる").status.code()
+}
+
+/// (1)(2): `=` の項目は runner の policy に写らず（素の項目の 1 行だけ）、その file への Edit は guard が止め、素の項目の
+/// file への Edit は通る。
+#[test]
+fn done_teeth_place_only_item_is_left_out_of_the_runner_policy() {
+    let (repo, state) = repo_with_state();
+    let id = place_only_intake(&repo, &state);
+    let spawned = spawn_without_gate(&repo, &state, &id, "true");
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&spawned));
+    let worktree = worktree_of(&repo, &id);
+    let git_dir = PathBuf::from(git(&worktree, &["rev-parse", "--absolute-git-dir"]));
+    let body = fs::read_to_string(git_dir.join(NAME).join("write-set.txt")).expect("policy を読める");
+    assert_eq!(body, "src/lib.rs\n", "policy は素の項目の 1 行だけ: {body:?}");
+    assert_eq!(edit_rc(&worktree, PLACED_FILE), Some(i32::from(RC_BROKEN)), "`=` の file への Edit は deny");
+    assert_eq!(edit_rc(&worktree, "src/lib.rs"), Some(i32::from(RC_OK)), "素の項目の file への Edit は通る");
+    clean(&[&repo, &state]);
+}
+
+/// (3)(4 の前半): `=` の file を sh で書き換えて commit した便は段①が rc 1 で落ち、stderr の新しい見出しの下にその path を
+/// 名指す。同じ repo の別の bead で素の項目だけを書く便は段①が rc 0 で通る。
+#[test]
+fn done_teeth_place_only_file_in_the_diff_fails_stage_one() {
+    let (repo, state) = repo_with_state();
+    let id = place_only_intake(&repo, &state);
+    let runner = "echo changed > src/placed.rs && git add -A && git commit -q -m runner";
+    let spawned = spawn_without_gate(&repo, &state, &id, runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&spawned));
+    let marker = state.join("lens-ran");
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "`=` の file が diff に在る便は FAIL: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=FAIL"), "{}", stdout_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 1, "cmd"), "write-set", "段①は先頭（母集団 {} record）", rows.len());
+    assert_eq!(row_value(&rows, 1, "rc"), "1", "段①が赤い");
+    assert!(!marker.exists(), "段①が赤い周は lens を起動しない");
+    let tail = fs::read_to_string(state.join("pipe").join(&id).join("verify.stderr.log"))
+        .expect("verify.stderr.log を読める");
+    assert!(tail.contains(&format!("{PLACED_HEAD}\n{PLACED_FILE}")), "見出しの下にその path を名指す: {tail}");
+    assert!(!tail.contains("write-set の外へ出た"), "write-set の外の見出しには載せない: {tail}");
+
+    // **弁別**: 同じ repo の別の bead で素の項目 `src/lib.rs` だけを書く便は段①が緑（rc 0）。
+    let second = write_contract(&repo, &["write-set"], &[r#"write-set = ["src/lib.rs", "=src/placed.rs"]"#]);
+    let inside = intake_bead(&repo, &state, &second, "s2-41o");
+    let ran = spawn_without_gate(&repo, &state, &inside, TOY_COMMIT);
+    assert_eq!(ran.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&ran));
+    let ok = gate_once(&repo, &state, &inside, Some(&fake_lens(&state.join("lens-2"), &lens_verdict("PASS"))));
+    assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "素の項目だけを書く便は通る: {}", stderr_of(&ok));
+    assert_eq!(row_value(&verify_rows(&state, &inside), 1, "rc"), "0", "段①が緑");
+    clean(&[&repo, &state]);
+}
+
 /// **共通 verify は便の写しから撃ち、契約の verify より前に来る**（段②→段③）。
 ///
 /// `{base}` は共通 verify の行だけが置ける穴で、契約の行には置換しない（.56 の intake が
