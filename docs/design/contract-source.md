@@ -1279,6 +1279,17 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "S"
 growth = ["crates/scribe2/src/pipe/review/judgement.rs:25", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs:90"]
 done = "(1) at の空白を持たない項目は最初の # か最初の § のうち先に現れた方から後ろと末尾の : と行の番号を剥がした字面を file とし、at が src/other.rs と設計 doc の path の直後に § と番号を付けた項目の後、write-set に src/other.rs を足し節の本文を変えた契約が受付を通る〔pipe_intake_repeat_design_item_ の (a)〕 (2) 剥がした file が契約 file の設計 pointer の doc と同じ項目は write-set でなく節の本文で測り、節の本文を変えない契約は finding-unaddressed で断られて理由は § を剥がした設計 doc の path を名指し § と番号の付いた字面を持たず、設計 doc の pointer（# と行 id）の項目の後も節の本文を変えた契約は通り、契約 file を読めないか pointer でない周は従来の測りに落とす〔(b)(c)〕 (3) § を持つ項目のうち剥がした file が自分の設計 doc でないものは測れない側に置き、at が src/other.rs と別の設計 doc の § の項目の後、write-set に src/other.rs を足した契約は節の本文を変えずに通る〔(d)〕 (4) covered・normalize・path_shaped の読み・literal-mismatch と section-material-missing の物差し・同型 N 回の門・lens の雛形・FindingKind の 7 語・Rework の欄は変わらない〔変わらない既存の歯 pipe_intake_repeat_ の残り（§68 の 3 本を含む）〕 歯: e2e の pipe_intake_repeat_design_item_（intake.rs・既存の failed_runs と Again と assert_refused と write_set_contract と commit_changed_section の型）の (a) § の付いた自分の設計 doc の項目と src/other.rs の後に file を足し節を変えた契約が通る (b) 同じ at の後に節を変えない契約が剥がした doc の path を名指して断られ § の付いた字面を持たない (c) 自分の設計 doc の pointer の項目と src/other.rs の後に file を足し節を変えた契約が通る (d) 別の設計 doc の § の項目と src/other.rs の後に file を足した契約が節を変えずに通る、base は § を剥がさず設計 doc を file として write-set と照らすので (a)〜(d) が RED"
+[[contract]]
+id = "ci"
+title = "pipe preflight が閉包の広がりを予想する — 自分の行の § の本文が語として名指す型形の項目をほかの行が touches に持ち、その行の宣言した write-set が自分の行の .rs の候補を覆わない組を widen= の行で出し、読めない周は widen=unmeasured の 1 行にし、rc と判定は変えない（§71・memo s2-07l.738.1）"
+req = ["FR48"]
+section = "71"
+write-set = ["crates/scribe2/src/pipe/cli/preflight.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_preflight_widen_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail runner_touches_section_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
+size = "M"
+growth = ["crates/scribe2/src/pipe/cli/preflight.rs:60", "crates/scribe2/src/pipe/spawn.rs:8", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs:220"]
+done = "(1) preflight は judge の後に、HEAD の木の契約表から読んだほかの行のうち、自分の行の § の本文が語として名指す型形の項目を touches に持ち write-set を宣言した行ごとに、widen=<項目>@<doc>#<行 id>:<file,…> の 1 行を refuse の行の直前（refuse の行が無い周は末尾の判定行の直前）にまとめて出し、file は自分の行の write-set の .rs の項目のうち接頭辞が無いか + のもの（+ は剥がす）でその行の write-set が覆わないものを自分の write-set の順に並べ、並びは項目の辞書順・同じ項目の中は doc と行の順で、作業木だけの行は読まず、断りの無い周の rc 0 と末尾 preflight: ok は変えない〔pipe_preflight_widen_names_the_row_and_its_missing_files: 行 h と行 k2 の 2 本がこの順・h は paint.rs と other.rs・k2 は paint.rs だけ・候補でない = と - と ~ と dir と .rs でない file の項目は並ばない・作業木だけの行 z は並ばない・2 本の直後が末尾の判定行・rc 0 と preflight: ok と refuse の行 0〕 (2) その行の write-set が候補を全部覆う行（refuse.rs の covered の照らし・dir の項目は配下を覆う）は出さない〔pipe_preflight_widen_skips_a_row_whose_write_set_covers_the_files〕 (3) write-set の欄を持たない行は出さない〔pipe_preflight_widen_skips_a_row_without_a_declared_write_set〕 (4) fn 形（末尾の段が小文字始まり）の項目は § の本文に語として在っても照らさない〔pipe_preflight_widen_reads_only_type_form_items〕 (5) 項目の末尾の段が § の本文に語の境界で無く長い名の部分の字としてだけ在る行は出さない〔pipe_preflight_widen_needs_the_name_as_a_word_in_the_section〕 (6) HEAD の木の契約表を読めない周は widen=unmeasured:<理由> の 1 行（理由は doc の path を持つ・ほかの行の touches 節と同じ字）を出し rc と末尾の判定行は変えない〔pipe_preflight_widen_says_unmeasured_when_the_head_table_is_unreadable: HEAD の別の doc の区間が壊れ作業木の同じ path は壊れていない toy〕 (7) judge の断りが在る周も予想の行を出し、refuse の行と rc と末尾の判定行の件数は judge の断りだけで決まる〔pipe_preflight_widen_stays_out_of_the_refusal_count: 行 a の growth が other.rs の上限の余地を越える toy で rc 1・refuse の行は cap-headroom の 1 本・末尾 preflight: refused n=1・h の 1 本がその refuse の行の直前〕 (8) runner の stdin の「ほかの行の touches」節の字と順は変わらない〔既存の歯 runner_touches_section_ の 3 本が本文を変えずに緑〕 (9) preflight.rs と spawn.rs は契約表の行の型を構造として持たず、器の repo の contracts check は findings 0 のまま〔verify の最終行の contracts check が便の木で findings 0〕 歯: e2e の pipe_preflight_widen_ の 7 本（e2e の spawn.rs・toy は親の derive_repo_with と table_row・§ 2 の本文が語 Tint と語 show を持つ doc・行 a は § 2 で write-set に + の paint.rs と other.rs と候補でない 5 形の項目を 1 つずつ・行 h は touches に crate::tint::Tint で write-set に tint.rs と show.rs）が base で RED（機能不在: base の preflight は widen= の行を出さない）。各歯は撃つ前に HEAD の doc の § 2 の本文が語 Tint を持つ前提を歯の中で assert し、done (2)〜(5) の歯は行 h の 1 本だけが出ることを assert する"
+done-teeth = ["1:pipe_preflight_widen_names_the_row_and_its_missing_files", "2:pipe_preflight_widen_skips_a_row_whose_write_set_covers_the_files", "3:pipe_preflight_widen_skips_a_row_without_a_declared_write_set", "4:pipe_preflight_widen_reads_only_type_form_items", "5:pipe_preflight_widen_needs_the_name_as_a_word_in_the_section", "6:pipe_preflight_widen_says_unmeasured_when_the_head_table_is_unreadable", "7:pipe_preflight_widen_stays_out_of_the_refusal_count", "8:=runner_touches_section_lists_other_rows_from_the_base_tree_without_own_row", "8:=runner_touches_section_says_why_when_a_doc_region_is_unreadable", "8:=runner_touches_section_lines_skip_own_row_and_bundle_pointers", "9:!closure"]
 <!-- contracts:end -->
 
 
@@ -2642,3 +2653,52 @@ done = "(1) at の空白を持たない項目は最初の # か最初の § の�
 - 却下: lens の雛形に「at に設計 doc を書かない」と書く（過去の便の at は書き換わらず、`s2-07l.736.33.21.7` が止まったまま・lens が字を守る保証も無い）／`Rework` に設計 doc の path の欄を足す（審査の歯の `Rework` の構築点〔`crates/scribe2/src/pipe/review.rs` の tests〕が未着地の行の write-set に在り、行を交差させる）／設計 doc の項目を全部測れない側に置く（自分の節を直さない焼き直しも通ってしまう・§23 (3) の物差しの意図に反する）。
 - 限界: ほかの設計 doc の § を指す項目は測らずに通す（測れない n 件の数にだけ出る）。§ も # も持たない設計 doc の path だけの項目は、自分の設計 doc なら形 2 で測り、ほかの設計 doc なら §68 のまま file として測る。
 - ADR: 書かない（物差しの読みの直し・§68 の延長）。
+
+## 71. pipe preflight が閉包の広がりを予想する — 自分の行の § の本文が語として名指す型をほかの行が touches に持ち、その行の宣言した write-set が自分の行の .rs の file を覆わない組を 1 行ずつ出し、断りにはしない（契約表の行 ci・memo `s2-07l.738.1`・FR48）
+
+やさしく言うと: 便が新しい file か既存の file で、ほかの契約表の行が touches に挙げた型を組んだり match したりすると、その行の閉包（その型を構造として持つ file の集合）が広がって、その行の write-set の外に出る。すると便の gate の現物の契約表の歯（contracts check）が赤になる。今の preflight はこれを予想しないので、起票の前に気づけない。そこで preflight に予想の行を足す。自分の行の § の本文が名指す型をほかの行が touches に持ち、その行の write-set が自分の行の書く file を覆わないとき、その組を 1 行で並べる。器は知らせるだけで、rc と判定は変えない。
+
+- 出所: memo `s2-07l.738.1` の memo の審査の判定 promote（2026-10-02T10:42:03Z）。memo が挙げた書き漏らしの 3 形のうち、形 1（閉包の広がり）は便 `s2-07l.708` の 2 回目と便 `s2-07l.738.25` で gate の現物の契約表の歯を赤にし、どちらの行も preflight は ok を返した。
+- 何が起きているか（main 18ba78d4・verified）:
+  - `crates/scribe2/src/pipe/cli/preflight.rs` の render が出す行は design・write-set・teeth・headroom・overlap・entrance・refuse と末尾の判定行で、ほかの行の閉包には触れない。
+  - 受付の表の検査は自分の行にしか撃たない（`crates/scribe2/src/pipe/cli/intake.rs` の generated の中の check_row）。ほかの行の閉包 ⊆ write-set は CI の contracts check が全部の行に撃つが、便の新しい file は base に無く、既存の file もまだ型を組んでいないので、便を起こす前の木では閉包に入らない。
+  - runner の stdin の「ほかの行の touches」節（[reverse-index.md](./reverse-index.md) §15・行 f・着地済み）は runner に知らせるだけで、起票の前の orchestrator には出ない。節を組む `crates/scribe2/src/pipe/spawn.rs` の私有の fn touches_rows が、便の base の木の契約表の行ごとに pointer と touches の列を読む（design_docs の母集団・git show の本文・read_table）。
+  - 母集団（main 18ba78d4）: 契約表の行 499、touches を持ち write-set を宣言する行 92（touches を持ち write-set の欄が無い行 5）、touches の項目の異なり 57（うち型形 51）。1 つの型形の項目を touches に持つ宣言の行は最多で 31（crate::rules::RuleKind）。
+- 形（番号は行 ci の done と 1:1）:
+  1. **予想の行**: preflight は judge の後に、行 `widen=<touches の項目>@<doc>#<行 id>:<file>,<file>` を（項目・ほかの行）の組ごとに 1 行出す。
+     - 候補の file は自分の行の契約の write-set の項目のうち、`.rs` で終わり、接頭辞が無いか `+` のもの（`+` は剥がす）。`=`・`-`・`~` の項目と dir の項目と `.rs` でない file の項目の 5 形は候補でない。
+     - 1 行の file は、候補のうちその行の write-set が覆わないものを、自分の write-set の順に並べる。覆わない候補が 0 の行は出さない。
+     - 行の並びは項目の辞書順、同じ項目の中は契約表の doc の順と行の順。予想の行はまとめて、refuse の行の直前（refuse の行が無い周は末尾の判定行の直前）に置く。
+     - ほかの行は HEAD の木の契約表から読む（受付の generated が自分の行を HEAD から読むのと同じ木・作業木だけの行は読まない）。
+     - 断りの無い周の rc 0 と末尾 preflight: ok は変えない（予想は断りにしない・判定に効かせない）。
+  2. **覆う行は出さない**: 覆うかは `crates/scribe2/src/pipe/refuse.rs` の covered で照らす（contracts check の閉包 ⊆ write-set と同じ 1 本・接頭辞を剥がして畳み、dir の項目は配下を覆う）。
+  3. **write-set を宣言しない行は出さない**: write-set の欄を持たない行（導出の形と約束の行）は出さない（contracts check もその行には閉包 ⊆ write-set を撃たない）。自分の行は自分の候補を全部覆うので、除く手当てを持たずに出ない。
+  4. **型形の項目だけ**: 照らす項目は末尾の段が大文字で始まる型形の touches の項目だけで、fn 形（末尾の段が小文字始まり・§18）の項目は § の本文に語として在っても照らさない。
+  5. **語の境界**: 項目の末尾の段が、自分の行の § の本文（`crates/scribe2/src/pipe/review.rs` の section_text・契約表の区間と fence の外）に語の境界で在る項目だけを照らす（closure の holds_word と同じ照らし）。長い名の部分の字としてだけ在る名は照らさない。
+  6. **読めない周**: HEAD の木の契約表を読めない周は、予想の行を理由の 1 行 `widen=unmeasured:<理由>` にする。理由は「ほかの行の touches」節と同じ字（doc の path と最初の不備）で、rc と末尾の判定行は変えない（測れないを 0 件に潰さない・C10）。
+  7. **断りと並ぶ周**: judge の断りが在る周も予想の行を出し、refuse の行と rc と末尾の判定行の件数は judge の断りだけで決まる（予想の行は件数に入らない）。
+  8. **読み手は 1 つ**: ほかの行の読みは spawn.rs の touches_rows を 1 本のまま使う。touches_rows を pub(in crate::pipe) にし、返りを（pointer・touches の列・write-set の項目の字面の列）の組の列に広げる。「ほかの行の touches」節の組み立ては pointer と touches だけを使い、節の字と順は変えない。preflight は同じ fn を base の名 HEAD で呼ぶ。
+  9. **閉包**: preflight.rs と spawn.rs は read_table の返りを field で読むだけにし、契約表の行の型を構造として持たない（literal の構築・match の arm・件数の pin を書かない・[reverse-index.md](./reverse-index.md) §15 形 7 と同じ）。便の木で契約表の検査を撃つ検証行を最後に置いて測る。
+- 歯（e2e・`crates/scribe2-boundary/tests/e2e/pipe/spawn.rs`・接頭辞 pipe_preflight_widen_・どれも base で RED: base の preflight は widen= の行を出さない）:
+  - 共通の toy: 親の derive_repo_with と table_row の型で、§ 2 の本文が語 Tint と語 show を持つ設計 doc（table_doc の § 2 の本文だけを差し替える）。行 a は § 2 で、write-set に候補の 2 つ（+ の新規 file の crates/toy/src/paint.rs と既存の crates/toy/src/other.rs）と、候補でない 5 形（= の項目・- の項目・~ の項目・dir の項目・.rs でない file の項目）を 1 つずつ持ち、5 形の path はどれも base に在って行 h の write-set に無い。行 h は § 1・touches に crate::tint::Tint・write-set に tint.rs と show.rs（Tint の閉包）。各歯は撃つ前に、HEAD の doc の § 2 の本文が語 Tint を持つ前提を歯の中で assert する。preflight は行 a に置き場つきで撃つ。
+  - (a) done (1): 行 h の後に行 k2（touches に Tint・write-set に other.rs と tint.rs と show.rs）を足し、commit の後に作業木の doc だけに行 z（touches に Tint・write-set に tint.rs）を足す。rc 0・末尾 preflight: ok・refuse の行 0 で、widen= の行はちょうど 2 本がこの順: h の行（file は paint.rs と other.rs の順・候補でない 5 形の項目は並ばない）と k2 の行（file は paint.rs だけ）。2 本の直後の行は末尾の判定行。行 z は並ばない。
+  - (b) done (2): 行 k（touches に Tint・write-set に dir の crates/toy/src/）を足す。widen= の行は h の 1 本だけ。
+  - (c) done (3): 行 m（touches に Tint・write-set の欄なし）を足す。widen= の行は h の 1 本だけ。
+  - (d) done (4): 行 n（touches に crate::show::show・write-set に tint.rs）を足し、前提として § 2 の本文が語 show を持つことを assert する。widen= の行は h の 1 本だけ。
+  - (e) done (5): 行 p（touches に crate::tint::Tin・write-set に tint.rs）を足し、前提として § 2 の本文が Tint を持ち Tin を語としては持たないことを assert する。widen= の行は h の 1 本だけ。
+  - (f) done (6): 行 h の toy に、壊れた区間を持つ別の doc（docs/design/other.md）を commit し、作業木の同じ path だけを区間の無い doc に書き戻す（commit しない）。前提として HEAD の other.md が壊れた区間を持ち、作業木の other.md が持たないことを assert する。widen= の行は widen=unmeasured:docs/design/other.md で始まる 1 本だけで、rc 0・末尾 preflight: ok。作業木を読む実装は区間を読めて unmeasured を出さないので落ちる。
+  - (g) done (7): 行 a と行 h の toy で、行 a の growth が既存の other.rs の上限の余地を越える（cap-headroom の断りを 1 件持つ）。rc 1・refuse の行はちょうど 1 本で cap-headroom・末尾 preflight: refused n=1 で、widen= の行は h の 1 本だけがその refuse の行の直前に在る。
+  - done (8) は既存の歯 runner_touches_section_（e2e の spawn.rs の 3 本）が本文を変えずに緑であることで、done (9) は verify の最終行の contracts check が便の木で findings 0 であることで測る。
+- 変えないもの: judge の判定の順・断りの字と rc・ほかの事実の行（design・write-set・teeth・headroom・overlap・entrance）の字と順・runner の stdin の節の字と順・contracts check と受付の閉包。
+- 却下:
+  - preflight が自分の行の + の file を空の本文で木に足して contracts check を撃つ（空の file は型を組まず閉包に入らない・中身は runner が書くまで無い）。
+  - 予想を断りにする（§ の名指しは上界で、偽の断りが起票を止める・予想を判定に効かせない事前審査の約束と同じ側に置く）。
+  - preflight に契約表の 2 本目の読み手を書く（touches_rows と同じ読みが 2 つになる・C6）。
+  - memo の形 2（既存の歯の本文を変える便の retroactive の札）と形 3（write-set の外の完全一致の歯）も同じ行で予想する: 見送る。形 2 は歯の本文を変えるかを § から読めず、形 3 は write-set の外の歯の本文の字を照らす読み手が要り、どちらも本行の読み手では済まない。
+- 限界:
+  - 照らすのは自分の行の § の本文の語だけで、行の title と done と、まだ無い + の file の本文は読まない。§ が名指さない型を file が組む広がりは予想しない（下界）。§ が名指すだけで file が構造として持たない型も並ぶ（上界の雑音・型形の項目 1 つに最多で 31 行）。
+  - 照らすのは write-set を宣言した行だけで、導出の形の行の導出値が広がる（受付の write-set が変わる）ことは並べない。fn 形の項目（母集団 57 のうち 6）は照らさない。
+  - 索引の閉包（[reverse-index.md](./reverse-index.md) §7 (b)）が加える別名の site は予想しない（字の閉包と同じ下界）。
+  - 予想は preflight の stdout にだけ出し、起動の列の事前審査の置き場の file には書かない。
+- 他の設計との順: preflight.rs は [reverse-index.md](./reverse-index.md) の行 d（preflight の出力に索引の 1 語を足す）と本 doc の行 bx（preflight の 1 語）も持つ。行の間に blocks は張らない（起動の列が write-set の交差で直列にし、出力の行の位置は互いに独立）。
+- ADR: 書かない（preflight の出力に行を 1 種足すだけで、判定と rc と on-disk の形を変えない）。
