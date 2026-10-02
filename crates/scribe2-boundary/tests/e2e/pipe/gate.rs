@@ -1193,16 +1193,17 @@ fn pipe_regate_returns_gated_fail_to_implemented_on_the_same_worktree() {
     assert_eq!(head(), head_before, "再 gate も同じ worktree の同じ commit");
     // event の種別は account-lifecycle.md §19 形 3 の群の逼迫の通知で 19 → 20・§20 形 5 / 6 の群の移動の 3 種で 20 → 23・
     // §24 形 4 の登録 row の退役で 23 → 24・fleet-event-log.md §12 の案件の一生の 5 kind で 24 → 29・dispatcher.md §41 の MemoJudged で
-    // 29 → 30（regate は種別を足さない）。
-    assert_eq!((vessel::fleet::STAGES.len(), vessel::fleet::KINDS.len()), (11, 30), "段と event の種別は増えない");
+    // 29 → 30・limit-permit.md §18 の LimitPermitted で 30 → 31（regate は種別を足さない）。
+    assert_eq!((vessel::fleet::STAGES.len(), vessel::fleet::KINDS.len()), (11, 31), "段と event の種別は増えない");
     clean(&[&repo, &state]);
 }
 
 /// 形 1 / 形 6（設計 pipeline.md §52・行 au）: PASS の `Gated` の便の後に main が進んだ周、`pipe follow` を撃つと
 /// rc 0 で `follow: run=<id> rebase=<base>..<main>` の 1 行が出て、段が `Implemented` に戻り、木の base が main の
-/// 先端になる。main の sha は動かず、記帳は 1 件で、段の種別 11 個と event の種別 30 個（account-lifecycle.md §19 形 3 の
+/// 先端になる。main の sha は動かず、記帳は 1 件で、段の種別 11 個と event の種別 31 個（account-lifecycle.md §19 形 3 の
 /// 群の逼迫の通知で 19 → 20・§20 形 5 / 6 の群の移動の 3 種で 20 → 23・§24 形 4 の登録 row の退役で 23 → 24・fleet-event-log.md
-/// §12 の案件の一生の 5 kind で 24 → 29・dispatcher.md §41 の MemoJudged で 29 → 30）は増えない。
+/// §12 の案件の一生の 5 kind で 24 → 29・dispatcher.md §41 の MemoJudged で 29 → 30・limit-permit.md §18 の LimitPermitted で
+/// 30 → 31）は増えない。
 #[test]
 fn pipe_follow_step_moves_gated_tree_onto_main_and_returns_to_implemented() {
     let (repo, state) = repo_with_state();
@@ -1228,7 +1229,7 @@ fn pipe_follow_step_moves_gated_tree_onto_main_and_returns_to_implemented() {
     assert_eq!(run.detail.as_deref(), Some(format!("rebase:{base}..{moved}").as_str()), "着地の追随と同じ字面");
     assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
     assert_eq!(git(&worktree, &["merge-base", "HEAD", &moved]), moved, "木の base は main の先端");
-    assert_eq!((vessel::fleet::STAGES.len(), vessel::fleet::KINDS.len()), (11, 30), "段と event の種別は増えない");
+    assert_eq!((vessel::fleet::STAGES.len(), vessel::fleet::KINDS.len()), (11, 31), "段と event の種別は増えない");
     clean(&[&repo, &state]);
 }
 
@@ -3768,3 +3769,172 @@ fn elide_moves_gate(base: &[(&str, &str)], head: &[(&str, &str)], moves: &[(&str
 
 /// 移動の歯の rename: `tests/` 配下の file 1 本を boundary 側の同じ相対 path へ。
 const ELIDE_TESTS_MOVE: (&str, &str) = ("tests/gate.rs", "boundary/tests/gate.rs");
+
+/// 上限の許可の歯（limit-permit.md §18・接頭辞 `limit_permit_`）の共通: 期限（UTC の秒）・許可の値・対象の行。
+const PERMIT_UNTIL: &str = "2026-10-03T01:00:00Z";
+const PERMIT_VALUE: u64 = 250_000;
+const PERMIT_RULE: &str = "gate.token_cap";
+
+/// on-disk の 1 行を `Event::from_line` で読んで event を作る（`Event` の literal を書かない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn permit_event(kind_and_keys: &str, ts: &str) -> vessel::fleet::Event {
+    let line = format!(r#"{{"schema":1,"ts":"{ts}",{kind_and_keys},"host":"h","actor":"machine"}}"#);
+    vessel::fleet::Event::from_line(&line).expect("fixture の行が読める")
+}
+
+/// 許可の記帳の行（`detail` は [`vessel::pipe::permit::Record::render`] の字面）。
+fn permit_row(bead: &str, ts: &str, record: &vessel::pipe::permit::Record) -> vessel::fleet::Event {
+    permit_event(&format!(r#""kind":"LimitPermitted","bead":"{bead}","detail":"{}""#, record.render()), ts)
+}
+
+/// 許可の `Record`（行 id は `rule`・値と期限と裁定 id を足す）。
+fn permit_record(rule: &str, value: u64, until: &str, ruling: &str) -> vessel::pipe::permit::Record {
+    vessel::pipe::permit::Record::Permit { rule: rule.to_owned(), value, until: until.to_owned(), ruling: ruling.to_owned() }
+}
+
+/// 取り消しの `Record`。
+fn revoke_record(rule: &str) -> vessel::pipe::permit::Record {
+    vessel::pipe::permit::Record::Revoke { rule: rule.to_owned() }
+}
+
+/// bead の便が `Landed` に達した行（`RunDone`）。
+fn landed_row(bead: &str, run: &str, ts: &str) -> vessel::fleet::Event {
+    permit_event(&format!(r#""kind":"RunDone","run":"{run}","bead":"{bead}","stage":"Landed""#), ts)
+}
+
+/// 期限（[`PERMIT_UNTIL`]）の UNIX 秒。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn permit_until_epoch() -> u64 {
+    vessel::fleet::epoch_of(PERMIT_UNTIL).expect("期限は秒の形")
+}
+
+/// 既定の許可（値 [`PERMIT_VALUE`]・期限 [`PERMIT_UNTIL`]・裁定 id q-1）の記帳。
+fn permit_default(bead: &str, ts: &str) -> vessel::fleet::Event {
+    permit_row(bead, ts, &permit_record(PERMIT_RULE, PERMIT_VALUE, PERMIT_UNTIL, "q-1"))
+}
+
+/// 許可を読んだ効き（値・裁定 id・期限）。
+fn permitted_effect(value: u64, ruling: &str, until: &str) -> vessel::pipe::permit::Effect {
+    vessel::pipe::permit::Effect::Permitted { value, ruling: ruling.to_owned(), until: until.to_owned() }
+}
+
+/// (h) `render` の字が 2 形と一致し `parse` で同じ値に戻り、形の外の 7 つは `None`。
+#[test]
+fn limit_permit_render_matches_the_two_closed_forms_and_parse_round_trips() {
+    use vessel::pipe::permit::Record;
+    let permit = permit_record(PERMIT_RULE, PERMIT_VALUE, PERMIT_UNTIL, "q-1");
+    let revoke = revoke_record(PERMIT_RULE);
+    assert_eq!(permit.render(), "rule=gate.token_cap value=250000 until=2026-10-03T01:00:00Z ruling=q-1", "許可の字");
+    assert_eq!(revoke.render(), "rule=gate.token_cap revoked", "取り消しの字");
+    for record in [permit, revoke] {
+        assert_eq!(Record::parse(&record.render()), Some(record.clone()), "書いた字は読み返すと同じ値: {record:?}");
+    }
+    for bad in [
+        "value=250000 rule=gate.token_cap until=2026-10-03T01:00:00Z ruling=q-1",
+        "rule=gate.token_cap value=250000 until=2026-10-03T01:00:00Z",
+        "rule=gate.token_cap value=250000 until=2026-10-03T01:00:00Z ruling=q-1 extra",
+        "rule=gate.token_cap value=many until=2026-10-03T01:00:00Z ruling=q-1",
+        "rule=gate.token_cap value= until=2026-10-03T01:00:00Z ruling=q-1",
+        "rule=gate.token_cap value=250000 until=2026-10-03T01:00Z ruling=q-1",
+        "rule=gate.token_cap revokd",
+    ] {
+        assert_eq!(Record::parse(bad), None, "形の外は読めない: {bad}");
+    }
+}
+
+/// (i) `records` は別の bead・別の行・同じ detail の別の kind を数えず、許可・取り消し・許可を記帳の順に返す。
+#[test]
+fn limit_permit_records_skip_other_beads_rules_and_kinds() {
+    let first = permit_record(PERMIT_RULE, PERMIT_VALUE, PERMIT_UNTIL, "q-1");
+    let second = revoke_record(PERMIT_RULE);
+    let third = permit_record(PERMIT_RULE, PERMIT_VALUE + 1, PERMIT_UNTIL, "q-3");
+    let copied = permit_event(&format!(r#""kind":"RunStage","run":"r1","bead":"b1","stage":"Implemented","detail":"{}""#, first.render()), "2026-10-02T00:30:00Z");
+    let events = [
+        permit_row("b1", "2026-10-02T01:00:00Z", &first),
+        permit_row("b2", "2026-10-02T01:01:00Z", &permit_record(PERMIT_RULE, 1, PERMIT_UNTIL, "q-x")),
+        permit_row("b1", "2026-10-02T01:02:00Z", &permit_record("pipe.max_live", 1, PERMIT_UNTIL, "q-y")),
+        copied,
+        permit_row("b1", "2026-10-02T02:00:00Z", &second),
+        permit_row("b1", "2026-10-02T03:00:00Z", &third),
+    ];
+    let found = vessel::pipe::permit::records("b1", PERMIT_RULE, &events);
+    assert_eq!(found, [first, second, third], "許可・取り消し・許可を記帳の順に（母集団 {} 行）", events.len());
+}
+
+/// (j) 記帳が無い・最新が取り消し・別の行の許可だけの列は `Declared`、取り消しの後の許可は `Permitted`。
+#[test]
+fn limit_permit_effect_is_declared_without_a_latest_permit() {
+    use vessel::pipe::permit::{permitted, Effect};
+    let now = permit_until_epoch() - 100;
+    let effect = |events: &[vessel::fleet::Event]| permitted(PERMIT_RULE, 150_000, "b1", events, now);
+    assert_eq!(effect(&[]), Effect::Declared, "記帳が無い");
+    let revoked = [permit_default("b1", "2026-10-02T01:00:00Z"), permit_row("b1", "2026-10-02T02:00:00Z", &revoke_record(PERMIT_RULE))];
+    assert_eq!(effect(&revoked), Effect::Declared, "最新が取り消し");
+    let other = [permit_row("b1", "2026-10-02T01:00:00Z", &permit_record("pipe.max_live", PERMIT_VALUE, PERMIT_UNTIL, "q-1"))];
+    assert_eq!(effect(&other), Effect::Declared, "別の行の許可だけ");
+    let again = [revoked[0].clone(), revoked[1].clone(), permit_row("b1", "2026-10-02T03:00:00Z", &permit_record(PERMIT_RULE, 300_000, PERMIT_UNTIL, "q-2"))];
+    assert_eq!(effect(&again), permitted_effect(300_000, "q-2", PERMIT_UNTIL), "取り消しの後の許可");
+}
+
+/// (k) 新しい許可の期限が古い許可の期限より先に切れた時刻は `Declared`（古い許可へ戻らない）、その前は新しい許可の値・裁定 id・期限。
+#[test]
+fn limit_permit_effect_does_not_fall_back_to_an_older_permit() {
+    use vessel::pipe::permit::{permitted, Effect};
+    let newer_until = "2026-10-02T12:00:00Z";
+    let events = [
+        permit_default("b1", "2026-10-02T01:00:00Z"),
+        permit_row("b1", "2026-10-02T02:00:00Z", &permit_record(PERMIT_RULE, 300_000, newer_until, "q-2")),
+    ];
+    let newer = vessel::fleet::epoch_of(newer_until).expect("期限は秒の形");
+    assert!(newer < permit_until_epoch(), "前提: 新しい許可の方が先に切れる");
+    assert_eq!(permitted(PERMIT_RULE, 150_000, "b1", &events, newer + 1), Effect::Declared, "新しい許可が切れた後は古い許可へ戻らない");
+    assert_eq!(permitted(PERMIT_RULE, 150_000, "b1", &events, newer - 1), permitted_effect(300_000, "q-2", newer_until), "切れる前は新しい許可");
+}
+
+/// (l) 同じ bead の着地の行が許可の後か前に在れば `Declared`・別の bead の着地は効きを変えない・`landed` は着地の行の便 id を返し、
+/// 別の bead だけの列では `None`。
+#[test]
+fn limit_permit_landed_row_of_the_same_bead_turns_the_effect_to_declared() {
+    use vessel::pipe::permit::{landed, permitted, Effect};
+    let now = permit_until_epoch() - 100;
+    let permit = permit_default("b1", "2026-10-02T01:00:00Z");
+    let after = [permit.clone(), landed_row("b1", "b1-r1", "2026-10-02T02:00:00Z")];
+    let before = [landed_row("b1", "b1-r1", "2026-10-02T00:00:00Z"), permit.clone()];
+    let other = [permit.clone(), landed_row("b2", "b2-r1", "2026-10-02T02:00:00Z")];
+    assert_eq!(permitted(PERMIT_RULE, 150_000, "b1", &after, now), Effect::Declared, "許可の後の着地");
+    assert_eq!(permitted(PERMIT_RULE, 150_000, "b1", &before, now), Effect::Declared, "許可の前の着地");
+    assert_eq!(permitted(PERMIT_RULE, 150_000, "b1", &other, now), permitted_effect(PERMIT_VALUE, "q-1", PERMIT_UNTIL), "別の bead の着地は変えない");
+    let two = [landed_row("b1", "b1-r1", "2026-10-02T02:00:00Z"), landed_row("b1", "b1-r2", "2026-10-02T03:00:00Z")];
+    assert_eq!(landed("b1", &two), Some("b1-r1".to_owned()), "最初の着地の行の便 id");
+    assert_eq!(landed("b1", &other), None, "別の bead だけの列では None");
+}
+
+/// (m) 今が期限ちょうどは `Declared`・1 秒前は `Permitted`・`expired` は期限ちょうどと分の形の期限で true・1 秒前で false。
+#[test]
+fn limit_permit_expiry_is_inclusive_and_an_unreadable_until_is_expired() {
+    use vessel::pipe::permit::{expired, permitted, Effect};
+    let at = permit_until_epoch();
+    let events = [permit_default("b1", "2026-10-02T01:00:00Z")];
+    assert_eq!(permitted(PERMIT_RULE, 150_000, "b1", &events, at), Effect::Declared, "期限ちょうどは切れている");
+    assert_eq!(permitted(PERMIT_RULE, 150_000, "b1", &events, at - 1), permitted_effect(PERMIT_VALUE, "q-1", PERMIT_UNTIL), "1 秒前は効く");
+    assert!(expired(PERMIT_UNTIL, at), "期限ちょうど");
+    assert!(!expired(PERMIT_UNTIL, at - 1), "1 秒前");
+    assert!(expired("2026-10-03T01:00Z", 0), "分の形の期限は読めず切れている");
+}
+
+/// (n) `declared` が許可の値と等しいか大きいと `Declared`・1 小さいと `Permitted`。
+#[test]
+fn limit_permit_value_must_exceed_the_declared_value() {
+    use vessel::pipe::permit::{permitted, Effect};
+    let now = permit_until_epoch() - 100;
+    let events = [permit_default("b1", "2026-10-02T01:00:00Z")];
+    assert_eq!(permitted(PERMIT_RULE, PERMIT_VALUE + 1, "b1", &events, now), Effect::Declared, "manifest の値が大きい");
+    assert_eq!(permitted(PERMIT_RULE, PERMIT_VALUE, "b1", &events, now), Effect::Declared, "manifest の値と等しい");
+    assert_eq!(permitted(PERMIT_RULE, PERMIT_VALUE - 1, "b1", &events, now), permitted_effect(PERMIT_VALUE, "q-1", PERMIT_UNTIL), "1 小さいと許可の値");
+}

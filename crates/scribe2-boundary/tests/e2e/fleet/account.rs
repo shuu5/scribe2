@@ -9,8 +9,8 @@ use super::*;
 fn account_cmd_kinds_are_fifteen_with_retire_and_restore_last() {
     assert_eq!(
         KINDS.len(),
-        30,
-        "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1 + 群の移動 3 + 登録 row の退役 1 + 案件の一生 5 + memo の判定 1）"
+        31,
+        "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1 + 群の移動 3 + 登録 row の退役 1 + 案件の一生 5 + memo の判定 1 + 上限の許可 1）"
     );
     assert_eq!(
         KINDS.get(12..16),

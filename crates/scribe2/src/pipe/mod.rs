@@ -26,6 +26,8 @@ pub mod land;
 pub mod lens_record;
 pub mod move_proof;
 pub(crate) mod notify;
+/// 上限の許可の記帳の本体・読み手・効きの純関数（設計 limit-permit.md §18）。
+pub mod permit;
 pub mod refuse;
 pub mod report;
 pub mod review;

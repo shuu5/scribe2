@@ -202,6 +202,25 @@ enabled = true
 ruling = "user 2026-10-01T08:09Z"
 ruled_at = "2026-10-01"
 
+# 上限の許可の対象の行の列（設計 limit-permit.md §18）。許可の読み手を持つ kind の行の id だけを置ける
+# （読み込みが断る）。読み手は許可の口と gate。
+[[rule]]
+id = "pipe.permit_rows"
+kind = "PipePermitRows"
+value = ["gate.token_cap"]
+enabled = true
+ruling = "user 2026-10-01T01:05Z 項 permit-rows"
+ruled_at = "2026-10-01"
+
+# 上限の許可の期限の上限（時間）。
+[[rule]]
+id = "pipe.permit_max_h"
+kind = "PipePermitMaxH"
+value = 24
+enabled = true
+ruling = "user 2026-10-01T01:24Z 項 permit-max-h"
+ruled_at = "2026-10-01"
+
 [[rule]]
 id = "hook.budget_ms"
 kind = "HookBudgetMs"

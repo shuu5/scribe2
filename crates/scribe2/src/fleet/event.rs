@@ -9,6 +9,7 @@ use super::{
     Shape, Sorting, Stage, Unmeasured, UnmeasuredReason, Usage, WindowKind, SCHEMA,
 };
 use crate::ledger::question::ASKED;
+use crate::pipe::permit::Record;
 use crate::seat::role::Role;
 
 /// event の 1 行が持てる key の全体（設計 §3）。
@@ -135,6 +136,7 @@ impl Event {
                 pairs.extend(self.case.iter().flat_map(|case| case.pairs(&self.bead)));
             }
             Shape::Case => pairs.extend(self.case.iter().flat_map(|case| case.pairs(&self.bead))),
+            Shape::Permit => pairs.push(("bead", Value::Str(self.bead.clone()))),
             Shape::Allowance | Shape::Registration | Shape::Account | Shape::Install | Shape::Pressure | Shape::Group => {}
         }
         pairs.extend(self.account.iter().map(|label| ("account", Value::Str(label.clone()))));
@@ -279,6 +281,7 @@ impl Body {
             EventKind::IntakeRefused => Self::case(pairs, &["bead", "refuse"], refused_of),
             EventKind::LifecycleCutover => Self::case(pairs, &["version", "main"], cutover_of),
             EventKind::MemoJudged => Self::case(pairs, &["bead"], judged_of),
+            EventKind::LimitPermitted => Self::permit(pairs),
             EventKind::RunCreated
             | EventKind::RunStage
             | EventKind::RunDone
@@ -452,6 +455,19 @@ impl Body {
         Ok(Self { account: Some(text_of(field(pairs, "account"), "account")?), ..Self::default() })
     }
 
+    /// 上限の許可の行の本体（設計 limit-permit.md §18 約束 4）: 空でない `bead` と `detail`（[`Record`] の 1 行）が**必須**。
+    /// `run` / `stage` / `seat` / `pid`（`seat` が在ると replay が幽霊の席を作る）・口座残量（`account` を含む）・登録・列の印の
+    /// key は**持たない**（在れば malformed）。`detail` の形は [`Record::parse`] の 1 本が決める（形の写しを持たない・C2）。
+    fn permit(pairs: &[(String, Value)]) -> Result<Self, String> {
+        let foreign = ["run", "stage", "seat", "pid"];
+        forbid(pairs, foreign.iter().chain(ALLOWANCE_KEYS).chain(REGISTRATION_KEYS).chain(MARK_KEYS))?;
+        let bead = word_of(pairs, "bead")?;
+        let detail = text_of(field(pairs, "detail"), "detail")?;
+        let shapes = "rule=<行 id> value=<整数> until=<秒の UTC> ruling=<裁定 id> か rule=<行 id> revoked";
+        Record::parse(&detail).ok_or(format!("detail {detail:?} は {shapes} でない"))?;
+        Ok(Self { bead, ..Self::default() })
+    }
+
     /// 案件の一生の kind の行の本体（設計 §12 の表）: `own` はこの kind が持てる本体の key（`bead` と、TurnEndUnjudged の
     /// `reason` を含む）で、`read` が本体と `bead` を読む。`run` / `stage` / `seat` / `pid`・`own` の外の [`CASE_KEYS`]・口座残量・
     /// 登録・列の印の key は**持たない**（在れば malformed）。`detail` は任意（発話の逐語の必須は `read` が見る）。
@@ -556,6 +572,7 @@ impl Event {
             | Shape::Ruling
             | Shape::Pressure
             | Shape::Group
+            | Shape::Permit
             | Shape::Case => None,
         }
     }
@@ -573,6 +590,7 @@ impl Event {
             | Shape::Cost
             | Shape::Ruling
             | Shape::Group
+            | Shape::Permit
             | Shape::Case => None,
         }
     }

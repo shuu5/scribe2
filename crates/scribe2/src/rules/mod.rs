@@ -220,6 +220,11 @@ pub enum RuleKind {
     /// lens が claude に毎回渡す turn の上限（turn・設計 pipeline.md §67）。値 0 は上限にならないので lens が断る。
     /// 読み手は lens の `rows_of` の 1 本で、行を読めない周は claude を呼ばず rc 2。
     LensMaxTurns,
+    /// 上限の許可の対象の行の列（設計 limit-permit.md §18 約束 1）。値は行 id の列で、各要素は manifest の行の id で、その行の kind が
+    /// [`RuleKind::has_permit_reader`] の true でなければ読み込みで断る。読み手は許可の口と gate（後の行）。
+    PipePermitRows,
+    /// 上限の許可の期限の上限（時間・設計 limit-permit.md §18 約束 1）。許可の口が発話の時刻からの期限の内側かを照らす（後の行）。
+    PipePermitMaxH,
     /// hook 1 回の実行予算（ミリ秒）。
     HookBudgetMs,
     /// publish の配線が子を撃つ段の締め切り（ミリ秒・NFR5）。配線の timeout 未満に限る。
@@ -448,6 +453,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::GateTokenCap,
     RuleKind::RunTokenCeiling,
     RuleKind::LensMaxTurns,
+    RuleKind::PipePermitRows,
+    RuleKind::PipePermitMaxH,
     RuleKind::HookBudgetMs,
     RuleKind::HostGuardPublishDeadlineMs,
     RuleKind::HostGuardPublishReadBytes,
@@ -541,9 +548,9 @@ impl RuleKind {
             Self::CompileSeconds => "CompileSeconds",
             Self::GateLensCount => "GateLensCount", Self::PipePrecheckLensPerRound => "PipePrecheckLensPerRound",
             Self::GateTokenCap => "GateTokenCap", Self::RunTokenCeiling => "RunTokenCeiling", Self::LensMaxTurns => "LensMaxTurns",
+            Self::PipePermitRows => "PipePermitRows", Self::PipePermitMaxH => "PipePermitMaxH",
             Self::HookBudgetMs => "HookBudgetMs", Self::HostGuardPublishDeadlineMs => "HostGuardPublishDeadlineMs", Self::HostGuardPublishReadBytes => "HostGuardPublishReadBytes",
-            Self::StopGraceMs => "StopGraceMs",
-            Self::LockRetryMs => "LockRetryMs",
+            Self::StopGraceMs => "StopGraceMs", Self::LockRetryMs => "LockRetryMs",
             Self::LockStaleMs => "LockStaleMs",
             Self::HookTimeoutS => "HookTimeoutS",
             Self::RunnerAllowedCommands => "RunnerAllowedCommands",
@@ -604,7 +611,7 @@ impl RuleKind {
             | Self::DepPerPr
             | Self::CheckDeltaMs
             | Self::GateLensCount | Self::PipePrecheckLensPerRound
-            | Self::GateTokenCap | Self::RunTokenCeiling | Self::LensMaxTurns
+            | Self::GateTokenCap | Self::RunTokenCeiling | Self::LensMaxTurns | Self::PipePermitMaxH
             | Self::HookBudgetMs | Self::HostGuardPublishDeadlineMs | Self::HostGuardPublishReadBytes
             | Self::StopGraceMs | Self::LockRetryMs
             | Self::LockStaleMs
@@ -650,7 +657,39 @@ impl RuleKind {
             | Self::RepoNonRustExecAllow
             | Self::RoleCapabilities
             | Self::FlipDocsOnlyFaces | Self::HostGuardPublish
-            | Self::LedgerDeniedWrites | Self::HostGuardDeniedCommands | Self::HostGuardRmProtected | Self::SeatPointerLadderS => ValueShape::List,
+            | Self::LedgerDeniedWrites | Self::HostGuardDeniedCommands | Self::HostGuardRmProtected | Self::SeatPointerLadderS | Self::PipePermitRows => ValueShape::List,
+        }
+    }
+
+    /// 上限の許可の読み手を持つ kind か（設計 limit-permit.md §18 約束 2）。**分けはこの `match` ただ 1 箇所**が持ち、wildcard `_` を
+    /// 書かない（kind を足した周にどの分けかを決めないと compile が落ちる）。true は `GateTokenCap` だけで、ほかの作業ごとの消費の行は
+    /// 読み手を足す後継の決定の後に true へ移す。
+    pub fn has_permit_reader(self) -> bool {
+        match self {
+            Self::GateTokenCap => true,
+            Self::CoreLines | Self::ModuleLines | Self::TestSrcRatioPct | Self::FnLines | Self::FnComplexity | Self::FnArgs
+            | Self::LineWidth | Self::BoundaryLines | Self::DialogueSurface | Self::MaturityCondition | Self::AccountSelection
+            | Self::MutationSurvivalLine | Self::DepBudget | Self::DepPerPr | Self::CheckDeltaMs | Self::CompileShape
+            | Self::CompileSeconds | Self::GateLensCount | Self::PipePrecheckLensPerRound | Self::RunTokenCeiling
+            | Self::LensMaxTurns | Self::PipePermitRows | Self::PipePermitMaxH | Self::HookBudgetMs
+            | Self::HostGuardPublishDeadlineMs | Self::HostGuardPublishReadBytes | Self::StopGraceMs | Self::LockRetryMs
+            | Self::LockStaleMs | Self::HookTimeoutS | Self::RunnerAllowedCommands | Self::RunnerDeniedCommands
+            | Self::RepoNonRustExecAllow | Self::SeatCycleSettleS | Self::SeatCyclePollMs | Self::UsageTimeoutS
+            | Self::UsageFreshS | Self::GroupPressure5hPct | Self::GroupPressure7dPct | Self::GroupPressureModelPct
+            | Self::FollowRetries | Self::RunnerEndGateRounds | Self::GateMutantsJobs | Self::GateJobMemoryMb
+            | Self::HostReserveMemoryMb | Self::GateSlotWaitS | Self::GateTmuxTestThreads | Self::GateCpuWeight
+            | Self::HostRunnablePerCore | Self::HostBlockedPerCore | Self::PipeLandWaitS | Self::PipeCiWaitS
+            | Self::PipeCiPollS | Self::SeatDraftsStaleH | Self::LedgerTimeoutS | Self::RoleCapabilities
+            | Self::PipeSizeSLines | Self::PipeSizeMLines | Self::PipeSizeLLines | Self::RunnerModel | Self::RunnerEffort
+            | Self::LensModel | Self::PipePrecheckLensModel | Self::RoleModel | Self::RoleEffort | Self::ReviewSameKindStop
+            | Self::LandTrainMax | Self::PipeMaxLive | Self::FlipDocsOnlyFaces | Self::FlipMarksPerPr
+            | Self::LedgerDeniedWrites | Self::LedgerOpenChildrenMax | Self::HostGuardDeniedCommands
+            | Self::HostGuardRmProtected | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatPointerLadderS
+            | Self::SeatMoveGraceS | Self::SeatMemoryMaxMb | Self::SeatIdleAlarmS | Self::SeatPrecheckAlarmS
+            | Self::RunnerClassCommands | Self::HostGuardPublish | Self::FloorTimeoutS | Self::PipeReserveH
+            | Self::SeatDraftsCapMb | Self::SeatDraftsBusyS | Self::LifecycleClosedWindowH | Self::LifecycleAgeH
+            | Self::LifecycleFullMinS | Self::MemoNotesMaxBytes | Self::MemoTriageIntervalH | Self::MemoTriagePerRound
+            | Self::IndexCapMb | Self::IndexTimeoutS => false,
         }
     }
 

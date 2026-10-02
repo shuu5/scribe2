@@ -100,6 +100,7 @@ fn sample_value(kind: RuleKind) -> String {
         RuleKind::HostGuardRmProtected => format!("[\"{}\"]", Protected::StateDir.as_str()),
         RuleKind::RunnerClassCommands => format!("[\"{} sample\"]", Class::Publish.as_str()),
         RuleKind::HostGuardPublish => "[\"form repo-name\"]".to_owned(),
+        RuleKind::PipePermitRows => "[\"gate.token_cap\"]".to_owned(),
         _ => match kind.shape() {
             ValueShape::Int => "1".to_owned(),
             ValueShape::Str | ValueShape::Policy => "\"sample\"".to_owned(),
@@ -287,7 +288,12 @@ fn rules_kind_parity_every_kind_has_sample() {
     for kind in ALL {
         // 年齢の閾値の kind だけ id の後ろが語の内でなければ断られる（`lifecycle.age_h.<語>`・設計 case-lifecycle.md §12 約束 10）。
         let id = if *kind == RuleKind::LifecycleAgeH { "lifecycle.age_h.misfit" } else { "probe" };
-        let text = one_row(*kind, &sample_value(*kind)).replace("\"probe\"", &format!("\"{id}\""));
+        let mut text = one_row(*kind, &sample_value(*kind)).replace("\"probe\"", &format!("\"{id}\""));
+        // 上限の許可の対象の列は名指す行が同じ manifest に要る（許可の読み手を持つ kind の行 1 本・設計 limit-permit.md §18）。
+        if *kind == RuleKind::PipePermitRows {
+            let target = one_row(RuleKind::GateTokenCap, "1").replace("\"probe\"", "\"gate.token_cap\"");
+            text.push_str(target.trim_start_matches("schema = 1\n"));
+        }
         let manifest = parsed(&text).expect("受理されるはずの fixture が拒まれた");
         let row = manifest.get(id).expect("probe が在る");
         assert_eq!(row.kind(), *kind, "kind: {}", kind.as_str());
