@@ -397,7 +397,7 @@ pub fn render_reconcile(state: Option<&State>, live: Option<&[String]>) -> Strin
 /// 同じ形・無ければ埋め込み）で、役割の既定の行を引く manifest（読めない周は `default=` の欄が理由を名乗る・rc は変えない）。
 /// `units`（`--unit-dir` と `--binary` がそろった周だけ）が在る周は row の行の末尾に `tick-unit=` の 1 語を足し
 /// （[`crate::seat::tick::install::doctor_word`]・設計 seat-heartbeat.md §3）、flag が無く host の面に `[[tick]]` が在る周は面の値で
-/// 同じ 1 語を足す（flag が勝つ・§5 形 3）。どちらも無い周は `tick-unit=` を足さない。`paths=` の直後には常に
+/// 同じ 1 語を足す（flag が勝つ・§5 形 3・どちらの組も `bd` まで丸ごと使い、flag の組が在る周は面の `bd` を読まない）。どちらも無い周は `tick-unit=` を足さない。`paths=` の直後には常に
 /// `heartbeat=` / `tick=` の 2 項目（[`tick_words`]・§12 行 p 形 3）。
 pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>, units: Option<&Probe>, state: Option<&State>) -> Vec<String> {
     let panes = super::tmux_stdout(socket, &["list-panes", "-a", "-F", "#{session_name}:#{window_name}"]);
@@ -413,6 +413,7 @@ pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>,
         unit_dir: Path::new(tick.unit_dir()),
         binary: Path::new(tick.binary()),
         rules: rules.map(Path::new),
+        bd: tick.bd().map(Path::new),
     });
     let units = units.or(face.as_ref());
     let rows = |found: &State| {

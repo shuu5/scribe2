@@ -475,27 +475,43 @@ pub struct Flags<'a> {
     pub socket: Option<&'a str>,
     /// `--capture-file`（pane の写し・tmux を撃たない読み）。
     pub capture: Option<&'a str>,
+    /// `--bd`（全部の書き直しの台帳 client・無ければ既定の `bd`）。
+    pub bd: Option<&'a str>,
 }
 
 /// `seat tick` の本体: 判定行 1 行を stdout へ・rc は inject / noop が 0・error が 1。manifest が壊れている周は defect を
 /// stderr へ並べる（`rules validate` と同じ字面）。
 pub fn run(flags: &Flags, manifest: Result<Manifest, Vec<RuleError>>) -> Outcome {
     let state = state_dir_of(Some(flags.state_dir));
-    let ((verdict, judged), err) = match (&state, manifest) {
-        (None, _) => ((Verdict::error(TickError::StateDir), Judged::Unjudged), Vec::new()),
-        (Some(_), Err(errors)) => ((Verdict::error(TickError::NoRule), Judged::Unjudged), crate::rules::cli::render_defects(&errors)),
+    let ((verdict, judged), err, read) = match (&state, manifest) {
+        (None, _) => ((Verdict::error(TickError::StateDir), Judged::Unjudged), Vec::new(), None),
+        (Some(_), Err(errors)) => ((Verdict::error(TickError::NoRule), Judged::Unjudged), crate::rules::cli::render_defects(&errors), None),
         (Some(state), Ok(manifest)) => {
+            // 判定の前に読んだ event の列（全部の書き直しの登録 row の anchor と数えが使う・読めない周は撃たない・§19）。
+            let events = crate::fleet::store::read_all(&state.path).ok();
             let input = Input { state, target: flags.target, socket: flags.socket, capture: flags.capture, manifest: &manifest };
-            (judge(&input), Vec::new())
+            (judge(&input), Vec::new(), events.map(|found| (manifest, found)))
         }
     };
     if let Some(state) = &state {
         stamp_last(&state.path, flags.target, verdict.decision);
         // 局面の出力の部分の書き直し（出力の無い置き場は何もしない・返りは捨てる＝rc と字は変えない・case-lifecycle.md §13）。
         let _ = crate::fleet::lifecycle_partial::rewrite(&state.path);
+        if let Some((manifest, events)) = &read {
+            full_rewrite(&state.path, flags, (manifest, events));
+        }
     }
     let rc = if matches!(verdict.decision, TickDecision::Error(_)) { RC_REFUSED } else { RC_OK };
     Outcome { out: vec![format!("{} judged={}", render(flags.target, &verdict), judged.render())], err, rc }
+}
+
+/// 管理 tick の全部の書き直し（target の登録 row の anchor を repo にして台帳か main の印の動いた周だけ撃つ・返りは捨てる＝rc と字は
+/// 変えない・case-lifecycle.md §19）。
+fn full_rewrite(state_dir: &Path, flags: &Flags, (manifest, events): (&Manifest, &[crate::fleet::Event])) {
+    let fleet = crate::fleet::replay(events);
+    let Some(row) = super::role::registration_of_target(&fleet, flags.target) else { return };
+    let bd = flags.bd.unwrap_or(super::ledger::DEFAULT_BD);
+    let _ = crate::fleet::lifecycle_partial::tick_full(state_dir, manifest, (Path::new(&row.anchor), bd), events);
 }
 
 /// 最後の周の打刻を書く（設計 §12 行 p 形 1・判定の後・rc 1 の周も・登録 row の在る席だけ＝row の無い target は dir も作らない・

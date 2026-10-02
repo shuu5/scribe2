@@ -15,10 +15,10 @@
 use super::json_tree::{self, Tree};
 use super::lifecycle_line::{book_lines, read_lines, Lines as EventLines};
 use super::lifecycle_mark::{
-    self as mark, bindings_of, events_of, events_order, events_tree, fleet_dir, hold, is_open_contract, ledger_is_newer, ledger_of, ledger_order,
+    self as mark, bindings_of, census_anchors, events_of, events_order, events_tree, fleet_dir, hold, is_open_contract, ledger_is_newer, ledger_of, ledger_order,
     ledger_tree, latest_runs, main_is_descendant, main_of, main_order, num, num_of, open_write_set, publish, read_commits, read_marks, read_rows,
     read_srs, read_stale, refusals_of, secs_of, unreflected_questions, verdict_unhandled, Face, Kind as MarkKind, Ledger, Marks, Stale,
-    JSON_FILE, JSON_LOCK, UNMEASURED_UNREFLECTED,
+    AnchorCensus, JSON_FILE, JSON_LOCK, MULTI_ANCHOR_PARTS, UNMEASURED_MULTI_ANCHOR, UNMEASURED_UNREFLECTED,
 };
 use super::phase::{self as run_phase, Judged, OpenContract};
 use super::store::{self, LockPolicy};
@@ -28,6 +28,7 @@ use crate::case::{
     turn_of, Channel, Destination, Extra, Kind, Links, Misfit, Part, Phase, Sink, Turn, TriggerView, COMMON_KEYS, LINK_KEYS, PHASES,
 };
 use crate::ledger::citation::prefix_of;
+use crate::ledger::{close_due_memos, Autoclose};
 use crate::ledger::form::pointer_text;
 use crate::ledger::phase::{self as ledger_phase, Lines as LineTimes};
 use crate::ledger::phase_main::{self, Commit, Row};
@@ -541,13 +542,29 @@ pub struct Request {
 
 /// 契機の口（終端の close の後・`fire` の後）が撃つ 1 本: 全部を書き直し、`Written`・`Unchanged`・`Coalesced` の外の語だけを返す。
 pub fn round(place: &Place<'_>, source: Source<'_>) -> Option<&'static str> {
-    full(place, source, Request::default()).loud()
+    closing_round(place, source).1
 }
 
 /// 契機 (d)（land の終端の close の Ok の後）の 1 本: 観測の 1 周（起こさない）を撃って全部を書き直し、`Written`・`Unchanged`・
 /// `Coalesced` の外の語だけを stderr の `lifecycle=<語>` の 1 行にして返す（呼び手の rc と stdout は変えない・crate の中から呼べる）。
+/// その前に memo の自動の close の結果を `memo-close=` の行にして足す（設計 ledger-form.md §21 約束 4）。
 pub(crate) fn after_close(place: &Place<'_>) -> Vec<String> {
-    round(place, Source::Observe).map(|word| format!("lifecycle={word}")).into_iter().collect()
+    let (closed, word) = closing_round(place, Source::Observe);
+    let mut lines = closed.lines();
+    lines.extend(word.map(|found| format!("lifecycle={found}")));
+    lines
+}
+
+/// 全部の書き直しの前に memo の自動の close を撃つ（設計 ledger-form.md §21 約束 3・契機 (a) は借りた全件を渡す）。1 本でも閉じた周は台帳を
+/// 読み直す観測の 1 周で、閉じなかった周は渡された出所のまま、全部の書き直しを 1 回撃つ。返りは close の結果と書き直しの語。
+fn closing_round(place: &Place<'_>, source: Source<'_>) -> (Autoclose, Option<&'static str>) {
+    let borrowed = match &source {
+        Source::Borrowed(found) => Some(found.issues),
+        Source::Observe => None,
+    };
+    let closed = close_due_memos(place.bd, place.repo, place.state_dir, place.manifest, borrowed);
+    let source = if matches!(&closed, Autoclose::Fired { closed, .. } if !closed.is_empty()) { Source::Observe } else { source };
+    (closed, full(place, source, Request::default()).loud())
 }
 
 /// 全部の書き直し 1 回（設計 §12 約束 3・4・6・7）。
@@ -661,10 +678,13 @@ fn gather(place: &Place<'_>, source: Source<'_>) -> Result<World, &'static str> 
         Face::Missing | Face::Fault => (None, Vec::new()),
     };
     let prefix = prefix_of(place.repo);
-    let (unreflected, unmeasured) = match unreflected_questions(place.state_dir, prefix.as_deref(), &issues) {
+    let (unreflected, mut unmeasured) = match unreflected_questions(place.state_dir, prefix.as_deref(), &issues) {
         Asked::Ids(ids) => (ids, Vec::new()),
         Asked::Unreadable => (Vec::new(), vec![(Kind::Question, UNMEASURED_UNREFLECTED)]),
     };
+    if census_anchors(place.state_dir, place.repo, &events) == AnchorCensus::Many {
+        unmeasured.extend(MULTI_ANCHOR_PARTS.map(|kind| (kind, UNMEASURED_MULTI_ANCHOR)));
+    }
     Ok(World {
         write_set: open_write_set(&issues, &write_sets),
         unjudged: verdict_unhandled(&issues, &events),

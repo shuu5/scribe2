@@ -30,7 +30,9 @@ const TS_MISSING: &str = "2026-09-30T09:00:00.000Z";
 /// 偽の bd（sh）。撃たれた引数を tab 区切りで `calls.log` に足し、`--readonly show <id> --json` は `show-<id>.json` を返す
 /// （無ければ rc 1）・`update <id> --append-notes <行>` は `notes.txt` に行を足し・`close` は `close.fail` が在れば 1 回だけ rc 1・
 /// `close.swap` が在れば中の path を `<path>.aside` へ移して同じ path に dir を置く（移した log は撃ち直しの前に戻せる）・`notes.fail` が在れば
-/// update は書かずに rc 1。update と close の撃ちの時点の裁定 event の件数を `*.rulings` に残す。
+/// update は書かずに rc 1。update と close の撃ちの時点の裁定 event の件数を `*.rulings` に残す。`--readonly list` の撃ち（全部の書き直しの子）は
+/// その時点の件数を `list.rulings` に残し・`list.hold` が在れば `list.go` が置かれるまで（上限 30 秒）待ってから `list.ended` を置き・rc 1 を返す。
+/// close は repo の `.beads/issues.jsonl` が在れば 1 行足す（台帳の印を書きの前と後で違える）。
 const FAKE_BD: &str = "#!/bin/sh
 d=$(dirname \"$0\")
 first=$1; second=$2; third=$3; fourth=$4
@@ -39,6 +41,11 @@ for a in \"$@\"; do line=\"$line\t$a\"; done
 printf '%s\\n' \"$line\" >> \"$d/calls.log\"
 case \"$first\" in
 --readonly)
+  if [ \"$second\" = list ]; then
+    grep -c RulingReceived \"$(cat \"$d/events.path\")\" > \"$d/list.rulings\"
+    n=0; while [ -f \"$d/list.hold\" ] && [ ! -f \"$d/list.go\" ] && [ $n -lt 300 ]; do sleep 0.1; n=$((n+1)); done
+    : > \"$d/list.ended\"; exit 1
+  fi
   [ -f \"$d/show-$third.json\" ] || exit 1
   cat \"$d/show-$third.json\" ;;
 update)
@@ -48,7 +55,8 @@ update)
 close)
   grep -c RulingReceived \"$(cat \"$d/events.path\")\" > \"$d/close.rulings\"
   if [ -f \"$d/close.fail\" ]; then rm -f \"$d/close.fail\"; echo 'close refused' >&2; exit 1; fi
-  if [ -f \"$d/close.swap\" ]; then p=$(cat \"$d/close.swap\"); mv \"$p\" \"$p.aside\"; mkdir \"$p\"; fi ;;
+  if [ -f \"$d/close.swap\" ]; then p=$(cat \"$d/close.swap\"); mv \"$p\" \"$p.aside\"; mkdir \"$p\"; fi
+  if [ -f \"$d/repo/.beads/issues.jsonl\" ]; then echo '{}' >> \"$d/repo/.beads/issues.jsonl\"; fi ;;
 esac
 exit 0
 ";
@@ -1267,4 +1275,197 @@ fn doctor_asked_after_prints_a_dash_for_an_empty_id_column() {
     assert!(line.contains(" after-user=0 after-user-ids=- "), "{line}");
     assert_eq!(line.split(' ').count(), 7, "7 語: {line}");
     fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────── 結びと答えの口が起こす全部の書き直しの子（設計 docs/design/case-lifecycle.md §21・行 k・接頭辞 `seat_ruling_rewrites_lifecycle_`） ───────────
+
+/// 裏の子の撃ちを待つ期限。撃たないことを測る側も同じ期限まで待つ。
+const DEADLINE: Duration = Duration::from_secs(10);
+
+/// 期限の内に `done` が真になるか。
+fn within(mut done: impl FnMut() -> bool) -> bool {
+    let end = Instant::now() + DEADLINE;
+    while Instant::now() < end {
+        if done() {
+            return true;
+        }
+        sleep(Duration::from_millis(50));
+    }
+    done()
+}
+
+impl Fake {
+    /// 印の在る置き場にする（repo の `.beads` の下に files の形の台帳 `issues.jsonl` を置く）。
+    fn marked(self) -> Self {
+        let beads = self.repo.join(".beads");
+        fs::create_dir_all(&beads).ok();
+        fixture(&beads, "issues.jsonl", "{}\n");
+        self
+    }
+
+    /// 置き場に局面の出力の fixture（`render_output` で組む `lifecycle.json`）を置く。
+    fn output_put(&self) {
+        use vessel::fleet::lifecycle::{render_output, Output as Lifecycle, Owned, Scope};
+        use vessel::fleet::lifecycle_mark::{Events, Ledger, Marks};
+        let stamp = "2026-10-01T10:00:00Z".to_owned();
+        let marks = Marks { ledger: Ledger::Files { len: 1, mtime_ns: 1 }, events: Events { len: 0, head: None }, main: LC_MAIN.to_owned() };
+        let out = Lifecycle {
+            generated_at: stamp.clone(),
+            scope: Scope::Full,
+            full_at: stamp,
+            interval_s: Some(600),
+            closed_window_h: Some(72),
+            marks,
+            unmeasured: Vec::new(),
+            owned: Owned::default(),
+            parts: Vec::new(),
+        };
+        let dir = self.state.join("fleet");
+        fs::create_dir_all(&dir).ok();
+        fs::write(dir.join("lifecycle.json"), render_output(&out)).ok();
+    }
+
+    /// 開いた問い `question` と、その発話 `TS_A`（chat）を置く。
+    fn asked(&self, question: &str) {
+        self.say(TS_A, Channel::Chat, WORDS);
+        self.show(question, &open_question("2026-09-30T06:00:00Z", None));
+    }
+
+    /// 偽の bd への `--readonly list` の撃ち（全部の書き直しの子の撃ち）の数。
+    fn listed(&self) -> usize {
+        let is_list = |call: &Vec<String>| call.first().is_some_and(|word| word == "--readonly") && call.get(1).is_some_and(|word| word == "list");
+        self.calls().iter().filter(|call| is_list(call)).count()
+    }
+
+    /// 子の `--readonly list` が返った（`list.ended`）か。
+    fn ended(&self) -> bool {
+        self.dir.join("list.ended").exists()
+    }
+
+    /// `seat ruling bind` を argv[0] を `arg0` にして撃つ。
+    #[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+    fn bind_as(&self, question: &str, arg0: &str) -> Output {
+        use std::os::unix::process::CommandExt;
+        let (repo, state) = (self.repo.display().to_string(), self.state.display().to_string());
+        Command::new(bin())
+            .arg0(arg0)
+            .args(["seat", "ruling", "bind", "--repo", &repo, "--state-dir", &state, "--question", question, "--utterance", TS_A, "--bd", &self.bd])
+            .output()
+            .expect("binary を起動できる")
+    }
+
+    /// 置き場の古さの印のうち種類 `kind` のもの（印の file が読めなければ空）。
+    fn stale_of(&self, kind: vessel::fleet::lifecycle_mark::Kind) -> Vec<vessel::fleet::lifecycle_mark::Mark> {
+        match vessel::fleet::lifecycle_mark::read_stale(&self.state) {
+            vessel::fleet::lifecycle_mark::Stale::Marks(found) => found.into_iter().filter(|mark| mark.kind == kind).collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// (a) 印の在る置き場で開いた問いを結ぶと、rc 0・stdout は既存の結びの歯と同じ 1 行・stderr 0 byte で、期限の内に close の後の
+/// `--readonly list` の撃ちが現れ、`list.rulings` が 1（裁定 event の後）。
+#[test]
+fn seat_ruling_rewrites_lifecycle_in_a_detached_child_after_a_bind() {
+    let fake = Fake::new().marked();
+    fake.asked("s2-q1");
+    let out = fake.bind("s2-q1", TS_A);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), bound_line("s2-q1", TS_A, "chat"), "既存の結びの歯と同じ 1 行");
+    assert!(stderr_of(&out).is_empty(), "stderr 0 byte");
+    assert!(within(|| fake.ended()), "期限の内に子が list を撃つ");
+    assert_eq!(fake.seen("list.rulings"), "1", "子の読みは裁定 event の後");
+    let calls = fake.calls();
+    let close = calls.iter().position(|call| call.first().is_some_and(|word| word == "close"));
+    let list = calls.iter().position(|call| call.get(1).is_some_and(|word| word == "list"));
+    assert!(close.is_some() && close < list, "list は close の後: {calls:?}");
+}
+
+/// (b) 印の在る置き場に `list.hold` を置いて答えを撃つと、`list.go` を置く前に rc 0・裁定 id の 1 行・stderr 0 byte で wall 10 秒未満で返る。
+/// 返った後に `list.go` を置くと、期限の内に `list.ended` が現れ `list.rulings` が 1。
+#[test]
+fn seat_ruling_rewrites_lifecycle_without_waiting_for_the_child_after_an_answer() {
+    let fake = Fake::new().marked();
+    fixture(&fake.dir, "list.hold", "");
+    fake.show("s2-q1", &open_question("2026-09-30T06:00:00Z", Some("user")));
+    let start = Instant::now();
+    let out = fake.answer("s2-q1", ANSWER_WORDS);
+    let wall = start.elapsed();
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let said = fake.utterances();
+    let id = answered_id("s2-q1", said.first().map_or("", |found| found.ts.as_str()));
+    assert_eq!(stdout_of(&out), format!("{id}\n"), "裁定 id の 1 行");
+    assert!(stderr_of(&out).is_empty(), "stderr 0 byte");
+    assert!(wall < Duration::from_secs(10), "子を待たずに返る: {wall:?}");
+    assert!(!fake.ended(), "go の前に子は返らない");
+    fixture(&fake.dir, "list.go", "");
+    assert!(within(|| fake.ended()), "go の後に期限の内に子が返る");
+    assert_eq!(fake.seen("list.rulings"), "1", "子の読みは裁定 event の後");
+}
+
+/// (c) 印の在る置き場で、閉じた問いの結び・空白だけの答え・close を 1 回落とした結びは、期限まで待っても `--readonly list` の撃ちが 0 で、
+/// stderr は今の 1 行だけ。同じ歯の撃ち直しの結び（rc 0）は期限の内に list を撃つ。印の無い置き場（出力の fixture は在る）の結びは rc 0 で、
+/// 期限まで待っても `unreadable` の印が無く、その後に口を通さず撃った `fleet lifecycle write` は理由 `ledger` の印を 1 つ付ける。
+#[test]
+fn seat_ruling_rewrites_lifecycle_does_not_start_a_child_for_a_refused_or_unreadable_round() {
+    use vessel::fleet::lifecycle_mark::{Kind, Value};
+    let fake = Fake::new().marked();
+    fake.asked("s2-q3");
+    fake.show("s2-q1", &show_json("closed", &["intake:question"], "2026-09-30T06:00:00Z", None, ""));
+    let closed = fake.bind("s2-q1", TS_A);
+    assert_eq!((rc_of(&closed), stderr_of(&closed)), (i32::from(RC_REFUSED), refused("closed", "s2-q1", TS_A)), "閉じた問い");
+    let empty = fake.answer("s2-q3", "  \n");
+    let words_empty = "seat ruling: refused reason=words-empty question=s2-q3\n".to_owned();
+    assert_eq!((rc_of(&empty), stderr_of(&empty)), (i32::from(RC_REFUSED), words_empty), "空白だけの答え");
+    fixture(&fake.dir, "close.fail", "");
+    let half = fake.bind("s2-q3", TS_A);
+    let partial = "seat ruling: partial stage=close id=s2-q3:20260930T0705Z-1 question=s2-q3 utterance=2026-09-30T07:05:09.123Z\n";
+    assert_eq!((rc_of(&half), stderr_of(&half)), (i32::from(RC_REFUSED), partial.to_owned()), "途中の止まり");
+    let bare = Fake::new();
+    bare.output_put();
+    bare.asked("s2-q1");
+    let unbound = bare.bind("s2-q1", TS_A);
+    assert_eq!(rc_of(&unbound), i32::from(RC_OK), "印の無い置き場: stderr={}", stderr_of(&unbound));
+    sleep(DEADLINE);
+    assert_eq!(fake.listed(), 0, "Ok でない周は子を起こさない");
+    assert!(bare.stale_of(Kind::Unreadable).is_empty(), "印を読めない周は子を起こさない");
+    let (repo, state) = (bare.repo.display().to_string(), bare.state.display().to_string());
+    let direct = Command::new(bin()).args(["fleet", "lifecycle", "write", "--state-dir", &state, "--repo", &repo]).output();
+    assert!(direct.is_ok(), "口を通さず撃てる");
+    let reasons: Vec<Value> = bare.stale_of(Kind::Unreadable).into_iter().map(|found| found.value).collect();
+    assert_eq!(reasons, [Value::Reason("ledger".to_owned())], "子が起きれば見える印（前提）");
+    fake.show("s2-q3", &show_json("open", &["intake:question"], "2026-09-30T06:00:00Z", None, &fake.notes()));
+    let again = fake.bind("s2-q3", TS_A);
+    assert_eq!(rc_of(&again), i32::from(RC_OK), "撃ち直し: stderr={}", stderr_of(&again));
+    assert!(within(|| fake.listed() >= 1), "撃ち直しの結びは期限の内に list を撃つ");
+}
+
+/// (d) 印の在る置き場に出力の fixture を置き、argv[0] を在らない path にして結ぶと、子を起こせず、rc 0・stdout・stderr は (a) と同じで、
+/// `ledger-gate` の印が 1 つ在り、値は結ぶ前の台帳の印と等しく結んだ後の印と違う。期限まで待っても list は 0。本物の argv[0] の写しは
+/// 期限の内に list を撃ち、`ledger-gate` の印が無い。
+#[test]
+fn seat_ruling_rewrites_lifecycle_marks_the_ledger_gate_when_the_child_cannot_start() {
+    use vessel::fleet::lifecycle_mark::{read_ledger, Kind, Value};
+    let fake = Fake::new().marked();
+    fake.output_put();
+    fake.asked("s2-q1");
+    let before = read_ledger(&fake.repo);
+    assert!(before.is_some(), "前提: 結ぶ前の台帳の印を読める");
+    let out = fake.bind_as("s2-q1", "/nonexistent/scribe2-gone");
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), bound_line("s2-q1", TS_A, "chat"), "(a) と同じ 1 行");
+    assert!(stderr_of(&out).is_empty(), "stderr 0 byte");
+    let gates = fake.stale_of(Kind::LedgerGate);
+    let value = gates.first().map(|found| found.value.clone());
+    assert_eq!((gates.len(), value), (1, before.clone().map(Value::Ledger)), "印は結ぶ前の台帳の印");
+    assert_ne!(read_ledger(&fake.repo), before, "結んだ後の台帳の印とは違う");
+    sleep(DEADLINE);
+    assert_eq!(fake.listed(), 0, "子を起こせなかった周は list を撃たない");
+    let twin = Fake::new().marked();
+    twin.output_put();
+    twin.asked("s2-q1");
+    let real = twin.bind("s2-q1", TS_A);
+    assert_eq!(rc_of(&real), i32::from(RC_OK), "stderr={}", stderr_of(&real));
+    assert!(within(|| twin.ended()), "本物の argv[0] は期限の内に list を撃つ");
+    assert!(twin.stale_of(Kind::LedgerGate).is_empty(), "起こせた周は印を足さない");
 }

@@ -13,6 +13,7 @@ use crate::fleet::store::LockPolicy;
 use crate::fleet::Stage;
 use crate::pipe::follow::{self, Runner, Turn};
 use crate::pipe::ratelimit::{ride_out_rate_limit, Pool};
+use crate::pipe::spawn::EndGate;
 use crate::rules::manifest::Manifest;
 
 /// `pipe spawn`。前提 stage = `Reviewed`（verdict PASS）。
@@ -47,11 +48,16 @@ pub(super) fn launch(
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
-    let pool = match manifest_of(args).and_then(|manifest| Pool::declared(args, &manifest, &resolved.state_dir)) {
+    let manifest = match manifest_of(args) {
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
-    let runner = Runner { cmd: runner, pool: pool.as_ref() };
+    let pool = match Pool::declared(args, &manifest, &resolved.state_dir) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
+    let gate = EndGate::of(&manifest);
+    let runner = Runner { cmd: runner, pool: pool.as_ref(), gate: &gate };
     follow::spawn_selected(&turn_of(id, &resolved, runner, policy), resolved.stage)
 }
 

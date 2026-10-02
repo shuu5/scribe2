@@ -9,13 +9,17 @@ use super::ruling::{AnswerError, BindError};
 use super::tick::install::Verb;
 use crate::cli_args::{self, Allowed};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::fleet::lifecycle_mark::{add_mark, read_ledger, Kind, Ledger, Mark, Value};
 use crate::fleet::select::Model;
+use crate::fleet::store::LockPolicy;
+use crate::invocation::Invocation;
 use crate::rules::RuleError;
 use std::path::Path;
+use std::process::Stdio;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling bind --repo R --state-dir S --question ID --utterance TS [--bd B]|ruling answer --repo R --state-dir S --question ID [--bd B] (stdin: WORDS)|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat default --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|deliver --state-dir S --target S:W --ruling ID|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling bind --repo R --state-dir S --question ID --utterance TS [--bd B]|ruling answer --repo R --state-dir S --question ID [--bd B] (stdin: WORDS)|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F] [--bd B]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F] [--bd B]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F] [--bd B]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat default --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|deliver --state-dir S --target S:W --ruling ID|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
@@ -113,6 +117,7 @@ const ALLOWED_TICK: &[cli_args::Allowed] = &[
     value("--state-dir"),
     value("--target"),
     value("--rules"),
+    value("--bd"),
     value("--tmux-socket"),
     value("--capture-file"),
 ];
@@ -123,6 +128,7 @@ const ALLOWED_TICK_UNIT: &[cli_args::Allowed] = &[
     value("--unit-dir"),
     value("--binary"),
     value("--rules"),
+    value("--bd"),
 ];
 /// `seat tick status`（最後の周の打刻と健全・設計 seat-heartbeat.md §12 行 p 形 2・`--target` は任意・pane を読まないので tmux の flag は受けない）。
 const ALLOWED_TICK_STATUS: &[cli_args::Allowed] = &[value("--state-dir"), value("--target"), value("--rules")];
@@ -308,14 +314,14 @@ fn tick_of(args: &[String]) -> Outcome {
         return tick_status_of(args.get(1..).unwrap_or_default());
     }
     let [state_dir, target] = ["--state-dir", "--target"].map(|name| required_nonempty(args, name));
-    let [socket, capture, rules] = ["--tmux-socket", "--capture-file", "--rules"].map(|name| nonempty(args, name));
-    let (Ok(state_dir), Ok(target), Ok(socket), Ok(capture), Ok(_)) = (state_dir, target, socket, capture, rules) else {
+    let [socket, capture, rules, bd] = ["--tmux-socket", "--capture-file", "--rules", "--bd"].map(|name| nonempty(args, name));
+    let (Ok(state_dir), Ok(target), Ok(socket), Ok(capture), Ok(_), Ok(bd)) = (state_dir, target, socket, capture, rules, bd) else {
         return refused_usage();
     };
     if !target_well_formed(target) {
         return refused_usage();
     }
-    let flags = super::tick::Flags { state_dir, target, socket, capture };
+    let flags = super::tick::Flags { state_dir, target, socket, capture, bd };
     super::tick::run(&flags, crate::rules::cli::open(args))
 }
 
@@ -377,16 +383,17 @@ fn deliver_of(args: &[String]) -> Outcome {
 }
 
 /// `seat tick install|uninstall`（設計 seat-heartbeat.md §3）: `--state-dir` / `S:W` の `--target` / `--unit-dir` / `--binary` は必須で、
-/// 値欠けと空文字は使い方の誤り（`--rules` も同じ）。撤去も同じ引数で導出し直して比べる＝どちらの口も同じ引数の形。
+/// 値欠けと空文字は使い方の誤り（`--rules` と `--bd` も同じ）。撤去も同じ引数で導出し直して比べる＝どちらの口も同じ引数の形。
 fn tick_unit_of(verb: Verb, args: &[String]) -> Outcome {
     let [state_dir, target, unit_dir, binary] = ["--state-dir", "--target", "--unit-dir", "--binary"].map(|name| required_nonempty(args, name));
-    let (Ok(state_dir), Ok(target), Ok(unit_dir), Ok(binary), Ok(rules)) = (state_dir, target, unit_dir, binary, nonempty(args, "--rules")) else {
+    let [rules, bd] = ["--rules", "--bd"].map(|name| nonempty(args, name));
+    let (Ok(state_dir), Ok(target), Ok(unit_dir), Ok(binary), Ok(rules), Ok(bd)) = (state_dir, target, unit_dir, binary, rules, bd) else {
         return refused_usage();
     };
     if !target_well_formed(target) {
         return refused_usage();
     }
-    let flags = super::tick::install::Flags { state_dir, target, unit_dir, binary, rules };
+    let flags = super::tick::install::Flags { state_dir, target, unit_dir, binary, rules, bd };
     super::tick::install::run(verb, &flags, crate::rules::cli::open(args))
 }
 
@@ -399,8 +406,12 @@ fn ruling_bind(rest: &[String], state_dir: &Path) -> Outcome {
     };
     let bind = super::ruling::Bind { repo: Path::new(repo), state_dir, question, utterance, bd: bd.unwrap_or(crate::ledger::DEFAULT_BD) };
     let named = |head: &str, tail: &str| format!("seat ruling: {head} {tail}question={question} utterance={utterance}");
+    let before = read_ledger(bind.repo);
     match super::ruling::bind(&bind) {
-        Ok(done) => Outcome::ok_line(format!("ruling: id={} question={question} utterance={utterance} channel={}", done.id, done.channel.as_str())),
+        Ok(done) => {
+            rewrite_later(&bind, bd, before);
+            Outcome::ok_line(format!("ruling: id={} question={question} utterance={utterance} channel={}", done.id, done.channel.as_str()))
+        }
         Err(BindError::Refused(reason)) => Outcome::failed_line(RC_REFUSED, named("refused", &format!("reason={} ", reason.as_str()))),
         Err(BindError::LedgerUnreadable) => Outcome::failed_line(RC_REFUSED, named("refused", "reason=ledger-unreadable ")),
         Err(BindError::LogUnreadable(lines)) => Outcome::failed(RC_BROKEN, lines),
@@ -426,11 +437,36 @@ fn ruling_answer(rest: &[String], state_dir: &Path) -> Outcome {
     };
     let bind = super::ruling::Bind { repo: Path::new(repo), state_dir, question, utterance: "", bd: bd.unwrap_or(crate::ledger::DEFAULT_BD) };
     let named = |head: &str, tail: &str| format!("seat ruling: {head} {tail}question={question}");
+    let before = read_ledger(bind.repo);
     match super::ruling::answer(&bind, &words) {
-        Ok(id) => Outcome::ok_line(id),
+        Ok(id) => {
+            rewrite_later(&bind, bd, before);
+            Outcome::ok_line(id)
+        }
         Err(AnswerError::Refused(reason)) => Outcome::failed_line(RC_REFUSED, named("refused", &format!("reason={reason} "))),
         Err(AnswerError::Unwritten) => Outcome::failed_line(RC_BROKEN, named("failed", "stage=utterance ")),
         Err(AnswerError::Partial(ts)) => Outcome::failed_line(RC_REFUSED, named("partial", &format!("utterance={ts} "))),
+    }
+}
+
+/// 結びと答えの口が `Ok` で返った周に、局面の出力の全部の書き直し（`fleet lifecycle write`）を自分の binary の子として切り離して起こす
+/// （設計 case-lifecycle.md §21・待たない・入出力は捨てる・書く前の台帳の印を読めなかった周は起こさない）。起こせなかった周は書く前の
+/// 台帳の印を値にした `ledger-gate` の印を 1 つ足す（出力の無い置き場には付かない）。口の rc・stdout・stderr は変えない。
+fn rewrite_later(bind: &super::ruling::Bind<'_>, bd: Option<&str>, before: Option<Ledger>) {
+    let Some(before) = before else {
+        return;
+    };
+    let mut child = Invocation::new(crate::pipe::dispatch::myself());
+    child.args(["fleet", "lifecycle", "write", "--state-dir"]).arg(bind.state_dir).arg("--repo").arg(bind.repo);
+    if let Some(bd) = bd {
+        child.args(["--bd", bd]);
+    }
+    if child.process_group(0).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().is_ok() {
+        return;
+    }
+    if let Ok(policy) = LockPolicy::embedded() {
+        let at = crate::fleet::cli::format_utc(crate::seat::state::now_secs());
+        let _ = add_mark(bind.state_dir, &Mark { kind: Kind::LedgerGate, at, value: Value::Ledger(before) }, policy);
     }
 }
 

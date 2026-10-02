@@ -2527,6 +2527,76 @@ fn pipe_review_ref_forecast_carries_the_declared_ancestor_in_the_design_material
     clean(&[&place.repo, &place.state]);
 }
 
+/// 本文を畳む歯の 1 周（§14）: main は行 m だけの doc、`--ref` の commit が行 `rows` を足す。口は rc 0・前提は HEAD が main のまま・HEAD の表に足した行が無い・
+/// `--ref` の doc が各印の字を数えどおり持つ・行 `last` の basis が forecast・記録の ancestors が `declared` を declared で持つ。返りは行 `last` の design.txt。
+fn ancestor_body_once_case(bodies: &[&str], rows: &[Vec<String>], last: &str, marks: &[(&str, usize)], declared: &[&str]) -> String {
+    let place = rv_place(bodies, &[rv_row("m", 1, &[])], &[]);
+    let doc = rv_doc(bodies, &[vec![rv_row("m", 1, &[])], rows.to_vec()].concat());
+    let sha = rv_commit(&place, None, &[(DESIGN_FILE, doc.clone())]);
+    let head = git(&place.repo, &["show", &format!("HEAD:{DESIGN_FILE}")]);
+    assert!(rows.iter().filter_map(|fields| fields.first()).all(|id_line| !head.contains(id_line.as_str())), "前提: HEAD の契約表に足した行が無い");
+    assert_eq!(git(&place.repo, &["rev-parse", "HEAD"]), place.main, "anchor の作業の木は main のまま");
+    for (mark, count) in marks {
+        assert_eq!(doc.matches(mark).count(), *count, "前提: --ref の doc が {mark} を {count} 回持つ");
+    }
+    let out = rv_review(&place, &sha);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let row = rv_row_out(&out, last);
+    assert_eq!(row.get("basis").map(String::as_str), Some("forecast"), "前提: 行 {last} の basis: {}", stdout_of(&out));
+    let name = row.get("record").cloned().unwrap_or_default();
+    let want = declared.iter().map(|id| format!("{DESIGN_FILE}#{id}:declared")).collect::<Vec<_>>().join(",");
+    assert_eq!(rv_record(&place, &name).get("ancestors").map(String::as_str), Some(want.as_str()), "前提: 記録の ancestors");
+    let design = rv_design(&place, &name);
+    clean(&[&place.repo, &place.state]);
+    design
+}
+
+/// design.txt のうち、見出しの行 `head` の直後の行。
+fn ancestor_body_once_after(design: &str, head: &str) -> String {
+    let lines: Vec<&str> = design.lines().collect();
+    lines.iter().position(|line| *line == head).and_then(|at| lines.get(at + 1)).map(|line| (*line).to_owned()).unwrap_or_default()
+}
+
+/// 畳んだ本文の 1 行（設計 §14 の字）。
+const ANCESTOR_BODY_SAME: &str = "（節の本文は上と同じ）";
+
+/// (a) §14: 節 1 つの doc で行 a・b・c（c の depends が b・b の depends が a）を足した口の行 c の design.txt は、節の本文の印の字を 1 回・未着地の祖先の頭の
+/// 1 行を 2 回・行 a と b の TOML の写しの id の行を 1 回ずつ持ち、見出しの行 b §1 と a §1 の直後の行がどちらも「（節の本文は上と同じ）」。
+#[test]
+fn ancestor_body_once_same_section_chain_folds_each_ancestor_body_into_one_line() {
+    let rows = [rv_row("a", 1, &[]), rv_row("b", 1, &[("depends", r#"["a"]"#)]), rv_row("c", 1, &[("depends", r#"["b"]"#)])];
+    let design = ancestor_body_once_case(&["ZZMARK-ONE"], &rows, "c", &[("ZZMARK-ONE", 1)], &["a", "b"]);
+    assert_eq!(design.matches("ZZMARK-ONE").count(), 1, "印の字は 1 回: {design}");
+    let note = "次の行は未着地の祖先で、その write-set の file はこの祖先が作る・変える";
+    assert_eq!(design.matches(note).count(), 2, "祖先の頭の 1 行は 2 回: {design}");
+    for id in ["a", "b"] {
+        assert_eq!(design.lines().filter(|line| *line == format!("id = \"{id}\"")).count(), 1, "行 {id} の TOML の写し: {design}");
+        let after = ancestor_body_once_after(&design, &format!("{DESIGN_FILE}#{id} §1"));
+        assert_eq!(after, ANCESTOR_BODY_SAME, "見出しの行 {id} の直後: {design}");
+    }
+}
+
+/// (b) §14: 節 2 つ（印は別の字）の doc で節 1 の行 a・b（b の depends が a）と節 2 の行 d（depends が b）を足した口の行 d の design.txt は、節 1 の印を 1 回・
+/// 節 2 の印を 1 回・「（節の本文は上と同じ）」の行を 1 回持つ。
+#[test]
+fn ancestor_body_once_different_section_body_is_written_once_and_the_second_same_one_folds() {
+    let rows = [rv_row("a", 1, &[]), rv_row("b", 1, &[("depends", r#"["a"]"#)]), rv_row("d", 2, &[("depends", r#"["b"]"#)])];
+    let design = ancestor_body_once_case(&["ZZMARK-ONE", "ZZMARK-TWO"], &rows, "d", &[("ZZMARK-ONE", 1), ("ZZMARK-TWO", 1)], &["a", "b"]);
+    assert_eq!(design.matches("ZZMARK-ONE").count(), 1, "節 1 の印: {design}");
+    assert_eq!(design.matches("ZZMARK-TWO").count(), 1, "節 2 の印: {design}");
+    assert_eq!(design.lines().filter(|line| *line == ANCESTOR_BODY_SAME).count(), 1, "上と同じの行: {design}");
+}
+
+/// (c) §14: 節 1 と節 2 の本文が同じ印の字の doc で節 1 の行 a と節 2 の行 e（depends が a）を足した口の行 e の design.txt は、印の字を 1 回持ち、
+/// 見出しの行 a §1 の直後の行が「（節の本文は上と同じ）」（節の番号では比べない）。
+#[test]
+fn ancestor_body_once_compares_the_body_bytes_not_the_section() {
+    let rows = [rv_row("a", 1, &[]), rv_row("e", 2, &[("depends", r#"["a"]"#)])];
+    let design = ancestor_body_once_case(&["ZZMARK-ONE", "ZZMARK-ONE"], &rows, "e", &[("ZZMARK-ONE", 2)], &["a"]);
+    assert_eq!(design.matches("ZZMARK-ONE").count(), 1, "印の字は 1 回: {design}");
+    assert_eq!(ancestor_body_once_after(&design, &format!("{DESIGN_FILE}#a §1")), ANCESTOR_BODY_SAME, "見出しの行 a の直後: {design}");
+}
+
 /// 祖先 y が Gated PASS の便を持つ置き場: anchor の main に行 y（`+src/added.rs`）と行 x（表の depends が y）・台帳は y と x の bead・y の便は
 /// Gated PASS（worktree は anchor の便の worktree の置き場）。行 x の done を変えた設計の PR の commit まで作る。返りは (置き場, y の便の id, commit)。
 fn rv_actual() -> (Rv, String, String) {

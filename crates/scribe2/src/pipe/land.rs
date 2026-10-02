@@ -60,7 +60,7 @@ use super::{emit, git_bytes, git_line, git_ok, worktree_path, Emit};
 // 持たないと**移した本文の path を書き換える**ことになり、純移動の機械証明（設計 §5.3）の (名, 本文の hash)
 // が動く。親自身は従来どおり `super::` で `pipe` の側を呼ぶ（本体は 1 byte も変えていない）。
 use super::{base_of_run, branch_name, declaration, verify_log_path, vessel_path};
-use super::queue::{await_turn, last_hold, Last, Order, Turned};
+use super::queue::{await_turn, last_hold, Last, Order, Turned, TURN_TAKEN};
 use super::retire::verdict_field;
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::store::{self, append_line, LockPolicy};
@@ -91,6 +91,11 @@ mod anchor;
 pub use anchor::{mark_path, write_mark, Marked};
 pub(crate) use anchor::{stale, Staleness};
 pub(in crate::pipe) use anchor::anchor_sync;
+
+/// 着地の番を取った周の remote の main の取り込み（設計 §69・行 bm）。
+mod remote_main;
+
+use remote_main::Aligned;
 
 /// 着地後の検出の口（`pipe land --detection-only`・設計 gate-cost.md §44 行 ak）。
 pub(in crate::pipe) mod detection;
@@ -375,18 +380,61 @@ pub fn land(entry: &Land<'_>) -> Outcome {
     if let Some(settled) = settled_in_train(entry, order) {
         return settled;
     }
+    // **候補の木の前に remote の main の先端を取り込む**（設計 §69）。番を取らずに進んだ周も同じ点を通り、揃えの行は
+    // 番の後の周回の戻りの頭に 1 か所で前置する。
+    let forward = match remote_main::align(entry.repo) {
+        Aligned::Untouched => None,
+        Aligned::Blocked(block) => return blocked_at_remote_main(entry, block),
+        Aligned::Forwarded(forward) => match note_hold(entry, forward.detail()) {
+            Ok(()) => Some(forward),
+            Err(stopped) => return stopped,
+        },
+    };
+    let mut outcome = turn_round(entry, &worktree, &turned);
+    if let Some(forward) = forward {
+        outcome = with_lines(vec![forward.line(entry.run)], outcome);
+        outcome.err.splice(0..0, forward.notes());
+    }
+    outcome
+}
+
+/// 取り込みの止め（設計 §69 形 5）: main も remote も動かさず rc 1 で返す。便の `turn:taken` でない最後の `RunStage` の
+/// detail が同じ理由でない周だけ `Gated remote-main:<語>` を 1 件記す（Failed も追随の数えも無い・次の周が撃ち直す）。
+fn blocked_at_remote_main(entry: &Land<'_>, block: remote_main::Block) -> Outcome {
+    let Ok(events) = store::read_all(entry.state_dir) else {
+        return broken(format!("run {} の記帳を読めない（置き場）", entry.run));
+    };
+    let last = events.iter().rev().find(|event| {
+        event.run == entry.run && event.kind == EventKind::RunStage && event.detail.as_deref() != Some(TURN_TAKEN)
+    });
+    if last.and_then(|event| event.detail.as_deref()) != Some(block.detail().as_str()) {
+        if let Err(stopped) = note_hold(entry, block.detail()) {
+            return stopped;
+        }
+    }
+    let word = block.word();
+    Outcome {
+        out: vec![format!("run={} remote-main={word}", entry.run)],
+        err: vec![format!("pipe: run {} は remote の main を取り込めない（{word}）・main は動かさない", entry.run)],
+        rc: RC_REFUSED,
+    }
+}
+
+/// 番の後の周回（候補の木 → 試行）。
+fn turn_round(entry: &Land<'_>, worktree: &Path, turned: &Turned) -> Outcome {
+    let order = turned.order;
     // 追随・撃ち直し・stale の判定行は周を跨いで**捨てない**（起きたことは event に残り lens も消費している＝
     // stdout だけが空だと読み手が「何もしなかった」と誤読する）。
     let mut lines = Vec::new();
     // **列の先頭の周は後ろの便を候補の木に積む**（設計 §40・[`super::train`]）。解いた周は判定行を残して先頭 1 本の
     // 既存の経路（追随 → 撃ち直し）へそのまま入る。
-    match super::train::train(entry, &worktree, order) {
+    match super::train::train(entry, worktree, order) {
         super::train::Train::Landed(outcome) => return outcome,
         super::train::Train::Dissolved(line) => lines.push(line),
         super::train::Train::Solo => {}
     }
     loop {
-        let (old, now) = match attempt(entry, &worktree, &turned, &mut lines) {
+        let (old, now) = match attempt(entry, worktree, turned, &mut lines) {
             Attempt::Settled(outcome) => return with_lines(lines, outcome),
             Attempt::Stale { old, now } => (old, now),
         };

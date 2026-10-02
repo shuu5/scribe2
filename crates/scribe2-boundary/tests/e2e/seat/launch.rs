@@ -1477,6 +1477,31 @@ fn seat_launch_tick_installs_the_derived_pair_and_names_it_at_the_tail() {
     fs::remove_dir_all(&tick.place.dir).ok();
 }
 
+/// (d) 面の `[[tick]]` に `bd = B`（在らない絶対 path）を足した置き場の長い形の起動は `tick-unit=installed` で、service は期待の service の
+/// 行末の前に ` --bd B` を足した bytes（`--rules` 無し）・timer は期待のまま。`bd` を足さない置き場の service は期待と等しい。
+#[test]
+fn seat_launch_tick_bd_is_handed_to_the_derivation_from_the_face() {
+    let tick = launch_tick_place(true);
+    let bd = "/opt/bin/bd";
+    let host = tick.place.state.join(vessel::rules::HOST_MANIFEST);
+    let body = fs::read_to_string(&host).unwrap_or_default();
+    let anchor = format!("binary = \"{}\"\n", tick.binary);
+    assert!(body.contains(&anchor), "面の binary の行が在る: {body}");
+    fs::write(&host, body.replacen(&anchor, &format!("{anchor}bd = \"{bd}\"\n"), 1)).ok();
+    let out = launch_group_long(&tick.place, &tick.path, &["--account", "l1"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(stdout_of(&out), tick.launched(&stdout_of(&out), " tick-unit=installed"), "起動の行は bd の有無で字が変わらない");
+    let [service, timer] = tick.expected();
+    let carried = format!("{} --bd {bd}\n", service.strip_suffix('\n').unwrap_or(&service));
+    assert_eq!(tick.bodies(), [carried, timer], "service は --bd B を足した bytes・timer は期待のまま");
+    fs::remove_dir_all(&tick.place.dir).ok();
+    let plain = launch_tick_place(true);
+    let out = launch_group_long(&plain.place, &plain.path, &["--account", "l1"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(plain.bodies(), plain.expected(), "bd を足さない置き場の service は期待と等しい");
+    fs::remove_dir_all(&plain.place.dir).ok();
+}
+
 /// (表の無い host) `[[tick]]` の無い面の起動の行は従来の字面のまま（`tick-unit=` が無い）・unit dir は作られず・systemctl は 0 回。
 #[test]
 fn seat_launch_tick_absent_table_leaves_the_line_and_the_units_untouched() {

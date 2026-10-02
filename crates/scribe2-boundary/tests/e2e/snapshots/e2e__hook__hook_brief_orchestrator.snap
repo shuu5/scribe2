@@ -13,4 +13,4 @@ expression: "brief::render(Role::Orchestrator, &registration,\n&brief_caps(ORCHE
 user に向けて出す文は対話面の作法（次の 1 手が先頭）に従い、事実は verified / deduced / inferred / uncertain のいずれかを負う → 器の SSOT: docs/design/dialogue-surface.md §2 / 憲法 C10
 実装は自分で行わず、契約と設計と落ちる歯（実行できる acceptance）を書く → 器の SSOT: ADR-0045 §2 / docs/design/seat-roles.md §3
 足すものは決定はしごを段の順に通し、最初に成立した段で止まる（要るか → 既に在るか → 標準 library か既存の依存で足りるか → 1 行で書けるか → 最小実装） → 器の SSOT: 憲法 C17 / ADR-0044
-起草の写し（試作の repo の写し）は /srv/state/seat/fixture_orchestrator/drafts の下に git の worktree か clone で置く（書きが rules 行 seat.drafts_stale_h の時間無い build と依存の置き場は器が消し、木と追跡される file は消さない） → 器の SSOT: ADR-0096 / rules 行 seat.drafts_stale_h / docs/design/dispatcher.md §33
+起草の写し（試作の repo の写し）は /srv/state/seat/fixture_orchestrator/drafts の直下（<置き場>/<名>）に git の worktree か clone で置く（書きが rules 行 seat.drafts_stale_h の時間無い build と依存の置き場は器が消し、木と追跡される file は消さない） → 器の SSOT: ADR-0096 / rules 行 seat.drafts_stale_h / docs/design/dispatcher.md §33

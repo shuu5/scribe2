@@ -219,7 +219,7 @@ pub(super) fn settle(
     });
     let mut started: Vec<(String, Vec<String>)> = Vec::new();
     let mut turn =
-        Turn { candidates: Vec::new(), launches: Vec::new(), revives: Vec::new(), unmeasured: None, drive: None, vessel: None, lifecycle: None };
+        Turn { candidates: Vec::new(), launches: Vec::new(), revives: Vec::new(), unmeasured: None, drive: None, vessel: None, lifecycle: None, triage: None };
     for mut candidate in candidates {
         if let (Some((pointer, contract)), Some(room)) = (ready.get(&candidate.bead), room.as_ref()) {
             // 行の予約は交差と枠より先（設計 row-review.md §7）。

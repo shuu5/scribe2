@@ -39,6 +39,9 @@ pub const OUT: &str = "out";
 /// 器が出力を読んだ 1 行の判定の file の名。
 pub const VERDICT: &str = "verdict";
 
+/// 満ちた形の欄の値の書き出し。
+const MET: &str = "met:";
+
 /// 値を持たない欄の字面。
 const DASH: &str = "-";
 
@@ -114,9 +117,14 @@ pub enum Judgement {
     Judged(Verdict),
 }
 
+/// 置き場の根（`<state>/pipe/memo`・memo id ごとの dir の親）。
+pub(super) fn root(state_dir: &Path) -> PathBuf {
+    DIR.iter().fold(state_dir.to_path_buf(), |path, step| path.join(step))
+}
+
 /// memo 1 つの置き場の dir（`<state>/pipe/memo/<memo id>`）。
 pub fn dir(state_dir: &Path, memo: &str) -> PathBuf {
-    DIR.iter().fold(state_dir.to_path_buf(), |path, step| path.join(step)).join(memo)
+    root(state_dir).join(memo)
 }
 
 /// memo 1 つの最新の判定を読む（**読みの 1 本**・置き場の外へ出る id は読めない側）。
@@ -135,8 +143,7 @@ pub fn judgement(state_dir: &Path, memo: &str) -> Judgement {
 ///
 /// 母集団は開いた memo から最後の昇格の行が「全部」の memo を除いた全部（「一部」は含む・FR91）。
 pub(super) fn lines(input: &Input<'_>, read: &Read, now: u64) -> Vec<String> {
-    let prefix = Anchor::open(input.repo).and_then(|anchor| anchor.prefixes().first().cloned());
-    triggers(input, read, now, |_, notes| !fully_promoted(notes, prefix.as_deref()))
+    population(input, read, now)
         .into_iter()
         .map(|(id, trigger, created)| {
             let (verdict, judged) = match judgement(input.state_dir, id) {
@@ -148,6 +155,17 @@ pub(super) fn lines(input: &Input<'_>, read: &Read, now: u64) -> Vec<String> {
             format!("{HEAD} memo={id} trigger={trigger} verdict={verdict} age={age} judged={judged}")
         })
         .collect()
+}
+
+/// 母集団の memo ごとの（id・引き金の欄の値・作られた時刻）を bead id の字の順に返す（[`lines`] と起こす側の選びが同じ 1 本から読む）。
+pub(super) fn population<'a>(input: &Input<'_>, read: &'a Read, now: u64) -> Vec<(&'a str, String, Option<u64>)> {
+    let prefix = Anchor::open(input.repo).and_then(|anchor| anchor.prefixes().first().cloned());
+    triggers(input, read, now, |_, notes| !fully_promoted(notes, prefix.as_deref()))
+}
+
+/// 引き金の欄の値が満ちた形か（[`trigger_of`] が書く形の読み）。
+pub(super) fn is_met(value: &str) -> bool {
+    value.starts_with(MET)
 }
 
 /// 開いた memo 1 本の引き金の欄の値（[`lines`] と同じ World の組み立てと [`trigger_of`] を通した同じ字・開いた memo でなければ `None`）。
@@ -199,7 +217,7 @@ fn trigger_of(reading: &Reading, world: &World<'_>) -> String {
         .map(Kind::as_str)
         .collect();
     if !met.is_empty() {
-        return format!("met:{}", met.join(","));
+        return format!("{MET}{}", met.join(","));
     }
     if reading.readable().next().is_some() {
         return "unmet".to_owned();

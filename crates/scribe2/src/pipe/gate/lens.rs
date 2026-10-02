@@ -1,5 +1,5 @@
 //! gate の lens の呼び出しと parse（lens に渡す本文の型の判定 [`lens_input`]・diff の畳み
-//! [`fold_renamed_paths`]・`--lens` の cmd の穴埋め・起動・stdout の JSON 1 行の読み・`verdict.json` の書き・
+//! [`fold_renamed_paths`]・削除の run の畳み [`prune_deletions`]・`--lens` の cmd の穴埋め・起動・stdout の JSON 1 行の読み・`verdict.json` の書き・
 //! [`super`] から純移動・`s2-07l.286`）。判定の順と終端は親（[`super::gate`]）が持つ。
 
 use super::findings::{Tally, Unread};
@@ -280,6 +280,97 @@ fn line_count(count: usize) -> u64 {
     u64::try_from(count).unwrap_or(u64::MAX)
 }
 
+/// 畳む削除の run の最小の本数（設計 gate-cost.md §46 形 1 (i)・言語にも rules にも依らない入力の形の定数）。
+const PRUNE_MIN_RUN: usize = 16;
+
+/// 畳んだ削除の run の末尾に置く 1 行の印（`N` は run の `-` 行の数・`M` は省いた行の数）。
+fn pruned_mark(run: usize, omitted: usize) -> String {
+    format!("~ 削除だけの run（-{run} 行）から字下げの深い行と空行 {omitted} 行を省いた\n")
+}
+
+/// lens に渡す diff の「削除だけの run」を、最も浅い字下げの行と印 1 行に畳む（設計 gate-cost.md §46 形 1・**pure**＝
+/// diff の字面だけを読み git を呼ばない）。
+///
+/// run は hunk の本文の `-` 行の連続（`\` 行は run を切らず、行に数えない）。hunk の区切りは `diff --git` と `@@` だけで、
+/// hunk の中の `---` / `+++` で始まる行は `-` / `+` の行に数える。畳むのは `-` 行が [`PRUNE_MIN_RUN`] 本以上で、直後の行
+/// （`\` 行を飛ばした次）が `+` 行でない run だけ（置き換えの塊は畳まない）。畳み方は [`shallow_lines`]。header と `@@` と
+/// context と `+` 行は 1 字も変えない。戻りは（畳んだ後の本文, 畳んだ run 数, 省いた行数）。
+pub(super) fn prune_deletions(diff: &[u8]) -> (Vec<u8>, u64, u64) {
+    let mut prune = Prune { out: Vec::with_capacity(diff.len()), runs: 0, lines: 0 };
+    let mut run: Vec<&[u8]> = Vec::new();
+    let mut in_hunk = false;
+    for line in diff.split_inclusive(|byte| *byte == b'\n') {
+        if in_hunk && (line.starts_with(b"-") || (!run.is_empty() && line.starts_with(b"\\"))) {
+            run.push(line);
+            continue;
+        }
+        prune.flush(&mut run, line.starts_with(b"+"));
+        prune.out.extend_from_slice(line);
+        if line.starts_with(FILE_HEAD) {
+            in_hunk = false;
+        } else if line.starts_with(HUNK_HEAD) {
+            in_hunk = true;
+        }
+    }
+    prune.flush(&mut run, false);
+    (prune.out, prune.runs, prune.lines)
+}
+
+/// [`prune_deletions`] の走査の途中の状態（出力と件数）。
+struct Prune {
+    /// 畳んだ後の本文。
+    out: Vec<u8>,
+    /// 畳んだ run 数。
+    runs: u64,
+    /// 省いた行数。
+    lines: u64,
+}
+
+impl Prune {
+    /// 終わった run を、畳めれば残す行と印 1 行・畳めなければ逐語（`\` 行も）で出す。`before_plus` は直後の行が `+` 行か。
+    fn flush(&mut self, run: &mut Vec<&[u8]>, before_plus: bool) {
+        let minus: Vec<&[u8]> = run.iter().copied().filter(|line| line.starts_with(b"-")).collect();
+        let kept = if before_plus || minus.len() < PRUNE_MIN_RUN { None } else { shallow_lines(&minus) };
+        match kept {
+            Some(kept) => {
+                kept.iter().for_each(|line| self.out.extend_from_slice(line));
+                if !self.out.ends_with(b"\n") {
+                    self.out.push(b'\n');
+                }
+                let omitted = minus.len().saturating_sub(kept.len());
+                self.out.extend_from_slice(pruned_mark(minus.len(), omitted).as_bytes());
+                self.runs = self.runs.saturating_add(1);
+                self.lines = self.lines.saturating_add(line_count(omitted));
+            }
+            None => run.iter().for_each(|line| self.out.extend_from_slice(line)),
+        }
+        run.clear();
+    }
+}
+
+/// run の `-` 行のうち、空白以外の字を持つ行の字下げの最小を持つ行（順のまま）。省く行が 1 本も無い run と、空白以外の
+/// 字を持つ行が 1 本も無い run は `None`（逐語のまま）。
+fn shallow_lines<'a>(minus: &[&'a [u8]]) -> Option<Vec<&'a [u8]>> {
+    let indents: Vec<Option<usize>> = minus.iter().map(|line| indent_of(line)).collect();
+    let shallowest = indents.iter().flatten().min().copied()?;
+    let kept: Vec<&[u8]> = minus
+        .iter()
+        .zip(&indents)
+        .filter(|(_, indent)| **indent == Some(shallowest))
+        .map(|(line, _)| *line)
+        .collect();
+    (kept.len() < minus.len()).then_some(kept)
+}
+
+/// `-` 行の字下げ（行頭の ' ' と '\t' の数・どちらも 1 字）。空白以外の字を持たない行（行末の '\r' は字に数えない）は `None`。
+fn indent_of(line: &[u8]) -> Option<usize> {
+    let text = line.strip_prefix(b"-").unwrap_or(line);
+    let text = text.strip_suffix(b"\n").unwrap_or(text);
+    let text = text.strip_suffix(b"\r").unwrap_or(text);
+    let indent = text.iter().take_while(|byte| matches!(**byte, b' ' | b'\t')).count();
+    (indent < text.len()).then_some(indent)
+}
+
 /// lens の scope の unit 名に載せる段の名。
 pub(super) const LENS_STAGE: &str = "lens";
 
@@ -492,7 +583,7 @@ pub(super) fn write_verdict(path: &Path, text: &str) -> Result<(), String> {
 mod tests {
     // flip-check: moved s2-07l.286
     use super::super::verify::tests::{names, scratch};
-    use super::{dir_pairs, substitute, write_verdict};
+    use super::{dir_pairs, prune_deletions, substitute, write_verdict};
     use std::path::Path;
 
     /// 判定の書きは完了後に書きかけを残さず、本 file の中身は完全（前の判定を丸ごと置き換える）。
@@ -571,5 +662,74 @@ mod tests {
             ],
             "配下の path を持たない列では空になった dir の対が長い方から在る",
         );
+    }
+
+    /// file の header（`---` / `+++` を含む）と `@@` に本文を続けた 1 file の diff（設計 gate-cost.md §46 の歯の材料）。
+    fn hunk_of(body: &str) -> String {
+        format!("diff --git a/f b/f\nindex 1111111..2222222 100644\n--- a/f\n+++ b/f\n@@ -1,40 +1,2 @@\n{body}")
+    }
+
+    /// 本文を畳んで（本文, run 数, 省いた行数）を文字列で返す。
+    fn pruned(diff: &str) -> (String, u64, u64) {
+        let (body, runs, lines) = prune_deletions(diff.as_bytes());
+        (String::from_utf8_lossy(&body).into_owned(), runs, lines)
+    }
+
+    /// 深さ 4 の行 `count` 本（`-` の頭・行ごとに字面が違う）。
+    fn deep_lines(count: usize) -> String {
+        (0..count).map(|number| format!("-    body {number}\n")).collect()
+    }
+
+    /// (f) tab 1 字と空白 1 字を同じ幅に数え、空白だけの行は省く側、`\` 行は run を切らず数えず出さず、最も浅い字下げの行は
+    /// 順のまま残る（設計 gate-cost.md §46・[`prune_deletions`]）。
+    #[test]
+    fn lens_prune_counts_tab_and_space_alike_and_drops_blank_and_backslash_lines() {
+        let run = format!("-\talpha\n- beta\n\\ No newline at end of file\n-  gamma\n-\t\tdelta\n-   \n{}", deep_lines(12));
+        let diff = hunk_of(&format!("{run} context\n"));
+        let expected =
+            hunk_of("-\talpha\n- beta\n~ 削除だけの run（-17 行）から字下げの深い行と空行 15 行を省いた\n context\n");
+        assert_eq!(pruned(&diff), (expected, 1, 15), "tab と空白は同じ 1 字・順のまま・`\\` 行は出さない");
+    }
+
+    /// (g) 全行が同じ字下げで空行の無い run は逐語で数えない。context を挟んだ 2 つの run は別に数える（run 数 2・省いた行数は和）。
+    #[test]
+    fn lens_prune_leaves_a_flat_run_verbatim_and_counts_separate_runs_apart() {
+        let flat: String = (0..16).map(|number| format!("-line {number}\n")).collect();
+        let diff = hunk_of(&format!("{flat} context\n"));
+        assert_eq!(pruned(&diff), (diff.clone(), 0, 0), "全行が同じ字下げなら畳まない");
+        let run = |head: &str| format!("-{head}\n{}", deep_lines(15));
+        let two = hunk_of(&format!("{} context\n{} context\n", run("first"), run("second")));
+        let mark = "~ 削除だけの run（-16 行）から字下げの深い行と空行 15 行を省いた\n";
+        let expected = hunk_of(&format!("-first\n{mark} context\n-second\n{mark} context\n"));
+        assert_eq!(pruned(&two), (expected, 2, 30), "別の run は別に数え、省いた行数は和");
+    }
+
+    /// (h) hunk の本文の `---x` の行は `-` 行に数えて畳み、直後の行が `+++y` の run は畳まない（file の header の `---` / `+++`
+    /// は 1 字も変わらない）。
+    #[test]
+    fn lens_prune_reads_dashes_and_pluses_in_a_hunk_as_body_lines() {
+        let mark = "~ 削除だけの run（-16 行）から字下げの深い行と空行 15 行を省いた\n";
+        let diff = hunk_of(&format!("---x\n{} context\n", deep_lines(15)));
+        assert_eq!(pruned(&diff), (hunk_of(&format!("---x\n{mark} context\n")), 1, 15), "`---x` は run の行");
+        let replaced = hunk_of(&format!("---x\n{}+++y\n", deep_lines(15)));
+        assert_eq!(pruned(&replaced), (replaced.clone(), 0, 0), "直後が `+++y` の run は畳まない");
+        assert!(replaced.contains("--- a/f\n+++ b/f\n@@ "), "前提: header は `---` / `+++` を持つ");
+    }
+
+    /// (i) 空白以外の字を持つ行の字下げの最小が 4 なら、字下げ 2 の空白だけの行を持つ run も m は 4 で畳む（空白だけの行は省く）。
+    /// 全行が空白以外の字を持たない run は逐語で数えない。行末が `\r` の空行（CRLF）は省く側で m を下げない。
+    #[test]
+    fn lens_prune_takes_the_minimum_from_non_blank_lines_only() {
+        let kept: String = (0..14).map(|number| format!("-    keep {number}\n")).collect();
+        let diff = hunk_of(&format!("{kept}-  \n-        deep\n context\n"));
+        let mark = "~ 削除だけの run（-16 行）から字下げの深い行と空行 2 行を省いた\n";
+        assert_eq!(pruned(&diff), (hunk_of(&format!("{kept}{mark} context\n")), 1, 2), "m は空白だけの行から取らない");
+        let blank: String = (0..16).map(|number| format!("-{}\n", " ".repeat(number))).collect();
+        let only_blank = hunk_of(&format!("{blank} context\n"));
+        assert_eq!(pruned(&only_blank), (only_blank.clone(), 0, 0), "空白以外の字を持つ行が無い run は逐語");
+        let crlf: String = (0..15).map(|number| format!("-    keep {number}\r\n")).collect();
+        let windows = hunk_of(&format!("{crlf}-\r\n context\n"));
+        let mark = "~ 削除だけの run（-16 行）から字下げの深い行と空行 1 行を省いた\n";
+        assert_eq!(pruned(&windows), (hunk_of(&format!("{crlf}{mark} context\n")), 1, 1), "行末の `\\r` は字でない");
     }
 }

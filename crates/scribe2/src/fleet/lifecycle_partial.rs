@@ -11,9 +11,11 @@
 //! 判定は行 a・b の関数を呼ぶ: 発話は [`run_phase::phases`] と [`sorted_of`]・便の段は [`run_part`]・期日は [`trigger::met`]。
 //! event は本体の `Case` と段の欄と kind の字で見分ける。
 
-use super::lifecycle::{count_owned, read_output, write, Output, Place, Reading, Scope, Wrote};
+use super::lifecycle::{count_owned, full, read_output, write, Output, Place, Reading, Request, Scope, Source, Wrote};
 use super::lifecycle_line::read_lines;
-use super::lifecycle_mark::{self as mark, fleet_dir, hold, latest_runs, secs_of, Events, Kind as MarkKind, Marks, JSON_FILE, JSON_LOCK};
+use super::lifecycle_mark::{
+    self as mark, census_anchors, fleet_dir, hold, latest_runs, publish, read_ledger, read_main, secs_of, AnchorCensus, Events, Kind as MarkKind, Marks, JSON_FILE, JSON_LOCK,
+};
 use super::phase::{self as run_phase, run_part, Latest};
 use super::store::{self, LockPolicy, Tail};
 use super::{cli::format_utc, epoch_of, replay, Case, Event};
@@ -75,6 +77,29 @@ pub fn rewrite_with<R: Read + Seek>(place: &Place<'_>, log: &mut R, now: u64) ->
     let out = derive(place, prior, joined, now);
     drop(held);
     Rewrote::Wrote(write(place, &out, Some(LOCK_WAIT_MS)))
+}
+
+/// 管理 tick が全部の書き直しを撃った記録（置き場の `fleet/` の下・1 行 `ts=<epoch 秒> wrote=<返りの語>`・設計 §19 約束 3）。
+const TICK_FILE: &str = "lifecycle.tick";
+
+/// 管理 tick の周が撃つ全部の書き直し 1 本（設計 §19 約束 2・6）: 出力が読め・tick の manifest に `lifecycle.full_min_s` の行が在り・今が
+/// `full_at` と記録の ts の新しい方から行の秒以上後で・anchor の台帳の印か main の sha が出力の印と等しくなく・置き場の anchor が 1 つ
+/// （[`census_anchors`] が One）の周だけ、観測の 1 周・coalesce・lock を待たない形で撃ち、返りの語を記録に書く。撃たない周は `None`
+/// （bd も git も撃たない比べだけ・数えの git は 5 つを満たした周だけ）。`events` は tick が判定の前に読んだ列。
+pub fn tick_full(state_dir: &Path, manifest: &Manifest, (anchor, bd): (&Path, &str), events: &[Event]) -> Option<Wrote> {
+    let Reading::Read(out) = read_output(state_dir) else { return None };
+    let min = int_row(manifest, "lifecycle.full_min_s").ok()?;
+    let now = crate::seat::state::now_secs();
+    let fired = std::fs::read_to_string(fleet_dir(state_dir).join(TICK_FILE)).ok().and_then(|text| text.strip_prefix("ts=")?.split(' ').next()?.parse::<u64>().ok());
+    let last = epoch_of(&out.full_at).unwrap_or(0).max(fired.unwrap_or(0));
+    let moved = read_ledger(anchor).zip(read_main(anchor)).is_some_and(|(ledger, main)| ledger != out.marks.ledger || main != out.marks.main);
+    if now < last.saturating_add(min) || !moved || census_anchors(state_dir, anchor, events) != AnchorCensus::One {
+        return None;
+    }
+    let place = Place { state_dir, repo: anchor, manifest, bd, policy: LockPolicy::from_rules(manifest).ok()? };
+    let wrote = full(&place, Source::Observe, Request { wait_ms: Some(0), coalesce: true });
+    let _ = publish(&fleet_dir(state_dir), TICK_FILE, &format!("ts={now} wrote={}\n", wrote.word()));
+    Some(wrote)
 }
 
 /// 末尾の周の材料（発話の線・周の時刻・窓の秒）。

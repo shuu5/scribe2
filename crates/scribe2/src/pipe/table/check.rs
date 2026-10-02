@@ -11,7 +11,7 @@
 
 use super::super::closure::{closure, surface_closure, teeth_places, unresolved_names, Base, ClosureError, Fields, Source};
 use super::super::contract::{class_element, ClassElement};
-use super::super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePolicy, WriteSetItem};
+use super::super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePolicy, TablePlaces, WriteSetItem};
 use super::super::refuse::{covered, Refuse, NEW_FILE};
 use super::{
     read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DERIVED_GOAL, DESIGN_DIR, END,
@@ -601,6 +601,10 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
         Ok(found) => found,
         Err(errors) => return Err(Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect())),
     };
+    let items = match head_places(repo) {
+        Ok(found) => found,
+        Err(reason) => return Err(Outcome::failed_line(RC_BROKEN, format!("contracts: {reason}"))),
+    };
     let sources = read_all(repo, &tracked, ".rs");
     let snapshots = read_all(repo, &tracked, ".snap");
     let requirements = read(repo, &facts.requirements).and_then(|text| requirement_ids(&facts.requirements, &text));
@@ -616,8 +620,9 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
         declared: &declared,
         crate_roots: &facts.crate_roots,
     };
-    let docs = design_docs(&tracked);
+    let docs = design_docs(&tracked, &items);
     let (mut rows, mut found) = (0_usize, Vec::new());
+    let defects = super::place_defects(repo, &tracked, &docs);
     let predicted = collide::predict(repo, &docs, &ctx);
     let mut places = Places { declared: 0, outside: Some(Vec::new()), predicted };
     for doc in &docs {
@@ -625,17 +630,27 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
         rows = rows.saturating_add(count);
         found.extend(judged.into_iter().map(|finding| ((*doc).clone(), finding)));
     }
-    let untracked = untracked_files(repo).map(|paths| design_docs(&paths).into_iter().cloned().collect());
+    found.extend(defects);
+    let untracked = untracked_files(repo, &items).map(|paths| design_docs(&paths, &items).into_iter().cloned().collect());
     Ok(Judged { docs: docs.len(), rows, found, untracked, entrance, places })
 }
 
-/// tracked な設計 doc（`docs/design/` 直下の `.md`・tracked の順）。契約表の doc の母集団の読みはこの 1 本である
-/// （runner の stdin の「ほかの行の touches」節も base の木の path の列をこれで絞る・設計 reverse-index.md §15）。
-pub(crate) fn design_docs(tracked: &[String]) -> Vec<&String> {
-    tracked
-        .iter()
-        .filter(|path| path.strip_prefix(DESIGN_DIR).is_some_and(|rest| !rest.contains('/') && rest.ends_with(".md")))
-        .collect()
+/// 契約表の doc の列（入力の path の列のうち、既定の置き場〔`docs/design/` 直下の `.md`〕と宣言の項目に当たる path・入力の順・
+/// 同じ path は 1 度）。契約表の doc の母集団の読みはこの 1 本である（runner の stdin の「ほかの行の touches」節も base の木の
+/// path の列をこれで絞る・設計 contract-source.md §69 形 5）。項目は末尾 `/` なら dir の直下で `form_of` が読める path、
+/// ほかは等しい path。項目 0 の返りは既定だけ。
+pub(crate) fn design_docs<'a>(paths: &'a [String], items: &[String]) -> Vec<&'a String> {
+    let default = |path: &str| path.strip_prefix(DESIGN_DIR).is_some_and(|rest| !rest.contains('/') && rest.ends_with(".md"));
+    paths.iter().filter(|path| default(path) || items.iter().any(|item| super::in_item(path, item))).collect()
+}
+
+/// HEAD の宣言の契約表の置き場の項目（key を書かない宣言は空・宣言を読めない周は理由）。
+fn head_places(repo: &Path) -> Result<Vec<String>, String> {
+    let places = TablePlaces::at(repo, "HEAD");
+    places
+        .items()
+        .map(<[String]>::to_vec)
+        .ok_or_else(|| format!("HEAD の {} を読めない（契約表の置き場 contract-tables）", declaration::DECL_FILE))
 }
 
 /// 宣言済みの新規 file の母集団（設計 §39・行 an）: tracked な設計 doc の区間の全行から write-set の `+` 項目と
@@ -643,8 +658,9 @@ pub(crate) fn design_docs(tracked: &[String]) -> Vec<&String> {
 /// `contracts check`（[`check_repo`]）と受付の材料（`pipe/cli/intake.rs` の `Materials`）が同じこの 1 本を呼ぶ。
 /// 区間を読めない doc が 1 本でも在れば理由を返す（読めなさを「宣言 0 本」に読み替えない・NFR4）。
 pub(crate) fn declared_files(repo: &Path, tracked: &[String]) -> Result<Vec<String>, String> {
+    let items = head_places(repo)?;
     let mut found = BTreeSet::new();
-    for doc in design_docs(tracked) {
+    for doc in design_docs(tracked, &items) {
         let text = read(repo, doc)?;
         let (rows, _) = read_table(doc, &text).map_err(|errors| {
             let first = errors.first().map(TableError::reason).unwrap_or_default();
@@ -706,10 +722,13 @@ pub(crate) fn tracked_files(repo: &Path) -> Option<Vec<String>> {
     ls_files(repo, &[])
 }
 
-/// 設計 doc の dir 配下の未追跡 file の repo 相対 path（ignore された file は除く・git が答えなければ `None`）。
+/// 設計 doc の dir と宣言の項目の配下の未追跡 file の repo 相対 path（ignore された file は除く・git が答えなければ `None`）。
 /// 読む口は [`tracked_files`] と同じ `git ls-files -z` の 1 本（2 本目の読み手を作らない・設計 §43 (3)）。
-fn untracked_files(repo: &Path) -> Option<Vec<String>> {
-    ls_files(repo, &["--others", "--exclude-standard", "--", DESIGN_DIR])
+fn untracked_files(repo: &Path, items: &[String]) -> Option<Vec<String>> {
+    let specs: Vec<String> = items.iter().map(|item| format!(":(literal){item}")).collect();
+    let mut extra = vec!["--others", "--exclude-standard", "--", DESIGN_DIR];
+    extra.extend(specs.iter().map(String::as_str));
+    ls_files(repo, &extra)
 }
 
 /// `git ls-files -z <extra>` の repo 相対 path の列（rc≠0 は `None`）。

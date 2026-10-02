@@ -20,6 +20,7 @@ use crate::pipe::land::{landed_squash_of, Land, PushTip, Retire, MAIN_REF};
 use crate::pipe::lens_record::{self, LensSource};
 use crate::pipe::ratelimit::Pool;
 use crate::pipe::review::{review, Review};
+use crate::pipe::spawn::EndGate;
 use crate::pipe::run_dir;
 use crate::rules::manifest::Manifest;
 use std::path::Path;
@@ -377,7 +378,7 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         Ok(found) => found.flatten(),
         Err(reason) => return refused(reason),
     };
-    let runner = runner.map(|cmd| Runner { cmd, pool: pool.as_ref() });
+    let gate = EndGate::of(manifest);
     let retries = match int_row(manifest, ROW_RETRIES) {
         Ok(found) => found,
         Err(reason) => return broken(reason),
@@ -402,7 +403,7 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         pr_cmd,
         lens: &lens,
         limits,
-        runner,
+        runner: runner.map(|cmd| Runner { cmd, pool: pool.as_ref(), gate: &gate }),
         retries,
         land_wait_s,
         ci_wait_s, ci_poll_s,

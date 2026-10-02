@@ -787,6 +787,8 @@ fn headless_lens_runs_claude_in_the_given_worktree() {
     let contract = contract_in(&dir);
     let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
     let rules = rules_with_cap(&dir, 4096);
+    fs::create_dir_all(worktree.join("docs")).expect("worktree の docs を作れる");
+    fs::write(worktree.join("docs").join("constitution.md"), "憲法\n").expect("worktree に憲法を置ける");
     let out = run_bin(
         &dir,
         &[
@@ -1187,4 +1189,117 @@ fn headless_lens_version_flag_is_listed_once_on_the_help_page() {
     assert_eq!(page.lines().filter(|line| line.trim_start().starts_with("--print-version")).count(), 1, "頁の flag の行: {page}");
     assert_eq!(vessel::headless::lens::usage().matches("--print-version").count(), 1, "usage は flag を 1 つ載せる");
     clean(&[&dir]);
+}
+
+// ───── 憲法の file の測り（設計 gate-cost.md §47 行 ar・接頭辞 `headless_lens_constitution_`） ─────
+
+/// 憲法を置かない lens の置き場（契約の file だけを持つ dir）と、その契約の path。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn constitution_bare_contract() -> (TmpDir, PathBuf) {
+    let dir = tmp();
+    let contract = dir.join("contract.toml");
+    fs::write(&contract, contract_text(CONTRACT_GOAL)).expect("契約 file を書ける");
+    (dir, contract)
+}
+
+/// `worktree` を木にして lens を diff の審査で 1 回撃つ（契約の dir と木は別でよい）。
+fn constitution_lens(dir: &Path, contract: &Path, worktree: &Path, claude: &Path, cap: u64) -> Output {
+    let rules = rules_with_cap(dir, cap).display().to_string();
+    run_bin_owned(dir, &lens_args(contract, worktree, &["--rules", &rules], claude), b"--- a\n+++ b\n")
+}
+
+/// (a) 木に `docs/constitution.md` が無い周（`docs` の dir が無い周も・`docs` は在るが file が無い周も）は claude を起こさず、
+/// rc 0 で stdout に置く物を名指す INCONCLUSIVE の 1 行だけを返す。契約の dir に憲法が在っても木に無ければ無い（契約の dir は読まない）。
+#[test]
+fn headless_lens_constitution_absent_stops_inconclusive_without_calling_claude() {
+    let (dir, contract) = constitution_bare_contract();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let want = r#"{"verdict":"INCONCLUSIVE","evidence":"constitution file absent: docs/constitution.md (place the constitution or a pointer to it)"}"#;
+    let tree = tmp();
+    let docs_only = tmp();
+    fs::create_dir_all(docs_only.join("docs")).expect("docs を作れる");
+    fs::create_dir_all(dir.join("docs")).expect("契約の dir に docs を作れる");
+    fs::write(dir.join("docs").join("constitution.md"), "契約の dir の憲法\n").expect("契約の dir に憲法を置ける");
+    for (label, worktree) in [("docs の dir が無い", &tree), ("docs は在るが file が無い", &docs_only)] {
+        let out = constitution_lens(&dir, &contract, worktree, &claude, 4096);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{label}: {}", stderr_of(&out));
+        assert_eq!(stdout_of(&out).trim(), want, "{label}: 無い周の 1 行");
+        assert_eq!(stdout_of(&out).lines().count(), 1, "{label}: 1 行だけ");
+        assert!(!dir.join("called").exists(), "{label}: claude を 1 度も起動しない");
+        assert!(!dir.join("stdin").exists(), "{label}: prompt の写しも作らない");
+    }
+    clean(&[&dir, &tree, &docs_only]);
+}
+
+/// (b) 在る周は claude を起こす: 憲法は木にだけ在ればよく（契約の dir には無い）、cwd は木のまま・判定は claude の行。
+#[test]
+fn headless_lens_constitution_present_in_the_worktree_alone_calls_claude() {
+    let (dir, contract) = constitution_bare_contract();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+    let tree = tmp();
+    fs::create_dir_all(tree.join("docs")).expect("木に docs を作れる");
+    fs::write(tree.join("docs").join("constitution.md"), "").expect("木に憲法を置ける");
+    let out = constitution_lens(&dir, &contract, &tree, &claude, 4096);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"ok"}"#, "在る周は claude の判定");
+    assert_eq!(slurp(&dir.join("cwd")).trim(), tree.display().to_string(), "cwd は木");
+    clean(&[&dir, &tree]);
+}
+
+/// (c) 読めない周（憲法の path が dir・辿った先の無い symlink・`docs` が file）は claude を起こさず、無い周の字面を持たない
+/// 1 行を返す。worktree の中の file を指す symlink は在ると読んで claude を起こす。
+#[test]
+fn headless_lens_constitution_unreadable_stops_inconclusive_and_a_symlink_to_a_file_is_present() {
+    let (dir, contract) = constitution_bare_contract();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+    let want = r#"{"verdict":"INCONCLUSIVE","evidence":"constitution file unreadable: docs/constitution.md"}"#;
+    let dangling = tmp();
+    fs::create_dir_all(dangling.join("docs")).expect("docs を作れる");
+    std::os::unix::fs::symlink("nowhere.md", dangling.join("docs").join("constitution.md")).expect("symlink を張れる");
+    let as_dir = tmp();
+    fs::create_dir_all(as_dir.join("docs").join("constitution.md")).expect("憲法の名の dir を作れる");
+    let docs_file = tmp();
+    fs::write(docs_file.join("docs"), "file").expect("docs の名の file を書ける");
+    for (label, worktree) in [("辿った先の無い symlink", &dangling), ("dir", &as_dir), ("docs が file", &docs_file)] {
+        let out = constitution_lens(&dir, &contract, worktree, &claude, 4096);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{label}: {}", stderr_of(&out));
+        assert_eq!(stdout_of(&out).trim(), want, "{label}: 読めない周の 1 行");
+        assert!(!stdout_of(&out).contains("absent"), "{label}: 無い周の字面を持たない");
+        assert!(!dir.join("called").exists(), "{label}: claude を 1 度も起動しない");
+    }
+    let linked = tmp();
+    fs::create_dir_all(linked.join("docs")).expect("docs を作れる");
+    fs::write(linked.join("pointer-target.md"), "本体\n").expect("symlink の先を書ける");
+    std::os::unix::fs::symlink("../pointer-target.md", linked.join("docs").join("constitution.md")).expect("symlink を張れる");
+    let out = constitution_lens(&dir, &contract, &linked, &claude, 4096);
+    assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"ok"}"#, "木の中の file を指す symlink は在る: {}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "在ると読んで claude を起こす");
+    clean(&[&dir, &dangling, &as_dir, &docs_file, &linked]);
+}
+
+/// (d) 測りの順: cap を超える周は憲法が無くても今どおり `diff exceeds cap`、契約の審査（材料が在る周）と `--stage memo` は
+/// 憲法が無くても claude を呼ぶ。
+#[test]
+fn headless_lens_constitution_is_measured_only_after_the_cap_and_only_for_a_diff_review() {
+    let (dir, contract) = constitution_bare_contract();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+    let tree = tmp();
+    let out = constitution_lens(&dir, &contract, &tree, &claude, 4);
+    assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"INCONCLUSIVE","evidence":"diff exceeds cap"}"#, "{}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "cap を超える周は claude を呼ばない");
+    material_in(&dir, Some(CONTRACT_DESIGN), Some(CONTRACT_REQUIREMENTS));
+    let out = constitution_lens(&dir, &contract, &tree, &claude, 4096);
+    assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"ok"}"#, "契約の審査は測らない: {}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "契約の審査は憲法が無くても claude を呼ぶ");
+    fs::remove_file(dir.join("called")).expect("印を消せる");
+    let material = dir.join("material");
+    fs::write(&material, "# memo\n").expect("材料を書ける");
+    let rules = rules_with_cap(&dir, 4096).display().to_string();
+    let out = run_bin_owned(&dir, &memo_args(&material, &tree, &["--rules", &rules], &claude), b"");
+    assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"ok"}"#, "memo の段は測らない: {}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "memo の段は憲法が無くても claude を呼ぶ");
+    clean(&[&dir, &tree]);
 }

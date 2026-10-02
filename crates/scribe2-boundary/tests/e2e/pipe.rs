@@ -634,9 +634,11 @@ fn pipe_intake_rejects_verify_line_with_denied_sequence() {
 )]
 pub(super) fn implemented(repo: &Path, state: &Path, design: &str) -> String {
     let id = intake(repo, state, design);
+    // 行 `runner.end_gate_rounds` を持たない `--rules` で撃つ＝終わりの門は撃たれない（要約の語 unmeasured）。この helper を通る歯の
+    // 関心は spawn の後の段で、門の分の撃ちと印と記録を gate の前に積まない（設計 pipeline.md §66・門の歯は `end_gate_`）。
     let out = run_pipe(&[
         "spawn", "--run", &id, "--repo", &repo.display().to_string(),
-        "--state-dir", &state.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--rules", &ceiling_rules(state),
         "--runner", "echo x >> src/lib.rs && git add -A && git commit -q -m runner",
     ]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&out));
@@ -1110,6 +1112,15 @@ pub(super) fn spawn_with(repo: &Path, state: &Path, id: &str, runner: &str) -> O
     ])
 }
 
+/// spawn を行 `runner.end_gate_rounds` を持たない `--rules` で撃つ（終わりの門は撃たれない＝要約の語 unmeasured・歯の関心が
+/// gate の段①など門でない歯が、赤い便を 1 回の runner のまま gate へ渡す形・設計 pipeline.md §66）。
+pub(super) fn spawn_without_gate(repo: &Path, state: &Path, id: &str, runner: &str) -> Output {
+    run_pipe(&[
+        "spawn", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--rules", &ceiling_rules(state), "--runner", runner,
+    ])
+}
+
 // ── (c) 承認 Blocked と resume（設計 §8 (c)・FR15 / FR16 / AC5・憲法 A1 / C7.2） ──
 
 /// event log の全行を型で読む（file が無ければ空）。
@@ -1225,6 +1236,27 @@ pub(super) fn stub_stdin(state: &Path, turn: usize) -> String {
 
 /// turn 1 の既定の本文: 契約の実装（`src/lib.rs` の末尾へ `x` を足して commit）。
 pub(super) const IMPLEMENT: &str = "printf 'x\\n' >> src/lib.rs\ngit add -A\ngit commit -q -m runner\nexit 0";
+
+/// 便の終わりの門の record の全行（`end-gate.jsonl`・無い便は空・設計 pipeline.md §66 形 2）。
+pub(super) fn end_gate_lines(state: &Path, id: &str) -> Vec<String> {
+    fs::read_to_string(state.join("pipe").join(id).join("end-gate.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// 終わりの門の要約の行（`{"end_gate":<周>,"result":"<語>"…}`）の `result` の語の列（周の順）。
+pub(super) fn end_gate_words(state: &Path, id: &str) -> Vec<String> {
+    end_gate_lines(state, id)
+        .iter()
+        .filter(|line| line.starts_with("{\"end_gate\":"))
+        .filter_map(|line| {
+            let rest = line.split_once("\"result\":\"")?.1;
+            Some(rest.split('"').next()?.to_owned())
+        })
+        .collect()
+}
 
 /// 便の `RunStage` の `(段, detail)` の列。
 pub(super) fn stages(state: &Path, id: &str) -> Vec<(Option<Stage>, Option<String>)> {
@@ -1351,6 +1383,9 @@ fn pipe_hermetic_sites_stay_one() {
 
 // ───── e2e の歯の道具箱（設計 gate-cost.md §30・行 v・`s2-07l.504`・接頭辞 `e2e_toolbox_`） ─────
 
+// 下の (a) は終わりの門が spawn の後に共通 verify の記録を足すので、gate の 1 件を前からの差で測るよう本文を直した既存の歯（base でも緑）。
+// flip-check: retroactive s2-07l.736.33.23.3
+
 /// (a) 約束 1 と 2(i): [`run_pipe`] で toy repo の gate を 1 本撃つと、**道具箱の記録 dir** に共通 verify の
 /// scope の記録が在り、その引数に `--scope` と `MemoryMax=` が在る。
 ///
@@ -1361,11 +1396,18 @@ fn e2e_toolbox_run_pipe_confines_the_common_verify_line() {
     let (repo, state) = repo_with_state();
     let design = write_contract(&repo, &[], &[]);
     let id = implemented(&repo, &state, &design);
+    // spawn の終わりの門も共通 verify を包みで撃つので、gate の前の記録の名の列からの**差**で gate の 1 件を測る（設計 pipeline.md §66）。
+    let before = crate::toolbox_record_names(&state);
     let marker = state.join("lens-ran");
     let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "gate は rc 0: {}", stderr_of(&out));
     let names = crate::toolbox_record_names(&state);
-    let record = crate::toolbox_record(&state, "-common-");
+    let added: Vec<&String> = names.iter().filter(|name| name.contains("-common-") && !before.contains(name)).collect();
+    assert_eq!(added.len(), 1, "gate が足した共通 verify の記録はちょうど 1 件（母集団 {names:?}・前 {before:?}）");
+    let record = added
+        .first()
+        .and_then(|name| fs::read_to_string(crate::toolbox_records(&state).join(name)).ok())
+        .unwrap_or_default();
     assert!(record.lines().any(|line| line == "--scope"), "scope の包みである（母集団 {names:?}）: {record}");
     assert!(
         record.lines().any(|line| line.starts_with("MemoryMax=")),

@@ -134,6 +134,139 @@ fn contracts_untracked_doc_is_noticed_without_counting_and_joins_the_population_
     clean(&[&repo]);
 }
 
+/// 契約表の置き場を名乗る toy repo の宣言（`contract-tables` で `contracts/` を名乗る）。
+const TABLES_VESSEL: &str = "contract-tables = [\"contracts/\"]\n";
+
+/// `contracts/t.toml` の本文（版の宣言 + goal の無い行 `a` 1 つ）。
+fn tables_toml() -> String {
+    format!("schema = 1\n\n{}", table_row("a", &[]))
+}
+
+/// (e) 宣言の key `contract-tables` で `contracts/` を名乗る toy（docs/design/toy.md は区間を持たない）の `contracts check` は、置き場の
+/// `contracts/t.toml` の goal の無い行 a の `contract-table:section-missing` の 1 件だけを名指し、判定行は docs=2 rows=1・rc 1。key を消した
+/// 同じ repo は docs=1 rows=0・rc 0（置き場は既定だけ）。
+#[test]
+fn contracts_tables_key_counts_the_declared_places_and_leaves_them_out_without_the_key() {
+    let toml = tables_toml();
+    let keyed_vessel = format!("{TABLE_VESSEL}{TABLES_VESSEL}");
+    let keyed = table_repo(&table_doc(""), &[(".vessel.toml", &keyed_vessel), ("contracts/t.toml", &toml)]);
+    let out = contracts_check(&keyed);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "違反 1 件は rc 1: {text}{}", stderr_of(&out));
+    let head = format!("contracts: contracts/t.toml:{} contract-table:section-missing", table_line(&toml, "a"));
+    assert!(matches!(found.as_slice(), [only] if only.starts_with(&head)), "置き場の行 a の section-missing の 1 件だけ: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=1 untracked=0 findings=1 place-out=0/1"), "判定行: {text}");
+    let bare = table_repo(&table_doc(""), &[("contracts/t.toml", &toml)]);
+    let out = contracts_check(&bare);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "key を消した repo は置き場を既定だけで数える: {}", stdout_of(&out));
+    assert_eq!(stdout_of(&out).lines().collect::<Vec<&str>>(), ["contracts check: docs=1 rows=0 untracked=0 findings=0 place-out=0/0"]);
+    clean(&[&keyed, &bare]);
+}
+
+/// (f) 宣言した置き場の dir の未追跡の `contracts/u.toml` は、path を名乗る `contracts untracked-doc:` の知らせと判定行の `untracked=1` を出し、
+/// 母集団には入らない（doc 数は据え置き）。
+#[test]
+fn contracts_tables_key_notices_an_untracked_file_in_a_declared_place() {
+    let keyed_vessel = format!("{TABLE_VESSEL}{TABLES_VESSEL}");
+    let repo = table_repo(&table_doc(&table_region(&[table_row("a", &[])])), &[(".vessel.toml", &keyed_vessel)]);
+    fs::create_dir_all(repo.join("contracts")).expect("置き場の dir を作れる");
+    fs::write(repo.join("contracts/u.toml"), tables_toml()).expect("未追跡の file を書ける");
+    let out = contracts_check(&repo);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "未追跡は置き場を埋めない（place-empty の 1 件は rc 1）: {text}{}", stderr_of(&out));
+    let key_line = key_line_of(&keyed_vessel);
+    let empty = format!("contracts: .vessel.toml:{key_line} contract-table:place-empty: ");
+    let lines = text.lines().collect::<Vec<&str>>();
+    assert!(matches!(lines.first(), Some(first) if first.starts_with(&empty) && first.contains("contracts/")), "key の行の place-empty の 1 件: {text}");
+    assert_eq!(
+        lines.get(1..).unwrap_or_default(),
+        [
+            "contracts untracked-doc: contracts/u.toml は未追跡の設計 doc（検査の母集団に入らない）",
+            "contracts check: docs=1 rows=1 untracked=1 findings=1 place-out=0/1",
+        ],
+        "place-empty の後に知らせ 1 行 + 判定行: {text}"
+    );
+    clean(&[&repo]);
+}
+
+/// 宣言の本文で key `contract-tables` が書かれた物理行（1 始まり）。
+fn key_line_of(vessel: &str) -> usize {
+    vessel.lines().position(|line| line.starts_with("contract-tables")).map_or(0, |at| at.saturating_add(1))
+}
+
+/// 契約表の置き場の toy 用の `.toml`（goal を持つ行 `id` 1 つ・節を読まないので doc の節に依らず通る）。
+fn place_toml(id: &str) -> String {
+    format!("schema = 1\n\n{}", table_row(id, &[("goal", "\"本文\"")]))
+}
+
+/// (a) key に `contracts/` と tracked に無い `tables/none.toml` と `notes/`（tracked は `notes/readme.txt` と `notes/sub/x.toml` だけ）を書き
+/// `contracts/a.toml` に表を置いた toy は、`tables/none.toml` と `notes/` の 2 件だけを `.vessel.toml:<key の行>` の
+/// `contract-table:place-empty` で名指し rc 1（dir 項目は直下の `form_of` が読める file だけを数える・`contracts/` は名指さない）。
+#[test]
+fn contracts_place_defect_names_an_item_that_matches_no_tracked_path() {
+    let vessel = format!("{TABLE_VESSEL}contract-tables = [\"contracts/\", \"tables/none.toml\", \"notes/\"]\n");
+    let files = [(".vessel.toml", vessel.as_str()), ("contracts/a.toml", &place_toml("a")), ("notes/readme.txt", "メモ\n"), ("notes/sub/x.toml", "schema = 1\n")];
+    let repo = table_repo(&table_doc(""), &files);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{text}{}", stderr_of(&out));
+    let head = format!("contracts: .vessel.toml:{} contract-table:place-empty: ", key_line_of(&vessel));
+    assert_eq!(found.len(), 2, "tables/none.toml と notes/ の 2 件だけ: {text}");
+    for item in ["tables/none.toml", "notes/"] {
+        let hits: Vec<&String> = found.iter().filter(|line| line.starts_with(&head) && line.contains(item)).collect();
+        assert_eq!(hits.len(), 1, "{item} を 1 件: {text}");
+    }
+    assert!(found.iter().all(|line| !line.contains("contracts/")), "表を持つ contracts/ は名指さない: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=1 untracked=0 findings=2 place-out=0/1"), "判定行: {text}");
+    clean(&[&repo]);
+}
+
+/// (b) key で `contracts/` を名乗り `contracts/toy.toml`（行 b）と `docs/design/toy.md`（行 a）の両方に表を置いた toy は、列挙の順で 2 本目の
+/// `docs/design/toy.md` を行 0 の `contract-table:doc-id-duplicate` の 1 件で名指し、相手の `contracts/toy.toml` を名乗る（行 id が違っても
+/// file 名の stem で重なる）。rc 1。
+#[test]
+fn contracts_place_defect_names_the_later_doc_whose_stem_repeats() {
+    let vessel = format!("{TABLE_VESSEL}{TABLES_VESSEL}");
+    let doc = table_doc(&table_region(&[table_row("a", &[])]));
+    let repo = table_repo(&doc, &[(".vessel.toml", vessel.as_str()), ("contracts/toy.toml", &place_toml("b"))]);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{text}{}", stderr_of(&out));
+    let head = "contracts: docs/design/toy.md:0 contract-table:doc-id-duplicate: ";
+    assert!(matches!(found.as_slice(), [only] if only.starts_with(head) && only.contains("contracts/toy.toml")), "2 本目の doc の 1 件だけ: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=2 untracked=0 findings=1 place-out=0/2"), "判定行: {text}");
+    clean(&[&repo]);
+}
+
+/// (c) key の無い toy は 2 つの語を出さない（対照）: `contracts/toy.toml` と `docs/design/toy.md` の両方に表を置いても、置き場は既定だけ。
+#[test]
+fn contracts_place_defect_stays_silent_without_the_key() {
+    let doc = table_doc(&table_region(&[table_row("a", &[])]));
+    let repo = table_repo(&doc, &[("contracts/toy.toml", &place_toml("b"))]);
+    let out = contracts_check(&repo);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{text}{}", stderr_of(&out));
+    assert!(!text.contains("place-empty") && !text.contains("doc-id-duplicate"), "key の無い repo は 2 つの語を出さない: {text}");
+    assert_eq!(text.lines().collect::<Vec<&str>>(), ["contracts check: docs=1 rows=1 untracked=0 findings=0 place-out=0/1"], "{text}");
+    clean(&[&repo]);
+}
+
+/// (d) `docs/design/` に tracked の file を持たない toy が key で `contracts/` を名乗り `contracts/a.toml` に表を置くと、place-empty を出さず
+/// findings 0・rc 0（既定の置き場の 0 本は名指さない・対照）。
+#[test]
+fn contracts_place_defect_leaves_an_empty_default_place_unnamed() {
+    let vessel = format!("{TABLE_VESSEL}{TABLES_VESSEL}");
+    let repo = table_repo(&table_doc(""), &[(".vessel.toml", vessel.as_str()), ("contracts/a.toml", &place_toml("a"))]);
+    git(&repo, &["rm", "-q", "docs/design/toy.md"]);
+    git(&repo, &["commit", "-q", "-m", "docs/design を空にする"]);
+    assert_eq!(git(&repo, &["ls-files", "docs/design"]), "", "前提: docs/design/ に tracked の file が 0 本");
+    let out = contracts_check(&repo);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{text}{}", stderr_of(&out));
+    assert_eq!(text.lines().collect::<Vec<&str>>(), ["contracts check: docs=1 rows=1 untracked=0 findings=0 place-out=0/1"], "{text}");
+    clean(&[&repo]);
+}
+
 /// (3) `req` が要件面に無い行・`depends` が解決しない行・輪を持つ 2 行・`verify` に `(` を持つ行・末尾 `/` 無しの
 /// dir を指す行を、各 1 件ずつ行番号付きで名指す（全件・1 件目で止めない・輪は 2 行で 1 件）。
 #[test]

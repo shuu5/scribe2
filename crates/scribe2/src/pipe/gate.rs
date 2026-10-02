@@ -44,6 +44,8 @@ pub(crate) use record::{
     aimed_lines, keep_detection, keep_reason, landed_step_record, landed_unfired_record, next_copy_dir,
     population_lines, LandedMark, Unfired,
 };
+// runner の終わりの門（`spawn`・設計 pipeline.md §66 形 2）が gate の verify の撃ちと記録と同じ 1 本で撃つ口。
+pub(crate) use record::{record_checks, Counted, Logs, Shoot};
 pub(crate) use verify::{fill_holes, recorded_rc, run_detection_admitted, teeth_of, Admit};
 // 受付が契約の検証行を base の木で撃つ口（設計 pipeline.md §56 形 3・撃つ実装を 2 本にしない）。
 pub(crate) use verify::run_line_captured;
@@ -69,7 +71,8 @@ use crate::invocation::Invocation;
 use crate::rules::manifest::Manifest;
 use findings::Tally;
 use lens::{
-    ask_lens, fold_renamed_paths, head_paths, lens_input, substitute, unjudged, write_verdict, Judged, LENS_STAGE,
+    ask_lens, fold_renamed_paths, head_paths, lens_input, prune_deletions, substitute, unjudged, write_verdict, Judged,
+    LENS_STAGE,
 };
 use record::{record_notice, record_verify};
 use std::path::Path;
@@ -439,15 +442,21 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
     };
     // **畳むのは diff の周だけ**（設計 gate-cost.md §41 形 2）。生 diff は記録（`diff_bytes`）のまま残す。
     // HEAD の path の列は読めた周だけ渡す（§42 形 2・読めない周は dir の対を導かない）。
-    let (lens_diff, elided) = match &input {
+    // **cap を超える周だけ**、§41 / §42 の畳みの後の本文の削除の run を畳む（§46 形 2・要約の周の腕は動かさない）。
+    let (lens_diff, elided, pruned) = match &input {
         LensInput::Diff(_) => {
             let head = head_paths(worktree);
             let (folded, hunks, lines) = fold_renamed_paths(&diff, head.as_deref());
-            (folded, (hunks, lines))
+            if byte_count(&folded) > entry.limits.token_cap {
+                let (body, runs, omitted) = prune_deletions(&folded);
+                (body, (hunks, lines), (runs, omitted))
+            } else {
+                (folded, (hunks, lines), (0, 0))
+            }
         }
-        LensInput::Summary(_) => (diff.clone(), (0, 0)),
+        LensInput::Summary(_) => (diff.clone(), (0, 0), (0, 0)),
     };
-    record_notice(entry, &input, elided)?;
+    record_notice(entry, &input, elided, pruned)?;
     Ok(Measured { red, diff, unreadable, killed, busy, input, lens_diff })
 }
 

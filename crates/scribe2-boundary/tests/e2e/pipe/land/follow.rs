@@ -591,6 +591,28 @@ fn pipe_follow_self_rebase_advances_the_base_without_a_follow_section() {
     clean(&[&repo, &state]);
 }
 
+/// (g) 終わりの門は **turn の後の実測の merge-base** を base に測る（設計 pipeline.md §66 形 2）: runner が turn の中で write-set の
+/// 外の file を足す commit で main を進め、自分の木をその main へ rebase してから write-set の内を commit する便は、runner が
+/// 1 回で要約 green・門の record の write-set の段が rc 0（記録済みの base で測ると main の `other.txt` を外れと数えて赤になり、
+/// runner が多く起きる）。
+#[test]
+fn end_gate_self_rebase_measures_from_the_merged_base_and_stays_green() {
+    let (repo, state) = repo_with_state();
+    let runner = stub_runner_turns(&state, &self_rebase_body(&repo), KEEP_CONFLICT);
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let spawned = spawn_with(&repo, &state, &id, &runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "turn 1 の spawn: {}", stderr_of(&spawned));
+    assert_eq!(stub_calls(&state), 1, "runner は 1 回");
+    assert_eq!(end_gate_words(&state, &id), ["green"], "要約は green");
+    let write_set = end_gate_lines(&state, &id)
+        .into_iter()
+        .find(|line| line.contains("\"kind\":\"write-set\""))
+        .unwrap_or_default();
+    assert!(write_set.contains("\"rc\":0"), "門の write-set の段が rc 0: {write_set}");
+    clean(&[&repo, &state]);
+}
+
 /// 負例: 追随節なしで main が進んでも、runner が rebase しなければ **`rebase:` の記帳は無く**
 /// `Implemented` の detail は空のまま（merge-base は記録済みの base と同じ＝進んでいない）。
 #[test]
@@ -710,6 +732,22 @@ fn pipe_follow_stale_rows_restarts_the_runner_and_appends_the_design_doc() {
     assert!(stdout.contains(&format!("run={id} rebase={base}..{moved}")), "turn の後に base が進む: {stdout}");
     assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
     assert!(show_line(&repo, &state, &id).contains("stage=Implemented"), "段は Implemented（次は gate）");
+    clean(&[&repo, &state]);
+}
+
+/// (h) 契約表の行の起こし直しの便（`stale_rows_run` と [`FIX_ROW`] の形）の門は、広げた後の写しの契約と turn の後の base で測る
+/// （設計 pipeline.md §66 形 2）: runner の回数は 2 のまま、`end-gate.jsonl` の最後の要約の語が green（`Launch` の契約や記録済みの
+/// base で測ると、足した設計 doc を write-set の外と数えて赤になり、runner が多く起きるか Failed に倒れる）。
+#[test]
+fn end_gate_restarted_stale_rows_run_stays_green_on_the_widened_copy() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id, _base, _moved, runner) = stale_rows_run(&repo, &state, &marker, FIX_ROW, "src/gone.rs");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner, "--lens", &lens]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "起こし直した周は rc 3: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(stub_calls(&state), 2, "runner の回数は 2 のまま");
+    assert_eq!(end_gate_words(&state, &id).last().map(String::as_str), Some("green"), "最後の要約は green: {:?}", end_gate_lines(&state, &id));
     clean(&[&repo, &state]);
 }
 

@@ -265,6 +265,10 @@ pub enum RuleKind {
     /// land の追随が衝突した便を**起こし直す回数の上限**（回）。値 N = 最大 N 回起こし直す
     /// （N+1 回目の衝突で終端する）。
     FollowRetries,
+    /// 終わりの門（runner の終わりに器が共通 verify と契約の検証行を撃つ周・設計 pipeline.md §66）が赤を渡して runner を
+    /// **起こし直す回数の上限**（回）。値 N = 最大 N 回起こし直す（runner の turn は最大 N+1 回）。0 は門を撃って記録するだけで
+    /// 起こし直さない。
+    RunnerEndGateRounds,
     /// 変異検査の並列度の**上限**（宣言値）。実効値は受付（設計 gate-cost.md §3.3）が導く。
     GateMutantsJobs,
     /// job 1 つが要る memory の宣言値（MiB）。受付の分母と封じ込めの箱に使う。
@@ -403,6 +407,8 @@ pub enum RuleKind {
     /// 手番が seat の局面が滞ったとみなす年齢の閾値（時間・§12 約束 10）。**1 kind で行が 13 本**で、id は `lifecycle.age_h.<語>`
     /// （語は手番が seat の局面の語・`age_word_is_known` が語の外の後ろを断る）。行の無い seat の語は `owned.unset` に数える。
     LifecycleAgeH,
+    /// 管理 tick の全部の書き直しの下限（秒・設計 case-lifecycle.md §19 約束 1）。前の全部の書き直しと tick の撃った記録の新しい方からこの秒数以上後の周だけ撃つ。id は `lifecycle.full_min_s`。
+    LifecycleFullMinS,
     /// open な memo の notes の byte の上限（設計 ledger-form.md §19 約束 4・FR87）。越えた open な memo を doctor の台帳の行が名指す
     /// （門では止めない）。行を読めない周は `oversized=no-rule`。読み手は `ledger::lint` の 1 本。
     MemoNotesMaxBytes,
@@ -460,6 +466,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::GroupPressure7dPct,
     RuleKind::GroupPressureModelPct,
     RuleKind::FollowRetries,
+    RuleKind::RunnerEndGateRounds,
     RuleKind::GateMutantsJobs,
     RuleKind::GateJobMemoryMb,
     RuleKind::HostReserveMemoryMb,
@@ -507,6 +514,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatDraftsBusyS,
     RuleKind::LifecycleClosedWindowH,
     RuleKind::LifecycleAgeH,
+    RuleKind::LifecycleFullMinS,
     RuleKind::MemoNotesMaxBytes,
     RuleKind::MemoTriageIntervalH,
     RuleKind::MemoTriagePerRound,
@@ -549,7 +557,7 @@ impl RuleKind {
             // 上限 R-C4-4.fn-lines・閉じた列の網羅は不変）。
             Self::GroupPressure5hPct => "GroupPressure5hPct", Self::GroupPressure7dPct => "GroupPressure7dPct",
             Self::GroupPressureModelPct => "GroupPressureModelPct",
-            Self::FollowRetries => "FollowRetries",
+            Self::FollowRetries => "FollowRetries", Self::RunnerEndGateRounds => "RunnerEndGateRounds",
             Self::GateMutantsJobs => "GateMutantsJobs",
             Self::GateJobMemoryMb => "GateJobMemoryMb",
             Self::HostReserveMemoryMb => "HostReserveMemoryMb",
@@ -576,7 +584,7 @@ impl RuleKind {
             // 管理 tick の 3 kind と席の箱も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
             Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS", Self::SeatMemoryMaxMb => "SeatMemoryMaxMb",
             Self::SeatPrecheckAlarmS => "SeatPrecheckAlarmS", Self::FloorTimeoutS => "FloorTimeoutS", Self::PipeReserveH => "PipeReserveH",
-            Self::LifecycleClosedWindowH => "LifecycleClosedWindowH", Self::LifecycleAgeH => "LifecycleAgeH", Self::MemoNotesMaxBytes => "MemoNotesMaxBytes",
+            Self::LifecycleClosedWindowH => "LifecycleClosedWindowH", Self::LifecycleAgeH => "LifecycleAgeH", Self::LifecycleFullMinS => "LifecycleFullMinS", Self::MemoNotesMaxBytes => "MemoNotesMaxBytes",
             Self::MemoTriageIntervalH => "MemoTriageIntervalH", Self::MemoTriagePerRound => "MemoTriagePerRound", Self::IndexCapMb => "IndexCapMb", Self::IndexTimeoutS => "IndexTimeoutS", Self::SeatPointerLadderS => "SeatPointerLadderS",
             Self::SeatMoveGraceS => "SeatMoveGraceS", Self::SeatIdleAlarmS => "SeatIdleAlarmS",
         }
@@ -606,7 +614,7 @@ impl RuleKind {
             | Self::UsageTimeoutS
             | Self::UsageFreshS
             | Self::GroupPressure5hPct | Self::GroupPressure7dPct | Self::GroupPressureModelPct
-            | Self::FollowRetries
+            | Self::FollowRetries | Self::RunnerEndGateRounds
             | Self::GateMutantsJobs
             | Self::GateJobMemoryMb
             | Self::HostReserveMemoryMb
@@ -627,7 +635,7 @@ impl RuleKind {
             | Self::FlipMarksPerPr | Self::LedgerOpenChildrenMax
             | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS | Self::SeatMemoryMaxMb | Self::SeatIdleAlarmS
             | Self::SeatPrecheckAlarmS | Self::AccountSelection | Self::FloorTimeoutS | Self::PipeReserveH
-            | Self::LifecycleClosedWindowH | Self::LifecycleAgeH | Self::MemoNotesMaxBytes | Self::MemoTriageIntervalH | Self::MemoTriagePerRound | Self::IndexCapMb | Self::IndexTimeoutS => ValueShape::Int,
+            | Self::LifecycleClosedWindowH | Self::LifecycleAgeH | Self::LifecycleFullMinS | Self::MemoNotesMaxBytes | Self::MemoTriageIntervalH | Self::MemoTriagePerRound | Self::IndexCapMb | Self::IndexTimeoutS => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
             | Self::RunnerEffort | Self::LensModel | Self::PipePrecheckLensModel

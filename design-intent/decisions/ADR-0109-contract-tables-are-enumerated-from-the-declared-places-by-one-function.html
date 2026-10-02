@@ -457,6 +457,9 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   },
   "@id": "./ADR-0109-contract-tables-are-enumerated-from-the-declared-places-by-one-function.html",
   "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0110-the-constitution-place-is-declared-by-the-vessel-key-and-replaces-the-default.html" }
+  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
@@ -534,7 +537,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <h1>契約表の置き場 — 既定 (設計 doc の dir の直下の markdown) に、 対象 repo の vessel 宣言の任意 key contract-tables が名乗る dir か file を足し、 契約表を数える器の読み手を全部 1 つの列挙の関数に通し、 受付は置き場の外を指す pointer を断る (ADR-0023 §2.1 の表の在りかの句を部分 supersede)</h1>
 <p class="cover-sub">器の中で契約表を数える見張りの読み手は「表がどこに在るか」を 2 通りに決め打ちし、 表を設計 doc の dir の外の toml に置く repo では、 契約表の検査・局面の出力・走っている便の行を守る門・台帳の形の検査が表を見ない。 本 ADR は、 契約表の置き場を、 既定 (設計 doc の dir の直下の markdown) と、 その repo の vessel 宣言の任意 key contract-tables が名乗る dir か file の和とし、 表を数える読み手を全部 1 つの列挙の関数に通し、 受付は置き場の外を指す pointer を断ると決める。 key を書かない repo の数え方は今と同じだが、 走っている便の行を守る門は既定の置き場だけを守るように狭まる。</p>
 <div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「便」は契約 1 本を実装して main へ入れる 1 回の走り、 「契約表」は便の元になる契約を 1 行ずつ並べた表です。 契約表は、 ふつう設計の文書 (docs/design/ のすぐ下の markdown) の末尾に置きますが、 表だけを持つ toml の file にも置けます。 1 行を指して読む入口は表がどこに在っても読めるので便は通りますが、 表を全部数えて見張る側 (表の検査・案件の今を書く file・走る便の行を守る門・台帳の形の検査) は、 表の在りかを 2 通りに決め打ちしています。 そのため、 表を別の dir の toml に置く隣の project では、 見張りが表を 0 本と数えます。 この記録は、 repo が自分の設定 file (vessel 宣言) に「表はここにも在る」と書けるようにし、 表を数える読み手を全部 1 つの関数に通し、 置き場の外を指す契約は後の行 (行 cg) で受付が断ると決めます。 書かない repo の表の数え方は今と同じですが、 走る便の行を守る門は既定の置き場 (すぐ下の markdown) だけを守るように狭まります。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">10件 (OPT1–OPT10)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 5 / トレードオフ 8</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-10-02</span></span></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">10件 (OPT1–OPT10)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 5 / トレードオフ 8</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-10-02</span></span></div>
 <div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR47・FR55・FR90・FR54・FR51・FR53・NFR4</b></div>
 <div data-component="approval-block">
 <div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-10-02 草稿 v2 (契約表を数える器の読み手・vessel 宣言の読み手・pointer で 1 行を引く口を main a6d4234c の現物で読み、 設計 doc の dir の tracked file と表の在りかを数え、 fidelity の審査の指摘を反映した)。 照会は隣の project の席 (memo s2-07l.738.42.2)。 live-row の門を同じ 1 つの定義に狭めること・受付が置き場の外の pointer を断ることを本決定に含めること・key を既定に足し置き換えないことは、 持ち主の常設の指示 (推奨で進める・user 2026-09-28T00:54Z) の下の orchestrator の決定で、 本件に固有の裁定 id は無い。 拘束する constitution の版 0.5.0</span><span class="stamp self">作成</span></div>
@@ -780,12 +783,13 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0109.adr.yaml</b> &middot; 生成: <b>2026-10-01 17:02</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0109.adr.yaml</b> &middot; 生成: <b>2026-10-01 22:50</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0108-the-management-tick-rewrites-case-positions-when-the-ledger-or-main-moves.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">管理 tick の全部の書き直し — 台帳か main の印が局面の出力の印と等しくない周に、 rules 行 lifecycle.full_min_s の下限を空けて既存の書き手 1 本を撃ち、 台帳 client の場所は host の面の宣言で渡す (ADR-0088 の管理 tick の句・ADR-0064 の 3 句・ADR-0058 が戻した unit の形の 2 句を部分 supersede)</span></a>
+  <a class="prevnext__next" href="ADR-0110-the-constitution-place-is-declared-by-the-vessel-key-and-replaces-the-default.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">憲法の置き場 — vessel 宣言の任意 key constitution が repo 相対の file の列を名乗って既定の docs/constitution.md を置き換え、 lens は名乗った file を 1 本ずつ §47 の 3 値で測り、 頼みの文の憲法の path の句をその列に差し替える</span></a>
 </nav>
 <script>
 (function () {

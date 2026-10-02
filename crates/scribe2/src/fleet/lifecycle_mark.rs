@@ -17,19 +17,21 @@ use super::json_tree::{self, Tree};
 use super::phase::{Latest, Refused};
 use super::store::{acquire_with, events_path, LockPolicy, Reclaim};
 use super::wait::epoch_of;
-use super::{Case, Event, State};
+use super::{replay, Case, Event, State};
+use crate::case::Kind as Part;
 use crate::hook::vessel::digest::fnv1a_64;
+use crate::hook::vessel::state_dir as named_state_dir;
 use crate::ledger::form::{is_memo, is_question, pointer_text};
 use crate::ledger::phase_main::{Commit, Row};
-use crate::pipe::declaration::requirements_at_sha;
+use crate::pipe::declaration::{requirements_at_sha, TablePlaces};
 use crate::pipe::dispatch::memo::Word;
 use crate::pipe::dispatch::unreflected::{asked, Asked, Question};
 use crate::pipe::land::{contract_key, source_key, RUN_TRAILER, TERMINAL_TOKENS};
-use crate::pipe::table::{read_table as table_rows, requirement_ids, DESIGN_DIR};
+use crate::pipe::table::{design_docs, read_table as table_rows, requirement_ids};
 use crate::pipe::{git_bytes, live_driver};
 use crate::seat::ledger::Issue;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -638,11 +640,14 @@ fn listed(repo: &Path, args: &[&str]) -> Option<Vec<String>> {
     Some(String::from_utf8_lossy(&out).split('\0').filter(|name| !name.is_empty()).map(str::to_owned).collect())
 }
 
-/// 契約表の行（`docs/design/` 直下の `.md` を main の sha の tree から読む・行 id は `<doc>#<id>` の pointer の字）と、pointer ごとの write-set。
+/// 契約表の行（main の sha の tree の宣言が名乗る置き場〔既定の `docs/design/` 直下の `.md` と宣言の `contract-tables` の項目〕を、
+/// sha の tree の全 path から [`design_docs`] の 1 本で絞って読む・行 id は `<置き場の path>#<id>` の pointer の字）と、pointer ごとの
+/// write-set。sha の宣言を読めない周は表が在っても `Missing`（既定の置き場に倒さない・設計 contract-source.md §69 行 cc）。
 pub fn read_rows(repo: &Path, sha: &str) -> Face<Rows> {
-    let Some(names) = listed(repo, &["ls-tree", "--name-only", "-z", sha, DESIGN_DIR]) else { return Face::Fault };
-    let docs: Vec<&String> =
-        names.iter().filter(|name| name.strip_prefix(DESIGN_DIR).is_some_and(|rest| !rest.contains('/') && rest.ends_with(".md"))).collect();
+    let places = TablePlaces::at(repo, sha);
+    let Some(items) = places.items() else { return Face::Missing };
+    let Some(names) = listed(repo, &["ls-tree", "-r", "--name-only", "-z", sha]) else { return Face::Fault };
+    let docs = design_docs(&names, items);
     if docs.is_empty() {
         return Face::Missing;
     }
@@ -803,6 +808,55 @@ pub fn secs_of(ts: &str) -> Option<u64> {
 /// `unmeasured` の理由: 未反映の裁定の置き場が在って読めない（部品の種類は問い）。
 pub const UNMEASURED_UNREFLECTED: &str = "unreflected-unreadable";
 
+/// `unmeasured` の理由: 置き場の anchor が 2 つ以上（設計 §20）。
+pub const UNMEASURED_MULTI_ANCHOR: &str = "multi-anchor";
+
+/// [`UNMEASURED_MULTI_ANCHOR`] で名指す部品の種類（§2 の種類の順・発話は置き場の event log 全部から作るので外す）。
+pub const MULTI_ANCHOR_PARTS: [Part; 8] =
+    [Part::Question, Part::Memo, Part::Contract, Part::Run, Part::Row, Part::Requirement, Part::Epic, Part::Commit];
+
+/// 置き場の anchor の数え（閉じた 3 値・設計 §20）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AnchorCensus {
+    /// 1 つ。
+    One,
+    /// 2 つ以上。
+    Many,
+    /// 書き直す repo が別の置き場を名乗る。
+    Foreign,
+}
+
+/// path の正規化した字（正規化できない path は字のまま）。
+fn canon(path: &Path) -> String {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).display().to_string()
+}
+
+/// `root` の設定が、正規化した字が `mine` と違う在る dir を名乗るか（設定が無い・読めない・在らない path は偽）。
+fn names_other(root: &Path, mine: &str) -> bool {
+    named_state_dir(root).and_then(|named| fs::canonicalize(named).ok()).is_some_and(|named| named.display().to_string() != mine)
+}
+
+/// 置き場の anchor を数える（`events` の登録 row の anchor から別の置き場を名乗る anchor を除き、`repo` と合わせて 2 つ以上なら
+/// [`AnchorCensus::Many`]・1 つで `repo` が別の置き場を名乗れば [`AnchorCensus::Foreign`]・ほかは [`AnchorCensus::One`]）。
+pub(crate) fn census_anchors(state_dir: &Path, repo: &Path, events: &[Event]) -> AnchorCensus {
+    let mine = canon(state_dir);
+    let mut set: BTreeSet<String> = BTreeSet::new();
+    for latest in replay(events).registrations.values() {
+        let anchor = Path::new(&latest.registration.anchor);
+        if !names_other(anchor, &mine) {
+            set.insert(canon(anchor));
+        }
+    }
+    set.insert(canon(repo));
+    if set.len() >= 2 {
+        AnchorCensus::Many
+    } else if names_other(repo, &mine) {
+        AnchorCensus::Foreign
+    } else {
+        AnchorCensus::One
+    }
+}
+
 /// 閉じて未反映の裁定を持つ問いの bead id（置き場・台帳の接頭辞・台帳の全件から引く・置き場の無い周は空・読めない周は `Unreadable`）。
 pub(crate) fn unreflected_questions(state_dir: &Path, prefix: Option<&str>, issues: &[Issue]) -> Asked {
     let closed: Vec<Question<'_>> =
@@ -832,8 +886,8 @@ pub(crate) fn verdict_unhandled(issues: &[Issue], events: &[Event]) -> Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        add_mark, events_order, ledger_is_newer, ledger_order, main_is_descendant, main_order, read_events, read_ledger, read_main, read_marks,
-        read_stale, settle, unreflected_questions, verdict_unhandled, Added, Events, Kind, Ledger, Mark, Settled, Stale, Value, JSON_FILE, MAIN_REF,
+        add_mark, census_anchors, events_order, ledger_is_newer, ledger_order, main_is_descendant, main_order, read_events, read_ledger, read_main, read_marks,
+        read_stale, settle, unreflected_questions, verdict_unhandled, Added, AnchorCensus, Events, Kind, Ledger, Mark, Settled, Stale, Value, JSON_FILE, MAIN_REF,
         STALE_FILE,
     };
     use crate::fleet::store::LockPolicy;
@@ -1242,5 +1296,136 @@ mod tests {
         let events: Vec<Event> = ["m-same", "m-after", "m-before", "m-absent", "m-garbled"].iter().map(|bead| judged_line(ts, bead, "close")).collect();
         let expected = ["m-same", "m-before", "m-absent", "m-garbled"].map(str::to_owned);
         assert_eq!(verdict_unhandled(&issues, &events), expected);
+    }
+
+    /// git の repo（`stateDir` を名乗る設定は `named` の字・無ければ設定しない）。
+    fn census_repo(name: &str, named: Option<&str>) -> PathBuf {
+        let repo = scratch(&format!("anchor-census-{name}"));
+        assert!(crate::pipe::git_ok(&repo, &["init", "-q", "-b", "main"]), "git init");
+        if let Some(value) = named {
+            assert!(crate::pipe::git_ok(&repo, &["config", &format!("{}.stateDir", crate::name::NAME), value]), "設定を書ける");
+        }
+        repo
+    }
+
+    /// 登録（か退役）の event の 1 行（役割は orchestrator）。
+    fn census_event(kind: &str, anchor: &Path) -> Event {
+        let line = format!(
+            "{{\"schema\":1,\"ts\":\"2026-10-02T00:00:00Z\",\"kind\":\"{kind}\",\"role\":\"orchestrator\",\"anchor\":\"{}\",\"target\":\"s:w\",\"account\":\"a\",\"launch\":\"l\",\"host\":\"h\",\"actor\":\"machine\"}}",
+            anchor.display()
+        );
+        Event::from_line(&line).unwrap_or_else(|why| panic!("{line}: {why}"))
+    }
+
+    /// 登録が無い周・R だけの周・`..` を含む R の path は One で、設定の無い B を足すと Many。
+    #[test]
+    fn anchor_census_counts_the_registered_anchors_of_the_place() {
+        let (state, repo, other) = (scratch("anchor-census-place"), census_repo("a-r", None), census_repo("a-b", None));
+        assert_eq!(census_anchors(&state, &repo, &[]), AnchorCensus::One, "登録が無い");
+        let registered = [census_event("SeatRegistered", &repo)];
+        assert_eq!(census_anchors(&state, &repo, &registered), AnchorCensus::One, "R だけ");
+        let leaf = repo.file_name().unwrap_or_default();
+        assert_eq!(census_anchors(&state, &repo.join("..").join(leaf), &registered), AnchorCensus::One, ".. を含む R の path");
+        let both = [registered[0].clone(), census_event("SeatRegistered", &other)];
+        assert_eq!(census_anchors(&state, &repo, &both), AnchorCensus::Many, "設定の無い B を足す");
+    }
+
+    /// B の設定が別の在る dir なら One・置き場なら Many（対）・在らない path の C は Many・B の退役で One に戻る。
+    #[test]
+    fn anchor_census_leaves_out_the_anchors_of_other_places() {
+        let (state, away) = (scratch("anchor-census-mine"), scratch("anchor-census-away"));
+        let repo = census_repo("b-r", None);
+        let other = census_repo("b-b", Some(&away.display().to_string()));
+        let events = [census_event("SeatRegistered", &repo), census_event("SeatRegistered", &other)];
+        assert_eq!(census_anchors(&state, &repo, &events), AnchorCensus::One, "B は別の置き場");
+        assert!(crate::pipe::git_ok(&other, &["config", &format!("{}.stateDir", crate::name::NAME), &state.display().to_string()]), "設定を書き直せる");
+        assert_eq!(census_anchors(&state, &repo, &events), AnchorCensus::Many, "B は同じ置き場");
+        let gone = census_repo("b-c", Some(&away.join("absent").display().to_string()));
+        assert_eq!(census_anchors(&state, &repo, &[events[0].clone(), census_event("SeatRegistered", &gone)]), AnchorCensus::Many, "在らない path の C");
+        let retired = [census_event("SeatRegistered", &repo), census_event("SeatRegistered", &other), census_event("SeatRetired", &other)];
+        assert_eq!(census_anchors(&state, &repo, &retired), AnchorCensus::One, "B の退役");
+    }
+
+    /// R が別の在る dir を名乗り登録が R だけなら Foreign で、設定の無い B を足すと Many（先に Many を判じる）。
+    #[test]
+    fn anchor_census_names_a_repo_of_another_place_foreign() {
+        let (state, away) = (scratch("anchor-census-home"), scratch("anchor-census-elsewhere"));
+        let repo = census_repo("c-r", Some(&away.display().to_string()));
+        let registered = [census_event("SeatRegistered", &repo)];
+        assert_eq!(census_anchors(&state, &repo, &registered), AnchorCensus::Foreign, "R だけ");
+        let both = [registered[0].clone(), census_event("SeatRegistered", &census_repo("c-b", None))];
+        assert_eq!(census_anchors(&state, &repo, &both), AnchorCensus::Many, "設定の無い B を足す");
+    }
+
+    /// 契約表の行 1 つの全文（`.toml` の置き場の本文・`.md` の区間の本文のどちらにも使う）。
+    fn table_row(id: &str, write_set: &str) -> String {
+        format!(
+            "[[contract]]\nid = \"{id}\"\ntitle = \"t\"\nreq = [\"FR1\"]\nsection = \"1\"\nwrite-set = [\"{write_set}\"]\nsize = \"S\"\nverify = [\"cargo test\"]\ndone = \"d\"\n"
+        )
+    }
+
+    /// 現在の HEAD の sha。
+    fn head_of(repo: &Path) -> String {
+        crate::pipe::git_bytes(repo, &["rev-parse", "HEAD"]).map(|out| String::from_utf8_lossy(&out).trim().to_owned()).unwrap_or_default()
+    }
+
+    /// 木を `files`（path と本文）と宣言の追加行で組んで commit し、その sha を返す（前の commit の file は消す）。
+    fn commit_tree(repo: &Path, key: &str, files: &[(&str, String)]) -> String {
+        for dir in ["contracts", "docs"] {
+            let _ = std::fs::remove_dir_all(repo.join(dir));
+        }
+        let declaration = format!("schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git status\"]\n{key}");
+        put(&repo.join(".vessel.toml"), &declaration);
+        for (path, body) in files {
+            put(&repo.join(path), body);
+        }
+        assert!(crate::pipe::git_ok(repo, &["add", "-A"]) && crate::pipe::git_ok(repo, &["commit", "-q", "--allow-empty", "-m", "c"]), "commit");
+        head_of(repo)
+    }
+
+    /// 行の write-set を pointer ごとに引く（`Found` でなければ `None`）。
+    fn write_sets(found: super::Face<super::Rows>) -> Option<Vec<(String, Vec<String>)>> {
+        match found {
+            super::Face::Found((_, sets)) => Some(sets),
+            super::Face::Missing | super::Face::Fault => None,
+        }
+    }
+
+    /// (a) key で `contracts/` を名乗り表を `contracts/x.toml` だけに置いた commit は `contracts/x.toml#a` と行の write-set を返す・
+    /// (b) key を消した commit は Missing で同じ repo の (a) の sha は (a) と同じ行・(c) key の値を壊した commit は `contracts/x.toml` と
+    /// `docs/design/y.md` の両方に表が在っても Missing（読めない宣言を既定の置き場や Fixed に倒さない）・
+    /// (d) key の無い宣言で `docs/design/y.md` に表を置いた commit は y.md の行を返す。
+    #[test]
+    fn lifecycle_declared_tables_reads_the_places_the_sha_declaration_names() {
+        let repo = crate::pipe::fixture::scratch("lifecycle-mark-declared-tables");
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.name", "t"], &["config", "user.email", "t@example.invalid"], &["config", "commit.gpgsign", "false"]] {
+            assert!(crate::pipe::git_ok(&repo, args), "{args:?}");
+        }
+        let region = |id: &str, write_set: &str| {
+            format!("# y\n\n{}\nschema = 1\n\n{}{}\n", crate::pipe::table::BEGIN, table_row(id, write_set), crate::pipe::table::END)
+        };
+        let whole = |id: &str, write_set: &str| format!("schema = 1\n\n{}", table_row(id, write_set));
+        let expected_a = Some(vec![("contracts/x.toml#a".to_owned(), vec!["src/a.rs".to_owned()])]);
+
+        let a = commit_tree(&repo, "contract-tables = [\"contracts/\"]\n", &[("contracts/x.toml", whole("a", "src/a.rs"))]);
+        assert!(!repo.join("docs/design").exists(), "docs/design/ に file が無い");
+        assert_eq!(write_sets(super::read_rows(&repo, &a)), expected_a, "(a) key で名乗った置き場の行");
+        let rows = match super::read_rows(&repo, &a) {
+            super::Face::Found((rows, _)) => rows.into_iter().map(|row| row.pointer).collect::<Vec<_>>(),
+            super::Face::Missing | super::Face::Fault => Vec::new(),
+        };
+        assert_eq!(rows, ["contracts/x.toml#a"], "pointer は <置き場の path>#<行 id>");
+
+        let b = commit_tree(&repo, "", &[("contracts/x.toml", whole("a", "src/a.rs"))]);
+        assert!(matches!(super::read_rows(&repo, &b), super::Face::Missing), "(b) key を消した commit は Missing");
+        assert_eq!(write_sets(super::read_rows(&repo, &a)), expected_a, "(b) 古い sha を名指すと (a) と同じ行");
+
+        let broken = "contract-tables = \"contracts/\"\n";
+        let c = commit_tree(&repo, broken, &[("contracts/x.toml", whole("a", "src/a.rs")), ("docs/design/y.md", region("y", "src/y.rs"))]);
+        assert!(matches!(super::read_rows(&repo, &c), super::Face::Missing), "(c) 読めない宣言は表が在っても Missing");
+
+        let d = commit_tree(&repo, "", &[("docs/design/y.md", region("y", "src/y.rs"))]);
+        let expected_d = Some(vec![("docs/design/y.md#y".to_owned(), vec!["src/y.rs".to_owned()])]);
+        assert_eq!(write_sets(super::read_rows(&repo, &d)), expected_d, "(d) key の無い宣言は既定の置き場の行");
     }
 }

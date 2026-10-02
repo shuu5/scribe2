@@ -69,8 +69,12 @@ const GROUP_KEYS: &[&str] = &["name", "anchors", "accounts"];
 /// `[[account-group]]` 1 行が持てる key の全体（必須の 3 つに任意の `heartbeat` を足す・設計 seat-heartbeat.md §22 形 1）。
 const GROUP_KNOWN_KEYS: &[&str] = &["name", "anchors", "accounts", "heartbeat"];
 
-/// `[[tick]]` 行が持てる key の全体（**必須もこれと同じ 2 つ**・設計 seat-heartbeat.md §5 形 1）。`unit-dir` は tick の unit を置く
-/// dir・`binary` は unit が撃つ器（どちらも絶対 path・host 固有・host の面にだけ・**最大 1 行**）。
+/// `[[tick]]` 行が持てる key の全体（必須は [`TICK_KEYS`] の 2 つに任意の `bd` を足す・設計 seat-heartbeat.md §5 形 1・§25）。
+/// `unit-dir` は tick の unit を置く dir・`binary` は unit が撃つ器・`bd` は unit が運ぶ台帳 client（どれも絶対 path・host 固有・
+/// host の面にだけ・**最大 1 行**）。
+const TICK_KNOWN_KEYS: &[&str] = &["unit-dir", "binary", "bd"];
+
+/// `[[tick]]` 行に必ず要る key（`unit-dir` と `binary` の 2 つ）。
 const TICK_KEYS: &[&str] = &["unit-dir", "binary"];
 
 /// 行に必ず要る key。
@@ -190,7 +194,7 @@ impl Section {
             Self::Contract => FIELDS.iter().map(|field| field.name).chain([DERIVED_GOAL]).collect(),
             Self::Vessel => VESSEL_KEYS.to_vec(),
             Self::AccountGroup => GROUP_KNOWN_KEYS.to_vec(),
-            Self::Tick => TICK_KEYS.to_vec(),
+            Self::Tick => TICK_KNOWN_KEYS.to_vec(),
             Self::Device => super::device::KEYS.to_vec(),
             Self::PublishExclusion => super::exclusion::KEYS.to_vec(),
         }
@@ -358,6 +362,7 @@ impl AccountGroup {
 pub struct TickUnit {
     unit_dir: String,
     binary: String,
+    bd: Option<String>,
     line: u64,
 }
 
@@ -370,6 +375,11 @@ impl TickUnit {
     /// unit が撃つ器の字面（`binary`）。
     pub fn binary(&self) -> &str {
         &self.binary
+    }
+
+    /// unit が運ぶ台帳 client の字面（任意の `bd`・無い表は `None`）。
+    pub fn bd(&self) -> Option<&str> {
+        self.bd.as_deref()
     }
 
     /// manifest の中でこの行が始まる物理行番号。
@@ -1068,7 +1078,7 @@ fn build_group(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<AccountGroup
 }
 
 /// `[[tick]]` 1 行を組む（設計 seat-heartbeat.md §5 形 1）。欠けや未知 key は全件 `errors` へ積み、[`build_single`] と同じ形で
-/// 打ち切る。2 欄とも**絶対 path**でなければ、その key の行番号で 1 件ずつ拒む（空の字面も相対に数える）。
+/// 打ち切る。`unit-dir`・`binary`・任意の `bd` は**絶対 path**でなければ、その key の行番号で 1 件ずつ拒む（空の字面も相対に数える）。
 fn build_tick(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<TickUnit> {
     let before = errors.len();
     check_keys(raw, errors);
@@ -1081,19 +1091,21 @@ fn build_tick(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<TickUnit> {
     }
     let unit_dir = text_field(raw, "unit-dir", errors);
     let binary = text_field(raw, "binary", errors);
+    let bd = text_field(raw, "bd", errors);
     let (Some(unit_dir), Some(binary)) = (unit_dir, binary) else {
         return None;
     };
     if errors.len() > before {
         return None;
     }
-    for (key, value) in [("unit-dir", &unit_dir), ("binary", &binary)] {
+    let bd_pair = bd.as_ref().map(|value| ("bd", value));
+    for (key, value) in [("unit-dir", &unit_dir), ("binary", &binary)].into_iter().chain(bd_pair) {
         if !Path::new(value).is_absolute() {
             let line = raw.fields.iter().find(|(found, _, _)| found == key).map_or(raw.line, |(_, _, line)| *line);
             errors.push(RuleError::new(line, format!("{key} が絶対 path でない: {value:?}")));
         }
     }
-    (errors.len() == before).then_some(TickUnit { unit_dir, binary, line: raw.line })
+    (errors.len() == before).then_some(TickUnit { unit_dir, binary, bd, line: raw.line })
 }
 
 /// `[[contract]]` 1 行を組む。欠けや未知 key は全件 `errors` へ積み、[`build_row`] と同じ形で打ち切る

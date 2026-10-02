@@ -194,6 +194,61 @@ fn bead_of(node: &Tree) -> Option<Bead> {
     })
 }
 
+/// memo の自動の close の返り（閉じた 3 値・設計 ledger-form.md §21 約束 2）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Autoclose {
+    /// 撃たない（借りた全件が無く、台帳の印を読めない repo・bd を 1 回も撃たない）。
+    Skipped,
+    /// 読めない（語は `ledger` か `events`・1 本も閉じない）。
+    Unmeasured(&'static str),
+    /// 撃った。
+    Fired {
+        /// 閉じた memo の id（台帳の順）。
+        closed: Vec<String>,
+        /// 閉じられなかった memo の id（台帳の順）。
+        failed: Vec<String>,
+    },
+}
+
+impl Autoclose {
+    /// `after_close` が stderr に足す行（閉じられなかった memo ごとの `memo-close=failed:<id>`・読めない周の `memo-close=unmeasured:<語>`・撃たない周と全部を閉じた周は無し）。
+    pub fn lines(&self) -> Vec<String> {
+        match self {
+            Self::Skipped => Vec::new(),
+            Self::Unmeasured(word) => vec![format!("memo-close=unmeasured:{word}")],
+            Self::Fired { failed, .. } => failed.iter().map(|id| format!("memo-close=failed:{id}")).collect(),
+        }
+    }
+}
+
+/// FR93 の条件を満たす開いた memo を `昇格済み <契約の列>` の理由で閉じる（cwd は `repo`）。`borrowed` は借りた台帳の全件（無い周は自分で読む）。
+/// 台帳か event log を読めない周は 1 本も閉じない（次の契機の周に判じ直す）。
+pub(crate) fn close_due_memos(bd: &str, repo: &Path, state_dir: &Path, manifest: &Manifest, borrowed: Option<&[Issue]>) -> Autoclose {
+    let read;
+    let issues = match borrowed {
+        Some(found) => found,
+        None => {
+            if lifecycle_mark::read_ledger(repo).is_none() {
+                return Autoclose::Skipped;
+            }
+            let Some(timeout) = crate::seat::ledger::timeout_of(manifest) else { return Autoclose::Unmeasured("ledger") };
+            let Ok(found) = crate::seat::ledger::read_ledger(bd, repo, timeout) else { return Autoclose::Unmeasured("ledger") };
+            read = found;
+            &read
+        }
+    };
+    let Ok(events) = crate::fleet::store::read_all(state_dir) else { return Autoclose::Unmeasured("events") };
+    let unjudged = lifecycle_mark::verdict_unhandled(issues, &events);
+    let (mut closed, mut failed) = (Vec::new(), Vec::new());
+    for (memo, reason) in phase::due_closes(issues, citation::prefix_of(repo).as_deref(), &unjudged) {
+        match close(bd, repo, &memo, &reason) {
+            Ok(()) => closed.push(memo),
+            Err(_) => failed.push(memo),
+        }
+    }
+    Autoclose::Fired { closed, failed }
+}
+
 /// 写しの形の版（鍵の頭の欄・形を替える便が上げる）。
 const COPY_FORM: &str = "ledger-copy-1";
 
@@ -454,6 +509,11 @@ mod tests {
 
     /// FR93 の fixture（memo `s2-m`・契約 2 本・子の問い 1 本）の台帳を JSON の字から作る。5 つの条件を満たす値が既定で、引数が欠けを 1 つ入れる。
     fn fr93_ledger(notes_line: &str, second_reason: &str, child_status: &str) -> Vec<crate::seat::ledger::Issue> {
+        crate::seat::ledger::issues_of(&fr93_text(notes_line, second_reason, child_status)).expect("fixture の JSON を読める")
+    }
+
+    /// [`fr93_ledger`] の台帳の JSON の字（偽 client の list が返す字）。
+    fn fr93_text(notes_line: &str, second_reason: &str, child_status: &str) -> String {
         let sha = "0123456789abcdef0123456789abcdef01234567";
         let contract = |id: &str, reason: &str| {
             format!(
@@ -466,8 +526,7 @@ mod tests {
         let child = format!(
             r#"{{"id":"s2-q","status":"{child_status}","labels":["intake:question"],"dependencies":[{{"depends_on_id":"s2-m","type":"parent-child"}}]}}"#
         );
-        let text = format!("[{memo},{},{},{child}]", contract("s2-c1", &format!("landed {sha} ci=success")), contract("s2-c2", second_reason));
-        crate::seat::ledger::issues_of(&text).expect("fixture の JSON を読める")
+        format!("[{memo},{},{},{child}]", contract("s2-c1", &format!("landed {sha} ci=success")), contract("s2-c2", second_reason))
     }
 
     /// FR93 の関数を直に呼び、同じ台帳を局面の関数に通して memo の (局面・手番・理由) を返す。
@@ -544,6 +603,138 @@ mod tests {
         let (due, (phase, _, reason)) = fr93_probe(&issues, &["s2-m".to_owned()]);
         assert!(!due, "処置の無い判定が在る memo は FR93 を満たさない");
         assert_eq!((phase.as_str(), reason.as_deref()), ("memo-actionable", Some("verdict")));
+    }
+
+    /// 器が閉じる memo の関数: 5 つの条件を満たす `s2-m` だけが理由の字つきで載り（理由の読み手が昇格済みの id の列に読む）、5 つの欠け・closed の memo・
+    /// 問いの label を併せ持つ memo・接頭辞 None は空の列。
+    #[test]
+    fn memo_autoclose_due_closes_names_only_the_memo_that_meets_all_five() {
+        use super::close_reason::{read, Form};
+        use super::phase::due_closes;
+        let due = |issues: &[crate::seat::ledger::Issue], prefix: Option<&str>, unjudged: &[String]| due_closes(issues, prefix, unjudged);
+        let met = fr93_ledger(FR93_LINE, FR93_LANDED, "closed");
+        let want = vec![("s2-m".to_owned(), "昇格済み s2-c1 s2-c2".to_owned())];
+        assert_eq!(due(&met, Some("s2"), &[]), want, "5 つを満たす memo は 1 件で載る");
+        assert_eq!(read(&want[0].1, Some("s2")), Ok(Form::Promoted(vec!["s2-c1".to_owned(), "s2-c2".to_owned()])), "理由は昇格済みの形で同じ id の列に読める");
+        let none: Vec<(String, String)> = Vec::new();
+        for (name, issues, unjudged) in [
+            ("一部の行", fr93_ledger("昇格: 一部 s2-c1 s2-c2", FR93_LANDED, "closed"), vec![]),
+            ("列の違い", fr93_ledger("昇格: 全部 s2-c1", FR93_LANDED, "closed"), vec![]),
+            ("取り下げの契約", fr93_ledger(FR93_LINE, "取り下げ 不要になった", "closed"), vec![]),
+            ("開いた子の問い", fr93_ledger(FR93_LINE, FR93_LANDED, "open"), vec![]),
+            ("処置の無い判定", met.clone(), vec!["s2-m".to_owned()]),
+        ] {
+            assert_eq!(due(&issues, Some("s2"), &unjudged), none, "{name}");
+        }
+        let mut closed = met.clone();
+        closed.iter_mut().find(|issue| issue.id == "s2-m").expect("memo が在る").status = "closed".to_owned();
+        assert_eq!(due(&closed, Some("s2"), &[]), none, "閉じた memo");
+        let mut asking = met.clone();
+        asking.iter_mut().find(|issue| issue.id == "s2-m").expect("memo が在る").labels.push("intake:question".to_owned());
+        assert_eq!(due(&asking, Some("s2"), &[]), none, "問いの label を併せ持つ bead は問い");
+        assert_eq!(due(&met, None, &[]), none, "接頭辞が解けない周");
+    }
+
+    /// 偽 client（list は `list.json` と `list.rc`・close は `closes.log` に argv・`cwd.log` に cwd を足し `close.rc` の rc で返る）と、files の形の台帳と
+    /// 接頭辞 s2 を持つ repo と置き場を作る。`.beads` を置かない周は `ledger` を false にする。
+    struct Rig {
+        dir: PathBuf,
+        repo: PathBuf,
+        state: PathBuf,
+        client: String,
+    }
+
+    impl Rig {
+        fn new(name: &str, ledger: bool, close_rc: i32) -> Self {
+            let dir = crate::pipe::fixture::scratch(name);
+            let repo = dir.join("repo");
+            std::fs::create_dir_all(&repo).expect("repo の dir を作れる");
+            let repo = repo.canonicalize().expect("repo の path を解ける");
+            if ledger {
+                put(&repo.join(".beads/issues.jsonl"), "{}\n");
+                put(&repo.join(".beads/config.yaml"), "issue-prefix: s2\n");
+            }
+            put(&dir.join("list.json"), &fr93_text(FR93_LINE, FR93_LANDED, "closed"));
+            put(&dir.join("list.rc"), "0");
+            put(&dir.join("close.rc"), &close_rc.to_string());
+            let d = dir.display();
+            let body = format!(
+                "if [ \"$1\" = \"--readonly\" ]; then echo \"$@\" >> '{d}/lists.log'; cat '{d}/list.json'; exit \"$(cat '{d}/list.rc')\"; fi\n\
+                 echo \"$@\" >> '{d}/closes.log'\npwd -P >> '{d}/cwd.log'\nexit \"$(cat '{d}/close.rc')\"\n"
+            );
+            let client = fake_client(&dir, &body);
+            Self { state: dir.join("state"), dir, repo, client }
+        }
+
+        /// 偽 client が撃たれた回数の字（list と close の 2 つの記録の行の列）。
+        fn log(&self, name: &str) -> String {
+            std::fs::read_to_string(self.dir.join(name)).unwrap_or_default()
+        }
+
+        fn run(&self, manifest: &crate::rules::manifest::Manifest, borrowed: Option<&[crate::seat::ledger::Issue]>) -> super::Autoclose {
+            super::close_due_memos(&self.client, &self.repo, &self.state, manifest, borrowed)
+        }
+    }
+
+    /// 借りた全件で撃つと close を 1 回（argv と cwd を記録）。close の rc 1 は閉じられなかった列・event log の promote の判定は閉じない・壊れた event log は `events`。
+    #[test]
+    fn memo_autoclose_fires_one_close_per_due_memo_and_keeps_the_failure() {
+        use super::Autoclose::{Fired, Unmeasured};
+        let manifest = crate::rules::manifest::Manifest::embedded().expect("規則を読める");
+        let issues = fr93_ledger(FR93_LINE, FR93_LANDED, "closed");
+        let rig = Rig::new("memo-autoclose-fires", true, 0);
+        assert_eq!(rig.run(&manifest, Some(&issues)), Fired { closed: vec!["s2-m".to_owned()], failed: vec![] });
+        assert_eq!(rig.log("closes.log"), "close s2-m --reason 昇格済み s2-c1 s2-c2\n", "close の記録は 1 行");
+        assert_eq!(rig.log("cwd.log").trim_end(), rig.repo.display().to_string(), "cwd は repo");
+        assert_eq!(rig.log("lists.log"), "", "借りた全件の周は list を撃たない");
+
+        let refused = Rig::new("memo-autoclose-refused", true, 1);
+        assert_eq!(refused.run(&manifest, Some(&issues)), Fired { closed: vec![], failed: vec!["s2-m".to_owned()] }, "close の rc 1");
+
+        let judged = Rig::new("memo-autoclose-judged", true, 0);
+        let line = r#"{"schema":1,"ts":"2026-10-01T00:00:00Z","kind":"MemoJudged","bead":"s2-m","detail":"promote","host":"h","actor":"machine"}"#;
+        put(&crate::fleet::store::events_path(&judged.state), &format!("{line}\n"));
+        assert_eq!(judged.run(&manifest, Some(&issues)), Fired { closed: vec![], failed: vec![] }, "処置の無い判定の memo");
+        assert_eq!(judged.log("closes.log"), "", "判定 promote の memo は閉じない");
+
+        let broken = Rig::new("memo-autoclose-broken-events", true, 0);
+        put(&crate::fleet::store::events_path(&broken.state), "これは JSON でない\n");
+        assert_eq!(broken.run(&manifest, Some(&issues)), Unmeasured("events"), "壊れた event log");
+        assert_eq!(broken.log("closes.log"), "", "events で 1 本も閉じない");
+    }
+
+    /// 全件を借りない周: `.beads` の無い repo は撃たない（client を撃たない）・list の rc 1 は `ledger`（close を撃たない）・list を読めれば自分で読んで閉じる。
+    #[test]
+    fn memo_autoclose_reads_the_ledger_itself_and_skips_a_repo_without_one() {
+        use super::Autoclose::{Fired, Skipped, Unmeasured};
+        let manifest = crate::rules::manifest::Manifest::embedded().expect("規則を読める");
+        let bare = Rig::new("memo-autoclose-bare", false, 0);
+        assert_eq!(bare.run(&manifest, None), Skipped, ".beads の無い repo");
+        assert_eq!((bare.log("lists.log"), bare.log("closes.log")), (String::new(), String::new()), "client を撃たない");
+
+        let down = Rig::new("memo-autoclose-list-rc1", true, 0);
+        put(&down.dir.join("list.rc"), "1");
+        assert_eq!(down.run(&manifest, None), Unmeasured("ledger"), "list の rc 1");
+        assert_eq!(down.log("closes.log"), "", "ledger で close を撃たない");
+
+        let up = Rig::new("memo-autoclose-list-ok", true, 0);
+        assert_eq!(up.run(&manifest, None), Fired { closed: vec!["s2-m".to_owned()], failed: vec![] }, "自分で読んで閉じる");
+        assert_eq!(up.log("closes.log"), "close s2-m --reason 昇格済み s2-c1 s2-c2\n");
+    }
+
+    /// `seat.ledger_timeout_s` の行が要るのは全件を自分で読む周だけ: 行を消した写しで全件を借りずに撃つと `ledger` で client を撃たず、同じ写しで借りれば閉じる。
+    #[test]
+    fn memo_autoclose_needs_the_timeout_row_only_when_it_reads_the_ledger() {
+        use super::Autoclose::{Fired, Unmeasured};
+        let text = include_str!("../../../../rules/manifest.toml");
+        let kept: Vec<&str> = text.split("[[rule]]").filter(|part| !part.contains("id = \"seat.ledger_timeout_s\"")).collect();
+        assert_eq!(kept.len() + 1, text.split("[[rule]]").count(), "fixture: 消す行は 1 本");
+        let manifest = crate::rules::manifest::Manifest::parse(&kept.join("[[rule]]")).expect("行を消した写しを読める");
+        let issues = fr93_ledger(FR93_LINE, FR93_LANDED, "closed");
+        let rig = Rig::new("memo-autoclose-no-timeout-row", true, 0);
+        assert_eq!(rig.run(&manifest, None), Unmeasured("ledger"), "行の無い写しで全件を借りない");
+        assert_eq!((rig.log("lists.log"), rig.log("closes.log")), (String::new(), String::new()), "client を 1 回も撃たない");
+        assert_eq!(rig.run(&manifest, Some(&issues)), Fired { closed: vec!["s2-m".to_owned()], failed: vec![] }, "同じ写しで借りれば閉じる");
     }
 
     /// 裁定の閉じの misfit の関数に、線の後の閉じた問いと memo を通して (bead id・語) の列を返す（JSON の字から `issues_of` で作る）。

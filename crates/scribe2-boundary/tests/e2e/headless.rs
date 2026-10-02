@@ -206,6 +206,9 @@ fn contract_text(goal: &str) -> String {
 fn contract_in(dir: &Path) -> PathBuf {
     let path = dir.join("contract.toml");
     fs::write(&path, contract_text(CONTRACT_GOAL)).expect("契約 file を書ける");
+    // run_lens が worktree に渡す契約の dir にも憲法の file を置く（lens は起こす前に木の憲法を測る・設計 gate-cost.md §47 行 ar）。
+    fs::create_dir_all(dir.join("docs")).expect("docs の dir を作れる");
+    fs::write(dir.join("docs").join("constitution.md"), "憲法\n").expect("憲法の file を書ける");
     path
 }
 
@@ -327,6 +330,9 @@ fn rules_with_cap(dir: &Path, cap: u64) -> PathBuf {
 fn run_lens(contract: &Path, cap: u64, mode: &str, claude: &Path, diff: &[u8]) -> Output {
     let dir = contract.parent().unwrap_or(Path::new("."));
     let rules = rules_with_cap(dir, cap);
+    // 木（契約の置き場）に憲法の file を置く: contract_in を通らない契約の周も diff の審査を測りで止めない。
+    let docs = dir.join("docs");
+    let _ = fs::create_dir_all(&docs).and_then(|()| fs::write(docs.join("constitution.md"), "憲法\n"));
     run_bin(
         dir,
         &[

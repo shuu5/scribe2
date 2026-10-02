@@ -3722,3 +3722,364 @@ fn pipe_land_unreflected_train_front_leaves_the_table_follower_behind() {
     assert_eq!(trail(&state, &id_b).len(), trail_before, "2 本目の event は増えない: {:?}", trail(&state, &id_b));
     clean(&[&repo, &state]);
 }
+
+// ───── 着地の番を取った周の remote の main の取り込み（設計 pipeline.md §69・行 bm・接頭辞 `pipe_land_remote_main_`） ─────
+//
+// 偽 remote は `fake_terminal` / `fake_no_remote` の bare repo（remote の名 fake）。remote の main の先端 T は、anchor の main を動かさずに
+// 別の clone で根に 1 file（検出線の面の外）を足して push した commit（anchor は T の object を持たない＝fetch が要る）。押すのは
+// remote の名でなく path の URL＝remote-tracking の ref（`refs/remotes/fake/main`）は fetch を撃った周にだけ作られる。
+
+/// 偽 remote の main を anchor の main（L）まで進める（path の URL へ押す）。
+fn push_local_main(repo: &Path, tools: &FakeTerminal) {
+    git(repo, &["push", "-q", &tools.remote.display().to_string(), "main:refs/heads/main"]);
+}
+
+/// 別の clone で面の外の file `name` を足して偽 remote の main へ押し、先端の commit id を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn advance_remote_main(state: &Path, tools: &FakeTerminal, name: &str) -> String {
+    let clone = state.join(format!("clone-{name}"));
+    git(state, &["clone", "-q", "-b", "main", &tools.remote.display().to_string(), &clone.display().to_string()]);
+    git(&clone, &["config", "user.name", "e2e"]);
+    git(&clone, &["config", "user.email", "e2e@example.invalid"]);
+    fs::write(clone.join(name), "remote\n").expect("clone に file を書ける");
+    git(&clone, &["add", "-A"]);
+    git(&clone, &["commit", "-q", "-m", name]);
+    git(&clone, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+    git(&clone, &["rev-parse", "HEAD"])
+}
+
+/// L を偽 remote へ押してから、別の clone で remote の main を進める。返すのは (L, T)。
+fn remote_ahead(repo: &Path, state: &Path, tools: &FakeTerminal) -> (String, String) {
+    let local = git(repo, &["rev-parse", "refs/heads/main"]);
+    push_local_main(repo, tools);
+    (local, advance_remote_main(state, tools, "remote-note.md"))
+}
+
+/// anchor が `sha` の commit の object を持つか。
+fn has_object(repo: &Path, sha: &str) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["cat-file", "-e", &format!("{sha}^{{commit}}")])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// 終端まで通す land（偽 bd と上限の manifest）。
+fn land_terminal(repo: &Path, state: &Path, id: &str) -> Output {
+    let bd = state.join("fake-bd.sh").display().to_string();
+    land_extra(repo, state, id, &["--bd", &bd, "--rules", &ceiling_rules(state)])
+}
+
+/// 便の `RunStage Gated` の detail のうち `remote-main:` で始まるもの（記帳の順）。
+fn remote_main_notes(state: &Path, id: &str) -> Vec<String> {
+    stages(state, id)
+        .into_iter()
+        .filter(|(stage, _)| *stage == Some(Stage::Gated))
+        .filter_map(|(_, detail)| detail)
+        .filter(|detail| detail.starts_with("remote-main:"))
+        .collect()
+}
+
+/// 便の `RunStage Gated turn:taken` の記帳の件数。
+fn turn_taken_count(state: &Path, id: &str) -> usize {
+    stages(state, id).iter().filter(|(_, detail)| detail.as_deref() == Some("turn:taken")).count()
+}
+
+/// stdout の 1 行目。
+fn first_line(out: &Output) -> String {
+    stdout_of(out).lines().next().unwrap_or_default().to_owned()
+}
+
+/// 便が Landed にも Failed にも届いていない（Gated のまま）。
+fn still_gated(repo: &Path, state: &Path, id: &str) -> bool {
+    show_line(repo, state, id).contains("stage=Gated")
+        && trail(state, id).iter().all(|(kind, stage, _)| *kind != EventKind::RunDone && *stage != Some(Stage::Failed))
+}
+
+/// (a) 単独の fast-forward: stdout の 1 行目が揃えの行・記帳 1 件・追随の記帳・着地の commit の親が T・押した先と anchor の main が
+/// 着地の commit・anchor の作業の木に T の file が在って tracked の変更は無い。
+#[test]
+fn pipe_land_remote_main_fast_forwards_to_the_remote_tip_then_lands_on_it() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let (local, tip) = remote_ahead(&repo, &state, &tools);
+    assert!(!has_object(&repo, &tip), "前提: anchor は T の object を持たない（fetch が要る）");
+    let out = land_terminal(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(first_line(&out), format!("run={id} remote-main=ff:{local}..{tip} anchor=synced"), "揃えの行");
+    assert_eq!(remote_main_notes(&state, &id), [format!("remote-main:ff:{local}..{tip}")], "記帳は 1 件");
+    assert!(
+        stages(&state, &id).iter().any(|(_, detail)| detail.as_deref() == Some(format!("rebase:{local}..{tip}").as_str())),
+        "追随の記帳: {:?}",
+        stages(&state, &id)
+    );
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&repo, &["rev-parse", &format!("{landed}^")]), tip, "着地の commit の親は T");
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), landed, "偽 remote の main は着地の commit");
+    let tail = terminal_lines(&state, &id);
+    assert!(tail.contains(&"terminal:push:fake".to_owned()) && tail.contains(&"terminal:close:ok".to_owned()), "終端: {tail:?}");
+    assert!(repo.join("remote-note.md").exists(), "anchor の作業の木に T の file が在る");
+    assert_eq!(git(&repo, &["status", "--porcelain", "--untracked-files=no"]), "", "tracked の変更は無い");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 読めない: 偽 remote の dir の名を変えて 2 回撃っても rc 1・main は動かず・記帳は 1 件。dir の名を戻した 3 回目は着地して close する。
+#[test]
+fn pipe_land_remote_main_unreadable_stops_without_landing_until_the_remote_returns() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    push_local_main(&repo, &tools);
+    let local = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let moved = state.join("remote-moved.git");
+    fs::rename(&tools.remote, &moved).expect("偽 remote の dir の名を変えられる");
+    for round in 1..=2 {
+        let out = land_terminal(&repo, &state, &id);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{round} 回目は rc 1: {} / {}", stdout_of(&out), stderr_of(&out));
+        assert!(stdout_of(&out).contains("remote-main=unreadable"), "{round} 回目: {}", stdout_of(&out));
+        assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), local, "{round} 回目: main は動かない");
+        assert!(still_gated(&repo, &state, &id), "{round} 回目: Landed も Failed も無い: {:?}", trail(&state, &id));
+        assert_eq!(remote_main_notes(&state, &id), ["remote-main:unreadable"], "{round} 回目: 同じ理由は記し直さない");
+    }
+    fs::rename(&moved, &tools.remote).expect("dir の名を戻せる");
+    let out = land_terminal(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "戻した 3 回目は着地する: {} / {}", stdout_of(&out), stderr_of(&out));
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_ne!(landed, local, "main が進んだ");
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), landed, "偽 remote の main は着地の commit");
+    assert!(terminal_lines(&state, &id).contains(&"terminal:close:ok".to_owned()), "close した: {:?}", terminal_lines(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (b') fetch だけが落ちる周（ls-remote は通る）: rc 1・`remote-main=unreadable`・main は L・Landed が無い。
+#[test]
+fn pipe_land_remote_main_fetch_failure_is_unreadable_not_absent() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let (local, _) = remote_ahead(&repo, &state, &tools);
+    let out = land_once_with_git_shim(&repo, &state, &id, "fetch --no-tags", None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "rc 1: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains("remote-main=unreadable"), "{}", stdout_of(&out));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), local, "main は動かない");
+    assert!(still_gated(&repo, &state, &id), "Landed が無い: {:?}", trail(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (c) 分かれた: 前の周の unreadable に続く記帳が `remote-main:diverged` の 1 件（理由が変われば記し直す）で、main と偽 remote の main はどちらも動かない。
+#[test]
+fn pipe_land_remote_main_diverged_stops_and_records_each_changed_reason_once() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let (_, tip) = remote_ahead(&repo, &state, &tools);
+    let moved = state.join("remote-moved.git");
+    fs::rename(&tools.remote, &moved).expect("偽 remote の dir の名を変えられる");
+    let first = land_terminal(&repo, &state, &id);
+    assert!(stdout_of(&first).contains("remote-main=unreadable"), "1 回目: {}", stdout_of(&first));
+    fs::rename(&moved, &tools.remote).expect("dir の名を戻せる");
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "unpushed"]);
+    let unpushed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let out = land_terminal(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "rc 1: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains("remote-main=diverged"), "{}", stdout_of(&out));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), unpushed, "anchor の main は動かない");
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), tip, "偽 remote の main は動かない");
+    assert_eq!(remote_main_notes(&state, &id), ["remote-main:unreadable", "remote-main:diverged"], "理由が変われば記し直す");
+    assert!(still_gated(&repo, &state, &id), "Landed が無い: {:?}", trail(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// 便 3 本を置き場の面の外（`src/`）の file で PASS の gate まで通す（偽 remote の宣言を commit した後）。
+fn remote_runs(repo: &Path, state: &Path) -> [String; 3] {
+    train_runs_on(repo, state, &state.join("lens-ran"), [ALL_GREEN; 3], ["src/a.rs", "src/b.rs", "src/c.rs"])
+}
+
+/// 揃えの行も記帳も無い周（stdout に `remote-main=` が無く `remote-main:` の記帳が 0 件）を assert する。
+fn assert_not_aligned(out: &Output, state: &Path, id: &str, name: &str) {
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{name}: rc 0: {} / {}", stdout_of(out), stderr_of(out));
+    assert!(!stdout_of(out).contains("remote-main="), "{name}: 揃えの行が無い: {}", stdout_of(out));
+    assert!(remote_main_notes(state, id).is_empty(), "{name}: 記帳が無い: {:?}", stages(state, id));
+    assert!(terminal_lines(state, id).contains(&"terminal:close:ok".to_owned()), "{name}: close した: {:?}", terminal_lines(state, id));
+}
+
+/// (d) 揃えない 3 形（列の上限 1）: main の無い remote・L と T が同じ周・anchor の main に未 push の commit U が在る周。どれも着地して close し、
+/// 3 本目の後の偽 remote の main は着地の commit で U を祖先に持つ。
+#[test]
+fn pipe_land_remote_main_leaves_equal_absent_and_unpushed_mains_to_the_old_path() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let [id_a, id_b, id_c] = remote_runs(&repo, &state);
+    let rules = write_rules_train(&state, "rules-train.toml", None);
+    let bd = state.join("fake-bd.sh").display().to_string();
+    let land = |id: &str| land_extra(&repo, &state, id, &["--bd", &bd, "--rules", &rules]);
+    assert_not_aligned(&land(&id_a), &state, &id_a, "main の無い remote");
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), git(&repo, &["rev-parse", "refs/heads/main"]), "前提: 押して L と T が同じ");
+    assert_not_aligned(&land(&id_b), &state, &id_b, "L と T が同じ周");
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "unpushed"]);
+    let unpushed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_not_aligned(&land(&id_c), &state, &id_c, "T が L の祖先の周");
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), landed, "偽 remote の main は着地の commit");
+    git(&repo, &["merge-base", "--is-ancestor", &unpushed, &landed]);
+    clean(&[&repo, &state]);
+}
+
+/// (e) remote を宣言しない repo: `terminal=closed:no-ci`・stdout に `remote-main=` が無い・`refs/remotes/fake/main` が無い（fetch を撃たない）・
+/// 着地の commit の親は L・偽 remote の main は T のまま。
+#[test]
+fn pipe_land_remote_main_is_not_fired_when_the_declaration_has_no_remote() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_no_remote(&repo, &state);
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let (local, tip) = remote_ahead(&repo, &state, &tools);
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains("terminal=closed:no-ci"), "{}", stdout_of(&out));
+    assert!(!stdout_of(&out).contains("remote-main="), "揃えの行が無い: {}", stdout_of(&out));
+    assert_eq!(git(&repo, &["for-each-ref", "refs/remotes"]), "", "fetch を撃っていない（remote-tracking の ref が無い）");
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&repo, &["rev-parse", &format!("{landed}^")]), local, "着地の commit の親は揃える前の main");
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), tip, "偽 remote の main は動かない");
+    clean(&[&repo, &state]);
+}
+
+/// (f) 汚れた anchor の fast-forward: 揃えの行が `anchor=skipped:dirty`・§57 の印は L の 1 行・`Landed` の detail が同じ token で終わり・
+/// 局所の変更は残り・作業の木に T の file は無く・push が通って close する。
+#[test]
+fn pipe_land_remote_main_dirty_anchor_moves_the_ref_and_keeps_the_local_edit() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let (local, tip) = remote_ahead(&repo, &state, &tools);
+    fs::write(repo.join(REQS_FILE), LOCAL_EDIT).expect("局所の変更を置ける");
+    let out = land_terminal(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(first_line(&out), format!("run={id} remote-main=ff:{local}..{tip} anchor=skipped:dirty"), "揃えの行");
+    assert_eq!(fs::read_to_string(mark_of(&repo)).ok(), Some(format!("{local}\n")), "印は揃える前の main の 1 行（T ではない）");
+    assert!(landed_detail(&state, &id).ends_with(" anchor=skipped:dirty"), "Landed の detail: {}", landed_detail(&state, &id));
+    assert_eq!(fs::read_to_string(repo.join(REQS_FILE)).ok().as_deref(), Some(LOCAL_EDIT), "局所の変更が残る");
+    assert!(!repo.join("remote-note.md").exists(), "作業の木に T の file は無い");
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), landed, "偽 remote の main は着地の commit");
+    assert!(terminal_lines(&state, &id).contains(&"terminal:close:ok".to_owned()), "close した: {:?}", terminal_lines(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (g) fast-forward を reference-transaction の hook が断る周: rc 1・`remote-main=ff-failed`・main は L・記帳 1 件・Landed が無い。
+#[test]
+fn pipe_land_remote_main_ff_refused_by_git_stops_without_landing() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let (local, _) = remote_ahead(&repo, &state, &tools);
+    let hooks = repo.join(".git").join("hooks");
+    fs::create_dir_all(&hooks).expect("hooks dir を作れる");
+    exec_script(
+        &hooks.join("reference-transaction"),
+        "[ \"$1\" = prepared ] || exit 0\nwhile read old new ref; do [ \"$ref\" = refs/heads/main ] && exit 1; done\nexit 0\n",
+    );
+    let out = land_terminal(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "rc 1: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains("remote-main=ff-failed"), "{}", stdout_of(&out));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), local, "main は動かない");
+    assert_eq!(remote_main_notes(&state, &id), ["remote-main:ff-failed"], "記帳は 1 件");
+    assert!(still_gated(&repo, &state, &id), "Landed が無い: {:?}", trail(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (h) 列（上限 3）: 先頭の land の stdout の 1 行目が揃えの行で `train=3` が在り、偽 remote の main は列の先端の着地の commit で T を祖先に持ち、
+/// 3 本とも `terminal:close:ok`。
+#[test]
+fn pipe_land_remote_main_line_leads_the_train_round_and_all_three_close() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let ids = remote_runs(&repo, &state);
+    let (local, tip) = remote_ahead(&repo, &state, &tools);
+    let rules = write_rules_train(&state, "rules-train.toml", Some(3));
+    let out = land_extra(&repo, &state, &ids[0], &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(first_line(&out).starts_with(&format!("run={} remote-main=ff:{local}..{tip} ", ids[0])), "1 行目は揃えの行: {}", stdout_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={} train=3", ids[0])), "列で着地した: {}", stdout_of(&out));
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), main, "偽 remote の main は列の先端の着地の commit");
+    assert_eq!(landed_sha_of(&state, &ids[2]), main, "先端は 3 本目");
+    git(&repo, &["merge-base", "--is-ancestor", &tip, &main]);
+    for id in &ids {
+        assert!(terminal_lines(&state, id).contains(&"terminal:close:ok".to_owned()), "{id}: close した: {:?}", terminal_lines(&state, id));
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (i) 番の前の口は撃たない: T を push した偽 remote の repo で `--pr-cmd true` の land は main が L のまま・stdout に `remote-main=` が無く・
+/// remote-tracking の ref が無い。
+#[test]
+fn pipe_land_remote_main_is_not_fired_by_the_pr_form() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let (local, _) = remote_ahead(&repo, &state, &tools);
+    let out = land_extra(&repo, &state, &id, &["--pr-cmd", "true"]);
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), local, "main は動かない: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(!stdout_of(&out).contains("remote-main="), "揃えの行が無い: {}", stdout_of(&out));
+    assert_eq!(git(&repo, &["for-each-ref", "refs/remotes"]), "", "fetch を撃っていない");
+    clean(&[&repo, &state]);
+}
+
+/// (j) 列で着地済みの後続は撃たない: 先頭が後続を積んで着地させた後、別の clone で remote の main を進めて後続を撃つと、already-landed だけを返し・
+/// main が動かず・`remote-main:` の記帳が 0 件。
+#[test]
+fn pipe_land_remote_main_is_not_fired_for_a_follower_already_landed_by_the_train() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &state.join("lens-ran"));
+    let rules = write_rules_train(&state, "rules-train.toml", Some(2));
+    let first = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert!(stdout_of(&first).contains(&format!("run={id_a} train=2")), "前提: 先頭が後続を積んで着地した: {} / {}", stdout_of(&first), stderr_of(&first));
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    advance_remote_main(&state, &tools, "remote-note.md");
+    let out = land_extra(&repo, &state, &id_b, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains("already-landed=1") && !stdout_of(&out).contains("remote-main="), "{}", stdout_of(&out));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), main, "main は動かない");
+    assert!(remote_main_notes(&state, &id_b).is_empty(), "記帳が 0 件: {:?}", stages(&state, &id_b));
+    clean(&[&repo, &state]);
+}
+
+/// (l) 先頭の止めの間に番を取らずに進んだ後続: 先頭は rc 1・`remote-main=unreadable`・main は L・`turn:taken` が 1 件。続く後続の land は番待ちの上限の
+/// 後に番を取らずに進み（`turn:taken` が 0 件）、同じ点で rc 1・`remote-main=unreadable`・main は L・Landed が無く・記帳が 1 件。
+#[test]
+fn pipe_land_remote_main_stops_a_follower_that_proceeds_without_taking_the_turn() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &state.join("lens-ran"));
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(LAND_WAIT_S));
+    let local = git(&repo, &["rev-parse", "refs/heads/main"]);
+    fs::rename(&tools.remote, state.join("remote-moved.git")).expect("偽 remote の dir の名を変えられる");
+    let front = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(front.status.code(), Some(i32::from(RC_REFUSED)), "先頭は rc 1: {} / {}", stdout_of(&front), stderr_of(&front));
+    assert!(stdout_of(&front).contains("remote-main=unreadable"), "先頭: {}", stdout_of(&front));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), local, "先頭の止め: main は L");
+    assert_eq!(turn_taken_count(&state, &id_a), 1, "先頭が番を持って列に居る: {:?}", stages(&state, &id_a));
+    let out = land_extra(&repo, &state, &id_b, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "後続は rc 1: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains("remote-main=unreadable"), "後続: {}", stdout_of(&out));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), local, "main は L のまま");
+    assert_eq!(turn_taken_count(&state, &id_b), 0, "番を取らずに進んだ周: {:?}", stages(&state, &id_b));
+    assert!(still_gated(&repo, &state, &id_b), "後続の Landed が無い: {:?}", trail(&state, &id_b));
+    assert_eq!(remote_main_notes(&state, &id_b), ["remote-main:unreadable"], "後続の記帳は 1 件");
+    clean(&[&repo, &state]);
+}

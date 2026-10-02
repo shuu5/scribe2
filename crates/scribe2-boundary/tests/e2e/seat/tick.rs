@@ -2912,3 +2912,364 @@ fn seat_tick_lifecycle_alarm_copies_the_owned_count_and_never_recounts_the_marks
     let place = lc_alarm_place(vec![marked], lc_owned(0, 0, 0));
     assert_eq!(lc_alarm_sent(&place), [lc_alarm_want("")], "件数 0・印を持つ部品 1");
 }
+
+// ─────────── 管理 tick の全部の書き直し（設計 case-lifecycle.md §19・接頭辞 `seat_tick_full_lifecycle_`） ───────────
+//
+// tick の置き場の登録 row の anchor は toy repo（`fleet.rs` の `Life`・台帳は files の形・origin/main の ref つき）で、偽 bd は呼びを
+// 1 行ずつ残し空の列を返す。toy repo は作る時の `vessel init` で自分の tmp の置き場を git の設定 `<NAME>.stateDir` に名乗るので、どの歯も
+// 頭でその設定を tick の置き場の dir に書き直す（そのままでは数えが Foreign で撃たない）。どの歯も `--rules` の写しで
+// `lifecycle.full_min_s` を 60 にする。
+
+/// 管理 tick の全部の書き直しの歯の置き場。
+struct FullTick {
+    place: TickPlace,
+    life: crate::fleet::Life,
+    bd: String,
+    rules: String,
+}
+
+/// `lifecycle.full_min_s` の行の字（埋め込み manifest のまま）。
+const FULL_ROW: &str = "[[rule]]\nid = \"lifecycle.full_min_s\"\nkind = \"LifecycleFullMinS\"\nvalue = 300\nenabled = true\nruling = \"user 2026-10-01T15:27Z\"\nruled_at = \"2026-10-01\"\n\n";
+
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+impl FullTick {
+    fn new() -> Self {
+        let life = crate::fleet::Life::new();
+        let place = tick_place_at(Some(&life.repo.display().to_string()));
+        let bd = place.at("full-bd.sh");
+        let calls = place.at("bd-calls").display().to_string();
+        fs::write(&bd, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{calls}'\necho '[]'\n")).expect("偽 bd を書ける");
+        fs::set_permissions(&bd, fs::Permissions::from_mode(0o755)).expect("実行権を付ける");
+        let body = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/manifest.toml")).expect("manifest を読める");
+        assert!(body.contains(FULL_ROW), "下限の行の字面が在る");
+        fs::write(place.at("full-rules.toml"), body.replace("kind = \"LifecycleFullMinS\"\nvalue = 300", "kind = \"LifecycleFullMinS\"\nvalue = 60")).expect("写しを書ける");
+        fs::write(place.at("full-rules-bare.toml"), body.replace(FULL_ROW, "")).expect("行の無い写しを書ける");
+        let (bd, rules) = (bd.display().to_string(), place.at("full-rules.toml").display().to_string());
+        let fx = Self { place, life, bd, rules };
+        fx.name_state(&fx.place.state.clone());
+        fx
+    }
+
+    /// toy repo の設定 `<NAME>.stateDir` を `dir` に書き直し、設定の値が `dir` と等しいことを前提として assert する。
+    fn name_state(&self, dir: &Path) {
+        let key = format!("{NAME}.stateDir");
+        crate::pipe::git(&self.life.repo, &["config", &key, &dir.display().to_string()]);
+        assert_eq!(crate::pipe::git(&self.life.repo, &["config", "--get", &key]), dir.display().to_string(), "設定の値が名乗る dir と等しい");
+    }
+
+    /// 偽 bd の呼びの数。
+    fn calls(&self) -> usize {
+        fs::read_to_string(self.place.at("bd-calls")).map_or(0, |text| text.lines().count())
+    }
+
+    fn json_path(&self) -> PathBuf {
+        self.place.state.join("fleet").join("lifecycle.json")
+    }
+
+    fn tick_path(&self) -> PathBuf {
+        self.place.state.join("fleet").join("lifecycle.tick")
+    }
+
+    /// 前の全部の書き直しの出力（口 `fleet lifecycle write` で置く・台帳と main の印は今のまま）。
+    fn seed(&self) {
+        let out = Command::new(bin())
+            .args(["fleet", "lifecycle", "write", "--state-dir", &self.place.state.display().to_string(), "--repo", &self.life.repo.display().to_string(), "--bd", &self.bd])
+            .output()
+            .expect("binary を起動できる");
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "出力を置ける: {}", stderr_of(&out));
+        assert_eq!(self.out().scope, vessel::fleet::lifecycle::Scope::Full);
+    }
+
+    fn out(&self) -> vessel::fleet::lifecycle::Output {
+        match vessel::fleet::lifecycle::read_output(&self.place.state) {
+            vessel::fleet::lifecycle::Reading::Read(found) => Some(*found),
+            _ => None,
+        }
+        .expect("出力を読める")
+    }
+
+    /// 出力の `full_at` を `secs` 秒前へ書き直す。
+    fn age(&self, secs: u64) {
+        let mut out = self.out();
+        out.full_at = vessel::fleet::cli::format_utc(unix_now().saturating_sub(secs));
+        fs::write(self.json_path(), vessel::fleet::lifecycle::render_output(&out)).expect("出力を書き戻せる");
+    }
+
+    /// 撃った記録を `secs` 秒前の `ts` で置く（`None` は消す）。
+    fn record(&self, secs: Option<u64>) {
+        match secs {
+            Some(ago) => fs::write(self.tick_path(), format!("ts={} wrote=written\n", unix_now().saturating_sub(ago))).expect("記録を置ける"),
+            None => drop(fs::remove_file(self.tick_path())),
+        }
+    }
+
+    /// 撃った記録の字（無ければ `None`）。
+    fn recorded(&self) -> Option<String> {
+        fs::read_to_string(self.tick_path()).ok().map(|text| text.trim_end().to_owned())
+    }
+
+    /// 撃った記録の `wrote=` の語。
+    fn wrote(&self) -> Option<String> {
+        self.recorded().and_then(|text| text.split_once(" wrote=").map(|(_, word)| word.to_owned()))
+    }
+
+    /// 台帳の file を伸ばす（台帳の印が動く）。
+    fn grow(&self) {
+        let path = self.life.repo.join(".beads/issues.jsonl");
+        let body = fs::read_to_string(&path).unwrap_or_default();
+        fs::write(&path, format!("{body}\n")).expect("台帳を伸ばせる");
+    }
+
+    /// origin/main の ref を toy repo の次の commit へ進める。
+    fn advance_main(&self) -> String {
+        crate::pipe::git(&self.life.repo, &["commit", "--allow-empty", "-q", "-m", "next"]);
+        let head = crate::pipe::git(&self.life.repo, &["rev-parse", "refs/heads/main"]);
+        crate::pipe::git(&self.life.repo, &["update-ref", "refs/remotes/origin/main", &head]);
+        head
+    }
+
+    /// tick を 1 周撃つ（`--rules` は 60 秒の写し・`--bd` は偽 bd）。
+    fn tick(&self) -> Output {
+        tick_run_bare(&self.place, &["--rules", &self.rules, "--bd", &self.bd])
+    }
+
+    /// tick の rc・stdout・stderr（置き場と repo の path を伏せた字）。
+    fn told(&self, out: &Output) -> (i32, String, String) {
+        let hide = |text: String| text.replace(&self.place.dir.display().to_string(), "<T>").replace(&self.life.repo.display().to_string(), "<R>");
+        (rc_of(out), hide(stdout_of(out)), hide(stderr_of(out)))
+    }
+
+    /// 撃つ形（全部の書き直しの比べのうち印だけが動いた周）を戻す: 出力の `full_at` と記録を 2 時間前へ・台帳を伸ばす。
+    fn rearm(&self) {
+        self.age(7_200);
+        if self.recorded().is_some() {
+            self.record(Some(7_200));
+        }
+        self.grow();
+    }
+
+    /// 偽 bd が呼ばれ（`before` より増え）、出力が全部の書き直しの印で、記録が `written` の周か。
+    fn fired(&self, before: usize, aged: &str) -> bool {
+        let out = self.out();
+        self.calls() > before && out.scope == vessel::fleet::lifecycle::Scope::Full && out.full_at.as_str() > aged && self.wrote().as_deref() == Some("written")
+    }
+}
+
+/// (a) `full_at` が 2 時間前の出力の置き場で台帳を伸ばした後の tick の 1 周は、全部を書き直し（scope full・`full_at` が進み・
+/// `inputs.ledger` が今の印・偽 bd の呼びが 1 回以上・記録が `wrote=written`）、印を動かさないもう 1 周（出力の `full_at` と記録の ts を
+/// 2 時間前へ戻した後）は偽 bd の呼びが増えず `full_at` も動かない。2 周の rc と判定行と stderr が等しい。
+#[test]
+fn seat_tick_full_lifecycle_rewrites_when_the_ledger_moved_and_not_when_the_marks_are_equal() {
+    let fx = FullTick::new();
+    fx.seed();
+    fx.age(7_200);
+    let aged = fx.out().full_at;
+    fx.grow();
+    let before = fx.calls();
+    let first = fx.tick();
+    assert_eq!(rc_of(&first), i32::from(RC_OK), "stderr={}", stderr_of(&first));
+    assert!(fx.fired(before, &aged), "全部を書き直す: calls={} wrote={:?} out={:?}", fx.calls(), fx.wrote(), fx.out().full_at);
+    assert_eq!(vessel::fleet::lifecycle_mark::read_ledger(&fx.life.repo), Some(fx.out().marks.ledger), "inputs.ledger は今の印");
+    fx.age(7_200);
+    fx.record(Some(7_200));
+    let (calls, full_at) = (fx.calls(), fx.out().full_at);
+    let second = fx.tick();
+    assert_eq!((fx.calls(), fx.out().full_at), (calls, full_at), "印を動かさない周は撃たない");
+    assert_eq!(fx.told(&first), fx.told(&second), "rc と判定行と stderr は撃った周も撃たない周も等しい");
+    crate::pipe::clean(&[&fx.life.repo, &fx.life.state]);
+}
+
+/// (b) 台帳を動かさず origin/main の ref を toy repo の別の commit へ進めた周も撃つ（`inputs.main` が今の sha）。
+#[test]
+fn seat_tick_full_lifecycle_rewrites_when_origin_main_moved() {
+    let fx = FullTick::new();
+    fx.seed();
+    fx.age(7_200);
+    let aged = fx.out().full_at;
+    let before = fx.calls();
+    let head = fx.advance_main();
+    let out = fx.tick();
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert!(fx.fired(before, &aged), "main の印が動いた周は撃つ: wrote={:?}", fx.wrote());
+    assert_eq!(fx.out().marks.main, head, "inputs.main は進めた commit");
+    crate::pipe::clean(&[&fx.life.repo, &fx.life.state]);
+}
+
+/// (c) event log だけを伸ばした周（台帳と main は出力と同じ）は撃たず（偽 bd 0 回・記録無し）、同じ歯の中で次に台帳を伸ばした周は撃つ。
+#[test]
+fn seat_tick_full_lifecycle_does_not_fire_for_an_event_log_alone() {
+    let fx = FullTick::new();
+    fx.seed();
+    fx.age(7_200);
+    let aged = fx.out().full_at;
+    let stamp = vessel::fleet::cli::format_utc(unix_now().saturating_sub(60));
+    tick_log_append(&fx.place, &[format!("{{\"schema\":1,\"ts\":\"{stamp}\",\"kind\":\"RunStage\",\"run\":\"r-x\",\"bead\":\"s2-x.1\",\"host\":\"h\",\"actor\":\"machine\",\"stage\":\"Spawned\"}}")]);
+    let before = fx.calls();
+    assert_eq!(rc_of(&fx.tick()), i32::from(RC_OK));
+    assert_eq!((fx.calls(), fx.recorded(), fx.out().full_at), (before, None, aged.clone()), "event log だけでは撃たない");
+    fx.grow();
+    assert_eq!(rc_of(&fx.tick()), i32::from(RC_OK));
+    assert!(fx.fired(before, &aged), "次に台帳を伸ばした周は撃つ: wrote={:?}", fx.wrote());
+    crate::pipe::clean(&[&fx.life.repo, &fx.life.state]);
+}
+
+/// (d) 印が違っても、`full_at` が 30 秒前の周と、`full_at` が 2 時間前で記録の ts が 30 秒前の周は撃たない。同じ歯の中で、両方を 2 時間前へ戻した周は撃つ。
+#[test]
+fn seat_tick_full_lifecycle_waits_for_the_minimum_after_the_full_at_and_the_record() {
+    let fx = FullTick::new();
+    fx.seed();
+    fx.grow();
+    fx.age(30);
+    let (before, recent) = (fx.calls(), fx.out().full_at);
+    assert_eq!(rc_of(&fx.tick()), i32::from(RC_OK));
+    assert_eq!((fx.calls(), fx.recorded(), fx.out().full_at), (before, None, recent), "full_at が 30 秒前の周は撃たない");
+    fx.age(7_200);
+    let aged = fx.out().full_at;
+    fx.record(Some(30));
+    let record = fx.recorded();
+    assert_eq!(rc_of(&fx.tick()), i32::from(RC_OK));
+    assert_eq!((fx.calls(), fx.recorded(), fx.out().full_at), (before, record, aged.clone()), "記録の ts が 30 秒前の周は撃たない");
+    fx.record(Some(7_200));
+    assert_eq!(rc_of(&fx.tick()), i32::from(RC_OK));
+    assert!(fx.fired(before, &aged), "両方を戻した周は撃つ: wrote={:?}", fx.wrote());
+    crate::pipe::clean(&[&fx.life.repo, &fx.life.state]);
+}
+
+/// (e) 出力の無い置き場（出力を作らない）・`lifecycle.full_min_s` の行の無い写し・anchor の台帳を読めない置き場は撃たない（3 形）。同じ歯の中で、
+/// 出力を置き・行を戻し・台帳を置いた周は撃つ。
+#[test]
+fn seat_tick_full_lifecycle_does_not_fire_without_an_output_a_row_or_a_readable_ledger() {
+    let fx = FullTick::new();
+    fx.grow();
+    assert_eq!(rc_of(&fx.tick()), i32::from(RC_OK));
+    assert!(!fx.json_path().exists() && fx.recorded().is_none() && fx.calls() == 0, "出力の無い置き場は出力を作らず撃たない");
+    fx.seed();
+    fx.age(7_200);
+    let aged = fx.out().full_at;
+    fx.grow();
+    let before = fx.calls();
+    let bare = tick_run_bare(&fx.place, &["--rules", &fx.place.at("full-rules-bare.toml").display().to_string(), "--bd", &fx.bd]);
+    assert_eq!(rc_of(&bare), i32::from(RC_OK), "stderr={}", stderr_of(&bare));
+    assert_eq!((fx.calls(), fx.recorded(), fx.out().full_at), (before, None, aged.clone()), "行の無い写しは撃たない");
+    let issues = fx.life.repo.join(".beads/issues.jsonl");
+    let body = fs::read_to_string(&issues).expect("台帳を読める");
+    fs::remove_file(&issues).expect("台帳を消せる");
+    assert_eq!(rc_of(&fx.tick()), i32::from(RC_OK));
+    assert_eq!((fx.calls(), fx.recorded(), fx.out().full_at), (before, None, aged.clone()), "台帳を読めない置き場は撃たない");
+    fs::write(&issues, format!("{body}\n")).expect("台帳を置ける");
+    assert_eq!(rc_of(&fx.tick()), i32::from(RC_OK));
+    assert!(fx.fired(before, &aged), "出力と行と台帳が揃った周は撃つ: wrote={:?}", fx.wrote());
+    crate::pipe::clean(&[&fx.life.repo, &fx.life.state]);
+}
+
+/// 本物の git だけを引く PATH（偽 tmux の dir と、git を呼ぶだけの wrapper の dir・`bd` は在らない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn full_path_without_bd(place: &TickPlace) -> String {
+    let real = std::env::var("PATH").unwrap_or_default().split(':').map(|dir| Path::new(dir).join("git")).find(|path| path.is_file()).expect("host に git が在る");
+    let only = place.at("gitonly");
+    fs::create_dir_all(&only).expect("dir を作れる");
+    fs::write(only.join("git"), format!("#!/bin/sh\nexec '{}' \"$@\"\n", real.display())).expect("wrapper を書ける");
+    fs::set_permissions(only.join("git"), fs::Permissions::from_mode(0o755)).expect("実行権を付ける");
+    format!("{}:{}", place.at("bin").display(), only.display())
+}
+
+/// (f) `--bd` を渡さず PATH に bd の無い env の周は、記録が `wrote=unreadable` で出力が理由 `ledger` の読めない印を持ち、tick の rc と判定行と
+/// stderr は (a) の撃つ周と等しい。
+#[test]
+fn seat_tick_full_lifecycle_records_unreadable_when_the_ledger_client_is_missing() {
+    let reference = FullTick::new();
+    reference.seed();
+    reference.rearm();
+    let fired = reference.told(&reference.tick());
+    let fx = FullTick::new();
+    fx.seed();
+    fx.rearm();
+    let path = full_path_without_bd(&fx.place);
+    let out = Command::new(bin())
+        .args(["seat", "tick", "--state-dir", &fx.place.state.display().to_string(), "--target", TICK_TARGET, "--rules", &fx.rules])
+        .env("PATH", &path)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(fx.wrote().as_deref(), Some("unreadable"), "記録は unreadable");
+    let marks = match vessel::fleet::lifecycle_mark::read_stale(&fx.place.state) {
+        vessel::fleet::lifecycle_mark::Stale::Marks(found) => found.into_iter().map(|one| (one.kind, one.value)).collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    assert_eq!(marks, [(vessel::fleet::lifecycle_mark::Kind::Unreadable, vessel::fleet::lifecycle_mark::Value::Reason("ledger".to_owned()))], "理由 ledger の読めない印");
+    assert_eq!(fx.told(&out), fired, "rc と判定行と stderr は (a) の撃つ周と等しい");
+    crate::pipe::clean(&[&reference.life.repo, &reference.life.state, &fx.life.repo, &fx.life.state]);
+}
+
+/// (g) `lifecycle.lock` を生きた pid で持たせた周は待たずに記録が `wrote=busy` で出力の bytes が変わらず、tick の rc と判定行と stderr は
+/// (a) の撃つ周と等しい。
+#[test]
+fn seat_tick_full_lifecycle_records_busy_for_a_live_lock_without_touching_the_output() {
+    let reference = FullTick::new();
+    reference.seed();
+    reference.rearm();
+    let fired = reference.told(&reference.tick());
+    let fx = FullTick::new();
+    fx.seed();
+    fx.rearm();
+    fs::write(fx.place.state.join("fleet").join("lifecycle.lock"), format!("{}\n", std::process::id())).expect("lock を置ける");
+    let before = fs::read(fx.json_path()).expect("出力を読める");
+    let out = fx.tick();
+    assert_eq!(fx.wrote().as_deref(), Some("busy"), "記録は busy");
+    assert_eq!(fs::read(fx.json_path()).expect("出力を読める"), before, "出力の bytes は変わらない");
+    assert_eq!(fx.told(&out), fired, "rc と判定行と stderr は (a) の撃つ周と等しい");
+    crate::pipe::clean(&[&reference.life.repo, &reference.life.state, &fx.life.repo, &fx.life.state]);
+}
+
+/// (h) 登録 row の anchor の toy repo の設定に別の在る dir を書いた置き場は、(a) の撃つ形の周も撃たない（Foreign）。設定を置き場の dir に書き直した周は
+/// 撃つ（One）。撃つ形を戻し、tick の target と別の target で設定の無い別の tmp の repo を anchor にした登録 row を足した周は撃たず（Many）、その row の
+/// 退役の行を足した周は撃つ。どの周も rc と判定行は等しい。
+#[test]
+fn seat_tick_full_lifecycle_fires_only_when_the_place_has_one_anchor() {
+    let fx = FullTick::new();
+    fx.seed();
+    fx.rearm();
+    let aged = fx.out().full_at;
+    let elsewhere = fx.place.at("elsewhere");
+    fs::create_dir_all(&elsewhere).expect("別の dir を作れる");
+    fx.name_state(&elsewhere);
+    let (before, mut told) = (fx.calls(), Vec::new());
+    let out = fx.tick();
+    assert_eq!((fx.calls(), fx.recorded(), fx.out().full_at), (before, None, aged.clone()), "別の置き場を名乗る repo の席は撃たない（Foreign）");
+    told.push(fx.told(&out));
+    fx.name_state(&fx.place.state.clone());
+    let out = fx.tick();
+    assert!(fx.fired(before, &aged), "置き場を名乗る周は撃つ（One）: wrote={:?}", fx.wrote());
+    told.push(fx.told(&out));
+    fx.rearm();
+    let (before, aged, record) = (fx.calls(), fx.out().full_at, fx.recorded());
+    let other = tmp();
+    crate::pipe::git(&other, &["init", "-q", "-b", "main"]);
+    let (state, other_anchor) = (fx.place.state.display().to_string(), other.display().to_string());
+    let launch = fixture(&fx.place.dir, "launch-other.txt", "claude\n");
+    let seat = seat_dir_of(&fx.place.state, "ot_ot");
+    fs::create_dir_all(&seat).expect("席の置き場を作れる");
+    fs::write(state_file(&seat), format!("{}\n", stamp_line("idle", "SessionStart", unix_now(), "sid-other"))).expect("打刻を置ける");
+    let added = run_seat(&["register", "--state-dir", &state, "--target", "ot:ot", "--role", "orchestrator", "--account", "acct-other", "--launch", &launch, "--anchor", &other_anchor]);
+    assert_eq!(rc_of(&added), i32::from(RC_OK), "別の anchor の登録 row を足せる: {}", stderr_of(&added));
+    let events = vessel::fleet::store::read_all(&fx.place.state).expect("event log を読める");
+    let latest = vessel::fleet::replay(&events);
+    let anchor = vessel::seat::role::registration_of_target(&latest, TICK_TARGET).map(|row| row.anchor.clone());
+    assert_eq!(anchor, Some(fx.life.repo.display().to_string()), "tick の target の登録 row の anchor は toy のまま");
+    let out = fx.tick();
+    assert_eq!((fx.calls(), fx.recorded(), fx.out().full_at), (before, record, aged.clone()), "anchor が 2 つの置き場は撃たない（Many）");
+    told.push(fx.told(&out));
+    let retired = run_seat(&["retire", "--state-dir", &state, "--target", "ot:ot"]);
+    assert_eq!(rc_of(&retired), i32::from(RC_OK), "退役の行を足せる: {}", stderr_of(&retired));
+    let out = fx.tick();
+    assert!(fx.fired(before, &aged), "退役の後は撃つ: wrote={:?}", fx.wrote());
+    told.push(fx.told(&out));
+    assert!(told.iter().all(|one| one == &told[0]), "どの周も rc と判定行は等しい: {told:?}");
+    crate::pipe::clean(&[&fx.life.repo, &fx.life.state]);
+    fs::remove_dir_all(&other).ok();
+}

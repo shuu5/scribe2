@@ -158,6 +158,41 @@ fn rules_host_tick_one_row_is_read_with_two_absolute_fields() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// (g) `[[tick]]` の任意の key `bd`（台帳 client の絶対 path・9 行目）は読まれ、宣言の数の 1 行は `bd` の無い面と同じ字面・`bd` の無い
+/// 表は `None`。相対 path・空の字面・文字列でない値・未知の key `bdx` は、`bd` の key の行番号で 1 件ずつ断る（rc 1・stdout 0 行）。
+#[test]
+fn rules_host_tick_bd_is_optional_and_an_absolute_path_string() {
+    let dir = host_state_dir(Some(&format!("{HOST_TICK}bd = \"/opt/bin/bd\"\n"))).expect("tmp の state dir を作れる");
+    let state = dir.display().to_string();
+    let outcome = rules_dispatch(&["validate", "--state-dir", &state]);
+    assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
+    assert_eq!(outcome.out, vec![format!("{} accounts=1 plugins=0 launch-args=0 host=present", embedded_validate_line())], "宣言の数の行は bd の無い面と同じ字");
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir.as_path())))
+        .expect("host の面を合わせられる");
+    assert_eq!(manifest.tick().and_then(|tick| tick.bd()), Some("/opt/bin/bd"), "合わせた manifest の bd");
+    std::fs::remove_dir_all(&dir).ok();
+    let plain = host_state_dir(Some(HOST_TICK)).expect("tmp の state dir を作れる");
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(plain.as_path())))
+        .expect("host の面を合わせられる");
+    assert_eq!(manifest.tick().map(|tick| tick.bd()), Some(None), "HOST_TICK の bd は無し");
+    let host = plain.join(vessel::rules::HOST_MANIFEST);
+    for (tail, want) in [
+        ("bd = \"bin/bd\"\n", "rules: host.toml: bd が絶対 path でない: \"bin/bd\" line=9"),
+        ("bd = \"\"\n", "rules: host.toml: bd が絶対 path でない: \"\" line=9"),
+        ("bd = 3\n", "rules: host.toml: bd は文字列でなければならない（実 One(Int(3))） line=9"),
+        ("bdx = \"/x\"\n", "rules: host.toml: 未知の key bdx line=9"),
+    ] {
+        std::fs::write(&host, format!("{HOST_TICK}{tail}")).expect("host の面を書ける");
+        let refused = rules_dispatch(&["validate", "--state-dir", &plain.display().to_string()]);
+        assert_eq!(refused.rc, RC_REFUSED, "{tail:?}: {refused:?}");
+        assert!(refused.out.is_empty(), "{tail:?}: stdout へは書かない");
+        assert_eq!(refused.err, vec![want.to_owned()], "{tail:?}");
+    }
+    std::fs::remove_dir_all(&plain).ok();
+}
+
 /// (2) 2 行目・相対 path・欠けた欄は行番号つきで断る（`host.toml:` の接頭辞・rc 1・stdout 0 行・1 件ずつ）。tracked の面に置いた
 /// 表は 1 表 1 件で断る。
 #[test]

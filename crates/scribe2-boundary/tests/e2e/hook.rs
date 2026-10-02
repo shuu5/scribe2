@@ -2431,7 +2431,7 @@ fn hook_brief_drafts_last_line_carries_the_absolute_drafts_path_without_creating
     assert!(Path::new(&drafts).is_absolute(), "絶対 path: {drafts}");
     assert!(drafts.ends_with("/seat/briefcopy_briefcopy/drafts"), "潰した target の置き場: {drafts}");
     let last = body.last().cloned().unwrap_or_default();
-    assert!(last.contains(&format!("{drafts} の下")), "最後の行が置き場の path を持つ: {last}");
+    assert!(last.contains(&format!("{drafts} の直下（")),"最後の行が置き場の path を持つ: {last}");
     assert!(last.contains("seat.drafts_stale_h"), "rules 行を名指す: {last}");
     assert!(body.iter().take(11).all(|line| !line.contains("drafts")), "置き場は最後の行だけ: {body:?}");
     assert!(!Path::new(&drafts).exists(), "器は起草の置き場の dir を作らない: {drafts}");
