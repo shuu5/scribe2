@@ -14,7 +14,7 @@ use super::super::contract::{class_element, ClassElement};
 use super::super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePolicy, TablePlaces, WriteSetItem};
 use super::super::refuse::{covered, Refuse, NEW_FILE};
 use super::{
-    form_of, read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DERIVED_GOAL, DESIGN_DIR, END,
+    read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DERIVED_GOAL, DESIGN_DIR, END,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
 use crate::hook::command::denied_in;
@@ -622,6 +622,7 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
     };
     let docs = design_docs(&tracked, &items);
     let (mut rows, mut found) = (0_usize, Vec::new());
+    let defects = super::place_defects(repo, &tracked, &docs);
     let predicted = collide::predict(repo, &docs, &ctx);
     let mut places = Places { declared: 0, outside: Some(Vec::new()), predicted };
     for doc in &docs {
@@ -629,6 +630,7 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
         rows = rows.saturating_add(count);
         found.extend(judged.into_iter().map(|finding| ((*doc).clone(), finding)));
     }
+    found.extend(defects);
     let untracked = untracked_files(repo, &items).map(|paths| design_docs(&paths, &items).into_iter().cloned().collect());
     Ok(Judged { docs: docs.len(), rows, found, untracked, entrance, places })
 }
@@ -638,15 +640,8 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
 /// path の列をこれで絞る・設計 contract-source.md §69 形 5）。項目は末尾 `/` なら dir の直下で `form_of` が読める path、
 /// ほかは等しい path。項目 0 の返りは既定だけ。
 pub(crate) fn design_docs<'a>(paths: &'a [String], items: &[String]) -> Vec<&'a String> {
-    let in_item = |path: &str, item: &String| {
-        if item.ends_with('/') {
-            path.strip_prefix(item.as_str()).is_some_and(|rest| !rest.contains('/')) && form_of(path).is_ok()
-        } else {
-            path == item
-        }
-    };
     let default = |path: &str| path.strip_prefix(DESIGN_DIR).is_some_and(|rest| !rest.contains('/') && rest.ends_with(".md"));
-    paths.iter().filter(|path| default(path) || items.iter().any(|item| in_item(path, item))).collect()
+    paths.iter().filter(|path| default(path) || items.iter().any(|item| super::in_item(path, item))).collect()
 }
 
 /// HEAD の宣言の契約表の置き場の項目（key を書かない宣言は空・宣言を読めない周は理由）。

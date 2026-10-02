@@ -26,11 +26,13 @@
 
 use super::closure::{ClosureError, Source};
 use super::contract::{Class, CLASS_ROW};
+use super::declaration::{TablePlaces, DECL_FILE};
 use super::refuse::{Evidence, Refuse};
 use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
 use crate::name::NAME;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::collections::BTreeSet;
+use std::path::Path;
 
 mod check;
 mod parse;
@@ -374,6 +376,24 @@ pub enum TableError {
         /// 導いたクラス。
         class: Class,
     },
+    /// 宣言した契約表の置き場の項目が tracked の path に 1 つも当たらない（dir 項目は直下に `form_of` が読める tracked file が 0 本・
+    /// file 項目は tracked に無い・`.vessel.toml` の key の行・設計 contract-source.md §69 形 5・行 cf）。
+    PlaceEmpty {
+        /// 行番号（key が書かれていた行）。
+        line: u64,
+        /// 当たらなかった項目の字面。
+        item: String,
+    },
+    /// 列挙した doc の file 名の stem が重なる（列挙の順で 2 本目以降の doc を名指す・行 0・行 cf）。契約 id は stem と行 id の組で、
+    /// doc id は一意でなければならない。
+    DocIdDuplicate {
+        /// 行番号（file 全体の 0）。
+        line: u64,
+        /// 重なった 2 本目以降の doc（repo 相対）。
+        doc: String,
+        /// 先に列挙された相手の doc（repo 相対）。
+        other: String,
+    },
 }
 
 impl TableError {
@@ -396,7 +416,9 @@ impl TableError {
             | Self::TargetForm { line, .. }
             | Self::TeethOutsideWriteSet { line, .. }
             | Self::GrowthForm { line, .. }
-            | Self::ClassUndeclared { line, .. } => line,
+            | Self::ClassUndeclared { line, .. }
+            | Self::PlaceEmpty { line, .. }
+            | Self::DocIdDuplicate { line, .. } => line,
         }
     }
 
@@ -420,6 +442,8 @@ impl TableError {
             Self::TeethOutsideWriteSet { .. } => "teeth-outside-write-set",
             Self::GrowthForm { .. } => "growth-form",
             Self::ClassUndeclared { .. } => "class-undeclared",
+            Self::PlaceEmpty { .. } => "place-empty",
+            Self::DocIdDuplicate { .. } => "doc-id-duplicate",
         }
     }
 
@@ -460,6 +484,12 @@ impl TableError {
                 "verify {verify:?} が rules 行 {CLASS_ROW} の語列 {sequence} に当たりクラス {} を導くが、行の classes に無い",
                 class.as_str()
             ),
+            Self::PlaceEmpty { ref item, .. } => {
+                format!("契約表の置き場 {item} が tracked の path に当たらない（dir は直下に表と読める file が 0 本・file は tracked に無い）")
+            }
+            Self::DocIdDuplicate { ref doc, ref other, .. } => {
+                format!("{doc} の file 名の stem が {other} と重なる（doc id は一意でなければならない）")
+            }
         }
     }
 
@@ -473,10 +503,12 @@ impl TableError {
 
     /// 証拠の在り処（**網羅の match 1 本**・設計 docs/design/dispatcher.md §27 形 3）: 表の区間・欄の形・id・節・要件・verify の形・
     /// 依存・約束の行・的・見込み・クラスは行の字と規則だけで決まり、外形の名と歯の置き場は本文の読み手が解き、読めない周は
-    /// 測れない（置き場と同じ側に倒す）。
+    /// 測れない（置き場と同じ側に倒す）。置き場の欠陥は名指した path の列（place-empty は項目・doc-id-duplicate は 2 本の doc）。
     pub(crate) fn evidence(&self) -> Evidence {
         match *self {
             Self::SurfaceUnknown { .. } | Self::TeethOutsideWriteSet { .. } => Evidence::Name,
+            Self::PlaceEmpty { ref item, .. } => Evidence::Files(vec![item.clone()]),
+            Self::DocIdDuplicate { ref doc, ref other, .. } => Evidence::Files(vec![doc.clone(), other.clone()]),
             Self::Unreadable { .. } => Evidence::Place,
             Self::RegionMissing { .. }
             | Self::RegionDuplicate { .. }
@@ -494,6 +526,39 @@ impl TableError {
             | Self::ClassUndeclared { .. } => Evidence::Row,
         }
     }
+}
+
+/// 置き場の項目 `item` が path を含むか（末尾 `/` は dir の直下で `form_of` が読める path・ほかは等しい path）。契約表の doc の
+/// 列（[`design_docs`]）と置き場の検査（[`place_defects`]）が同じこの 1 本で測る。
+fn in_item(path: &str, item: &str) -> bool {
+    if item.ends_with('/') {
+        path.strip_prefix(item).is_some_and(|rest| !rest.contains('/')) && form_of(path).is_ok()
+    } else {
+        path == item
+    }
+}
+
+/// 契約表の置き場の検査（設計 contract-source.md §69 形 5・行 cf）: HEAD の宣言の項目のうち tracked の path に 1 つも当たらない項目
+/// を `.vessel.toml` の key の行で 1 件ずつ、列挙した doc の file 名の stem の重なりを列挙の順で 2 本目以降の doc の行 0 で名指す
+/// （既定の置き場の 0 本は名指さない・受付の検査はこれを撃たない＝repo 全体の事実）。宣言を読めない周は項目 0 と同じ（読めなさは
+/// 呼び手が先に名指している）。
+fn place_defects(repo: &Path, tracked: &[String], docs: &[&String]) -> Vec<(String, Finding)> {
+    let mut found = Vec::new();
+    if let TablePlaces::Declared { items, line } = TablePlaces::at(repo, "HEAD") {
+        for item in items.iter().filter(|item| !tracked.iter().any(|path| in_item(path, item))) {
+            let error = TableError::PlaceEmpty { line, item: item.clone() };
+            found.push((DECL_FILE.to_owned(), Finding::table(error)));
+        }
+    }
+    let stem = |doc: &str| Path::new(doc).file_stem().map(std::ffi::OsStr::to_owned);
+    for (at, doc) in docs.iter().enumerate() {
+        let earlier = docs.iter().take(at).find(|other| stem(other) == stem(doc));
+        if let Some(other) = earlier {
+            let error = TableError::DocIdDuplicate { line: 0, doc: (*doc).clone(), other: (*other).clone() };
+            found.push(((*doc).clone(), Finding::table(error)));
+        }
+    }
+    found
 }
 
 /// 読めない 1 件。
@@ -679,6 +744,8 @@ mod tests {
         "teeth-outside-write-set",
         "growth-form",
         "class-undeclared",
+        "place-empty",
+        "doc-id-duplicate",
     ];
 
     /// 宣言順に 1 つずつ組んだ全 variant（行番号は 1 から順）。
@@ -702,6 +769,8 @@ mod tests {
             TableError::TeethOutsideWriteSet { line: 15, id: text("out"), files: vec![text("tests/a.rs"), text("tests/b.rs")] },
             TableError::GrowthForm { line: 16, item: text("src/a.md:5"), reason: text("r") },
             TableError::ClassUndeclared { line: 17, verify: text("git push o m"), sequence: text("git push"), class: Class::Publish },
+            TableError::PlaceEmpty { line: 18, item: text("tables/none.toml") },
+            TableError::DocIdDuplicate { line: 19, doc: text("docs/design/toy.md"), other: text("contracts/toy.toml") },
         ]
     }
 
@@ -711,7 +780,7 @@ mod tests {
         let found = samples();
         let names: Vec<&str> = found.iter().map(TableError::as_str).collect();
         assert_eq!(names, TABLE_ERRORS, "名前の slice は宣言順（母集団 {} 値）", TABLE_ERRORS.len());
-        assert_eq!(TABLE_ERRORS.len(), 17, "母集団は 17 値");
+        assert_eq!(TABLE_ERRORS.len(), 19, "母集団は 19 値");
         for (index, error) in found.iter().enumerate() {
             assert_eq!(error.line(), index as u64 + 1, "{} は行番号を持つ", error.as_str());
             assert!(!error.reason().is_empty() && !error.reason().contains('\n'), "{} の理由は 1 行", error.as_str());
@@ -732,18 +801,28 @@ mod tests {
         assert!(target.contains("\"src/a.rs\"") && target.ends_with(": r"), "的の字面と理由を名乗る: {target}");
     }
 
-    /// 在り処は 17 variant の母集団で 1 つずつ決まり（設計 dispatcher.md §27 形 3・宣言順）、契約表の欠陥の断りは同じ値を
+    /// 置き場の欠陥の 2 語の理由は、当たらなかった項目と重なった 2 本の doc の path を名乗る。
+    #[test]
+    fn table_place_defects_name_their_paths_in_the_reason() {
+        let found = samples();
+        let place = found.get(17).map(TableError::reason).unwrap_or_default();
+        assert!(place.contains("tables/none.toml"), "当たらない項目を名乗る: {place}");
+        let twice = found.get(18).map(TableError::reason).unwrap_or_default();
+        assert!(twice.contains("docs/design/toy.md") && twice.contains("contracts/toy.toml"), "重なった 2 本の doc を名乗る: {twice}");
+    }
+
+    /// 在り処は 19 variant の母集団で 1 つずつ決まり（設計 dispatcher.md §27 形 3・宣言順）、契約表の欠陥の断りは同じ値を
     /// 受付の側（`Refuse::ContractTable`）へ渡す。本文の読み手が解くのは外形の名と歯の置き場の 2 つ・読めない周は測れない。
     #[test]
-    fn pipe_table_evidence_is_decided_once_for_each_of_the_17_variants() {
+    fn pipe_table_evidence_is_decided_once_for_each_of_the_19_variants() {
         use crate::pipe::refuse::Refuse;
         let found: Vec<&str> = samples().iter().map(|error| error.evidence().as_str()).collect();
         let want = [
             "row", "row", "place", "row", "row", "row", "row", "row", "row", "row", "name", "row", "row", "row", "name", "row",
-            "row",
+            "row", "files", "files",
         ];
         assert_eq!(found, want, "母集団 {} variant の在り処（宣言順）", TABLE_ERRORS.len());
-        assert_eq!(found.len(), TABLE_ERRORS.len(), "17 variant すべてに 1 つ");
+        assert_eq!(found.len(), TABLE_ERRORS.len(), "19 variant すべてに 1 つ");
         for error in samples() {
             assert_eq!(Refuse::ContractTable(error.clone()).evidence(), error.evidence(), "{} は受付の側も同じ値", error.as_str());
         }
