@@ -2923,8 +2923,8 @@ fn pipe_index_declared_reads_the_two_keys_without_defects() {
     let text = declared_text(".vessel.toml");
     assert!(text.contains("ADR-0105") && text.contains("reverse-index.md §4"), "コメントは ADR-0105 と §4 を名指す");
     let keys: Vec<&str> = text.lines().filter(|line| !line.starts_with('#')).filter_map(|line| line.split(" = ").next()).collect();
-    let order = ["schema", "allowed-commands", "common-verify", "detection-verify", "remote", "close-check", "row-review", "index-scip", "index-roles"];
-    assert_eq!(keys, order, "ほかの key の順は変わらず、索引の 2 key は末尾");
+    let order = ["schema", "allowed-commands", "common-verify", "detection-verify", "remote", "close-check", "row-review", "index-scip", "index-roles", "teeth-check"];
+    assert_eq!(keys, order, "ほかの key の順は変わらず、索引の 2 key の後ろの末尾に teeth-check");
     for line in [
         "allowed-commands = [\"cargo\", \"git\"]",
         "common-verify = [\"cargo xtask flip-check --base {base}\", \"cargo nextest run --workspace --no-tests=fail --no-fail-fast\",\"cargo clippy --workspace --all-targets -- -D warnings\", \"cargo xtask check\", \"cargo deny check bans licenses sources\"]",

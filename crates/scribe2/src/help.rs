@@ -402,7 +402,7 @@ pub const TABLE: &[Entry] = &[
             "every table under the repo and prints its findings; schema prints the fields a row",
             "may carry. CI runs check on every change.",
         ],
-        form: "{NAME} contracts <check --repo R [--rules PATH] [--verbose]|schema>",
+        form: "{NAME} contracts <check --repo R [--rules PATH] [--base SHA] [--verbose]|schema>",
         subcommands: &[
             ("check", "Check every contract table under --repo R and print the findings."),
             ("schema", "Print the fields of a contract row."),
@@ -410,9 +410,10 @@ pub const TABLE: &[Entry] = &[
         flags: &[
             ("--repo R", "Repo root whose design docs are read (check)."),
             ("--rules PATH", "Rules manifest read instead of the embedded one."),
+            ("--base SHA", "Base commit; rows added or re-worded since it need numbered items and done-teeth."),
             ("--verbose", "Print the measured facts along with the findings."),
         ],
-        examples: &["{NAME} contracts check --repo .", "{NAME} contracts schema"],
+        examples: &["{NAME} contracts check --repo .", "{NAME} contracts check --repo . --base SHA", "{NAME} contracts schema"],
         see: &["docs/design/contract-source.md"],
     },
     Entry {

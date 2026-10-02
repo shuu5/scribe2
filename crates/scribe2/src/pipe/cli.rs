@@ -618,8 +618,11 @@ fn queued(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
 
 /// `contracts` の使い方（設計 contract-source.md §2「表の検査」）。
 pub fn contracts_usage() -> String {
-    format!("usage: {NAME} contracts <check --repo R [--rules PATH] [{VERBOSE_FLAG}]|schema>")
+    format!("usage: {NAME} contracts <check --repo R [--rules PATH] [{BASE_FLAG} SHA] [{VERBOSE_FLAG}]|schema>")
 }
+
+/// `contracts check` の値つき旗: base の commit（変わった行に歯の欄を求める周の物差し・設計 contract-source.md §66 形 3）。
+const BASE_FLAG: &str = "--base";
 
 /// `contracts check` の値なし旗: Declared 行の歯の置き場の検出線に当たった行を 1 行ずつ出す（設計 contract-source.md §45）。
 const VERBOSE_FLAG: &str = "--verbose";
@@ -635,7 +638,7 @@ pub fn contracts(args: &[String]) -> Outcome {
         // クラスの語列表（設計 contract-source.md §48 の 5）: 行が無い・不発効・列でない周は行 id を名指して断る（空で通さない）。
         let classes = list_row(&manifest, CLASS_ROW)?;
         let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied, classes: &classes };
-        Ok(super::table::check_repo(&repo, &ceiling, present(args, VERBOSE_FLAG)))
+        Ok(super::table::check_repo(&repo, &ceiling, present(args, VERBOSE_FLAG), flag(args, BASE_FLAG)?))
     };
     match args.first().map(String::as_str) {
         Some("schema") if args.len() == 1 => Outcome::ok(super::table::render_schema()),

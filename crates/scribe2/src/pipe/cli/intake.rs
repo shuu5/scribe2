@@ -1299,7 +1299,7 @@ mod tests {
             tracked: vec![full.to_owned()],
             sources: vec![Source { path: full.to_owned(), body: Ok(body) }],
             snapshots: Vec::new(),
-            facts: TableFacts { allowed: Vec::new(), denied: Vec::new(), requirements: String::new(), crate_roots: vec!["crates/".to_owned()] },
+            facts: TableFacts { allowed: Vec::new(), denied: Vec::new(), requirements: String::new(), crate_roots: vec!["crates/".to_owned()], teeth_check: false },
             requirements: Ok(BTreeSet::new()),
             declared: Ok(Vec::new()),
             classes: Vec::new(),

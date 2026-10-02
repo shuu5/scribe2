@@ -13,6 +13,7 @@ use super::super::closure::{closure, surface_closure, teeth_places, unresolved_n
 use super::super::contract::{class_element, ClassElement};
 use super::super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePolicy, TablePlaces, WriteSetItem};
 use super::super::refuse::{covered, Refuse, NEW_FILE};
+use super::changed::{self, BaseAt, Gap};
 use super::{
     read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DERIVED_GOAL, DESIGN_DIR, END,
 };
@@ -412,8 +413,10 @@ fn is_requirement(text: &str) -> bool {
 /// に出し、当たった行は `verbose` の周だけ判定行の前に 1 行ずつ出す（§45・行 av）。当たった行は findings の
 /// `teeth-outside-write-set` の 1 件ずつでもある（rc 1・欄の行数と findings の件数は一致する・§45 行 aw）。新しい歯の
 /// 接頭辞の衝突の予想（§54・行 bf）も同じ行の 1 件に併せ、`verbose` の行の末尾に予想の出所と直し方を足す。
-pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>, verbose: bool) -> Outcome {
-    let judged = match judge_repo(repo, ceiling) {
+/// `base`（`--base <sha>`）を渡した周だけ、base から足された行と done の字が変わった行に宣言 `teeth-check` の要否と欄の在りかを照らす
+/// （§66 形 3・[`changed_findings`]）。base の commit を読めない周は理由だけを stderr へ出して rc 2。
+pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>, verbose: bool, base: Option<&str>) -> Outcome {
+    let judged = match judge_repo(repo, ceiling, base) {
         Ok(found) => found,
         Err(stopped) => return stopped,
     };
@@ -564,7 +567,7 @@ pub(crate) struct Located {
 /// （設計 pipeline.md §34・追随の後に便の木へ撃つ口）。tracked file の一覧か宣言を読めない周は `None`
 /// （読めないを「findings 0」に読み替えない・NFR4）。
 pub(crate) fn repo_findings(repo: &Path, ceiling: &Ceiling<'_>) -> Option<Vec<Located>> {
-    let judged = judge_repo(repo, ceiling).ok()?;
+    let judged = judge_repo(repo, ceiling, None).ok()?;
     let mut located = Vec::new();
     for (doc, finding) in judged.found {
         let rows = read(repo, &doc).ok().and_then(|text| read_table(&doc, &text).ok()).map(|(rows, _)| rows);
@@ -593,7 +596,7 @@ struct Judged {
 
 /// tracked な `docs/design/*.md` の区間を全行検査する（[`check_repo`] と [`repo_findings`] の共通の 1 本）。判定できない
 /// 周（tracked file の一覧か宣言を読めない）は理由の Outcome（rc 2）。
-fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
+fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>, base: Option<&str>) -> Result<Judged, Outcome> {
     let Some(tracked) = tracked_files(repo) else {
         let reason = format!("contracts: {} の tracked file を読めない（git repo でない）", repo.display());
         return Err(Outcome::failed_line(RC_BROKEN, reason));
@@ -606,6 +609,7 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
         Ok(found) => found,
         Err(reason) => return Err(Outcome::failed_line(RC_BROKEN, format!("contracts: {reason}"))),
     };
+    let at = base.map(|sha| BaseAt::open(repo, sha)).transpose().map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("contracts: {reason}")))?;
     let sources = read_all(repo, &tracked, ".rs");
     let snapshots = read_all(repo, &tracked, ".snap");
     let requirements = read(repo, &facts.requirements).and_then(|text| requirement_ids(&facts.requirements, &text));
@@ -627,7 +631,11 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
     let predicted = collide::predict(repo, &docs, &ctx);
     let mut places = Places { declared: 0, outside: Some(Vec::new()), predicted };
     for doc in &docs {
-        let (count, judged) = judge_doc(repo, doc, &ctx, &mut places);
+        let (count, mut judged) = judge_doc(repo, doc, &ctx, &mut places);
+        if let Some(at) = at.as_ref() {
+            judged.extend(changed_findings(repo, doc, &ctx, at, facts.teeth_check));
+            judged.sort_by_key(|finding| finding.line);
+        }
         rows = rows.saturating_add(count);
         found.extend(judged.into_iter().map(|finding| ((*doc).clone(), finding)));
     }
@@ -689,6 +697,39 @@ fn judge_doc(repo: &Path, doc: &str, ctx: &Context<'_>, places: &mut Places) -> 
         found.sort_by_key(|finding| finding.line);
     }
     (rows, found)
+}
+
+/// 変わった行（base の同じ doc に同じ id の行が無い行・在って done の字が base と違う行・[`changed::changed`]）への照らし（設計 §66 形 3・
+/// `--base` を渡した周だけ）: 宣言 `teeth-check` が true なら番号つきの項目と欄 done-teeth を求め（[`TableError::DoneUnnumbered`] /
+/// [`TableError::DoneTeethMissing`]）、欄を持つ行は在りかの照らし（形 2 の (e)・base の本文）も撃つ。読めない doc は [`judge_doc`] が名指し済み。
+fn changed_findings(repo: &Path, doc: &str, ctx: &Context<'_>, at: &BaseAt<'_>, teeth_check: bool) -> Vec<Finding> {
+    let Some(rows) = read(repo, doc).ok().and_then(|text| read_table(doc, &text).ok()).map(|(rows, _)| rows) else {
+        return Vec::new();
+    };
+    let before = match at.rows(doc) {
+        Ok(found) => found,
+        Err(reason) => return vec![Finding::table(unreadable(0, &reason))],
+    };
+    let now: Vec<(&str, &str)> = rows.iter().map(|row| (row.id.as_str(), row.done.as_str())).collect();
+    let mut found = Vec::new();
+    for row in changed::changed(&now, before.as_deref()).into_iter().filter_map(|index| rows.get(index)) {
+        let gaps = if teeth_check { changed::gaps(&row.done, &row.done_teeth) } else { Vec::new() };
+        found.extend(gaps.into_iter().map(|gap| match gap {
+            Gap::Unnumbered => Finding::table(TableError::DoneUnnumbered { line: row.line }),
+            Gap::Missing => Finding::table(TableError::DoneTeethMissing { line: row.line }),
+        }));
+        if row.done_teeth.is_empty() {
+            continue;
+        }
+        match at.tree() {
+            Ok((tracked, sources)) => {
+                let base = Base { sources, snapshots: &[], tracked, core_crate: NAME, roots: ctx.crate_roots };
+                found.extend(super::done_teeth_located_findings(row, &base));
+            }
+            Err(reason) => found.push(Finding::table(unreadable(row.line, reason))),
+        }
+    }
+    found
 }
 
 /// 読めた doc 1 本の本文の行数と findings（契約の行の検査と約束の行の検査を行番号の順に合わせる）。
@@ -1264,8 +1305,8 @@ mod tests {
         let repo = place_repo("place", &place_doc());
         let commands = place_commands();
         let ceiling = Ceiling { row: "runner.allowed_commands", commands: &commands, denied: &[], classes: &[] };
-        let quiet = check_repo(&repo, &ceiling, false);
-        let loud = check_repo(&repo, &ceiling, true);
+        let quiet = check_repo(&repo, &ceiling, false, None);
+        let loud = check_repo(&repo, &ceiling, true, None);
         let _ = std::fs::remove_dir_all(&repo);
         let finding = quiet.out.first().cloned().unwrap_or_default();
         let judgement = "contracts check: docs=1 rows=3 untracked=0 findings=1 place-out=1/3";
@@ -1286,7 +1327,7 @@ mod tests {
         let repo = place_repo("place-finding", &doc);
         let commands = place_commands();
         let ceiling = Ceiling { row: "runner.allowed_commands", commands: &commands, denied: &[], classes: &[] };
-        let checked = check_repo(&repo, &ceiling, false);
+        let checked = check_repo(&repo, &ceiling, false, None);
         let located = repo_findings(&repo, &ceiling);
         let _ = std::fs::remove_dir_all(&repo);
         let heads: Vec<usize> = doc.lines().enumerate().filter(|(_, line)| *line == "[[contract]]").map(|(at, _)| at + 1).collect();
