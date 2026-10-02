@@ -9,9 +9,13 @@ use super::ruling::{AnswerError, BindError};
 use super::tick::install::Verb;
 use crate::cli_args::{self, Allowed};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::fleet::lifecycle_mark::{add_mark, read_ledger, Kind, Ledger, Mark, Value};
 use crate::fleet::select::Model;
+use crate::fleet::store::LockPolicy;
+use crate::invocation::Invocation;
 use crate::rules::RuleError;
 use std::path::Path;
+use std::process::Stdio;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
@@ -399,8 +403,12 @@ fn ruling_bind(rest: &[String], state_dir: &Path) -> Outcome {
     };
     let bind = super::ruling::Bind { repo: Path::new(repo), state_dir, question, utterance, bd: bd.unwrap_or(crate::ledger::DEFAULT_BD) };
     let named = |head: &str, tail: &str| format!("seat ruling: {head} {tail}question={question} utterance={utterance}");
+    let before = read_ledger(bind.repo);
     match super::ruling::bind(&bind) {
-        Ok(done) => Outcome::ok_line(format!("ruling: id={} question={question} utterance={utterance} channel={}", done.id, done.channel.as_str())),
+        Ok(done) => {
+            rewrite_later(&bind, bd, before);
+            Outcome::ok_line(format!("ruling: id={} question={question} utterance={utterance} channel={}", done.id, done.channel.as_str()))
+        }
         Err(BindError::Refused(reason)) => Outcome::failed_line(RC_REFUSED, named("refused", &format!("reason={} ", reason.as_str()))),
         Err(BindError::LedgerUnreadable) => Outcome::failed_line(RC_REFUSED, named("refused", "reason=ledger-unreadable ")),
         Err(BindError::LogUnreadable(lines)) => Outcome::failed(RC_BROKEN, lines),
@@ -426,11 +434,36 @@ fn ruling_answer(rest: &[String], state_dir: &Path) -> Outcome {
     };
     let bind = super::ruling::Bind { repo: Path::new(repo), state_dir, question, utterance: "", bd: bd.unwrap_or(crate::ledger::DEFAULT_BD) };
     let named = |head: &str, tail: &str| format!("seat ruling: {head} {tail}question={question}");
+    let before = read_ledger(bind.repo);
     match super::ruling::answer(&bind, &words) {
-        Ok(id) => Outcome::ok_line(id),
+        Ok(id) => {
+            rewrite_later(&bind, bd, before);
+            Outcome::ok_line(id)
+        }
         Err(AnswerError::Refused(reason)) => Outcome::failed_line(RC_REFUSED, named("refused", &format!("reason={reason} "))),
         Err(AnswerError::Unwritten) => Outcome::failed_line(RC_BROKEN, named("failed", "stage=utterance ")),
         Err(AnswerError::Partial(ts)) => Outcome::failed_line(RC_REFUSED, named("partial", &format!("utterance={ts} "))),
+    }
+}
+
+/// 結びと答えの口が `Ok` で返った周に、局面の出力の全部の書き直し（`fleet lifecycle write`）を自分の binary の子として切り離して起こす
+/// （設計 case-lifecycle.md §21・待たない・入出力は捨てる・書く前の台帳の印を読めなかった周は起こさない）。起こせなかった周は書く前の
+/// 台帳の印を値にした `ledger-gate` の印を 1 つ足す（出力の無い置き場には付かない）。口の rc・stdout・stderr は変えない。
+fn rewrite_later(bind: &super::ruling::Bind<'_>, bd: Option<&str>, before: Option<Ledger>) {
+    let Some(before) = before else {
+        return;
+    };
+    let mut child = Invocation::new(crate::pipe::dispatch::myself());
+    child.args(["fleet", "lifecycle", "write", "--state-dir"]).arg(bind.state_dir).arg("--repo").arg(bind.repo);
+    if let Some(bd) = bd {
+        child.args(["--bd", bd]);
+    }
+    if child.process_group(0).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().is_ok() {
+        return;
+    }
+    if let Ok(policy) = LockPolicy::embedded() {
+        let at = crate::fleet::cli::format_utc(crate::seat::state::now_secs());
+        let _ = add_mark(bind.state_dir, &Mark { kind: Kind::LedgerGate, at, value: Value::Ledger(before) }, policy);
     }
 }
 
