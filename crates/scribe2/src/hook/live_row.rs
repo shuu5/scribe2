@@ -255,6 +255,182 @@ pub(crate) fn git_segment(seg: &Walked, root: &Path) -> Option<GitSegment> {
     Some(GitSegment { verb, dir, resolved: ok, rest: after })
 }
 
+/// 写しの行き先の閉じた 3 形（設計 §25 約束 1）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Dest {
+    /// literal な位置の語を作業 dir から解いて字面で畳んだ path（絶対 path の語は作業 dir が解けなくても path）。
+    Path(PathBuf),
+    /// 行き先の語を持たない clone＝作業 dir の直下（作業 dir の path）。
+    Under(PathBuf),
+    /// 字面で解けない。
+    Unresolved,
+}
+
+/// 写しを作る segment 1 つ（動詞の語 `worktree-add` / `clone` と行き先）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Place {
+    /// 動詞の語。
+    pub(crate) verb: &'static str,
+    /// 行き先。
+    pub(crate) to: Dest,
+}
+
+/// 動詞ごとの flag の閉じた 2 列（git 2.43 の `-h` の字・値を取る列と取らない列・長い名は `--` を除いた名）。
+struct Flags {
+    /// 値を取る長い名。
+    value_long: &'static [&'static str],
+    /// 値を取る 1 字。
+    value_short: &'static str,
+    /// 値を取らない長い名。
+    plain_long: &'static [&'static str],
+    /// 値を取らない 1 字。
+    plain_short: &'static str,
+}
+
+/// `git worktree add` の flag。
+const WORKTREE_ADD: Flags = Flags {
+    value_long: &["reason"],
+    value_short: "bB",
+    plain_long: &["force", "orphan", "detach", "checkout", "lock", "quiet", "track", "guess-remote"],
+    plain_short: "fdq",
+};
+
+/// `git clone` の flag。
+const CLONE: Flags = Flags {
+    value_long: &[
+        "jobs", "template", "reference", "reference-if-able", "origin", "branch", "upload-pack", "depth", "shallow-since",
+        "shallow-exclude", "separate-git-dir", "config", "server-option", "filter", "bundle-uri",
+    ],
+    value_short: "jobuc",
+    plain_long: &[
+        "verbose", "quiet", "progress", "reject-shallow", "checkout", "bare", "mirror", "local", "hardlinks", "shared",
+        "recurse-submodules", "recursive", "dissociate", "single-branch", "tags", "shallow-submodules", "ipv4", "ipv6",
+        "also-filter-submodules", "remote-submodules", "sparse",
+    ],
+    plain_short: "vqnls46",
+};
+
+/// `=<値>` の続け書きを持てる値を取らない長い名。
+const OPTIONAL_VALUE: [&str; 2] = ["recurse-submodules", "recursive"];
+
+/// 写しの行き先の読み手（**pure な 1 関数**・設計 §25 約束 1）: [`git_segments`] の上で、動詞が `worktree` で次の語が `add` の
+/// segment と動詞が `clone` の segment ごとに（動詞の語・行き先）を返す。`-h` / `--help` を持つ segment・他の動詞・頭の語が git
+/// でない segment は読まない。
+pub(crate) fn copy_places(command: &str, cwd: &Path, root: &Path) -> Vec<Place> {
+    git_segments(command, cwd, root).iter().filter_map(place_of).collect()
+}
+
+/// git の segment 1 つを写しの segment として読む（写しを作らない・表示だけの segment は `None`）。
+fn place_of(seg: &GitSegment) -> Option<Place> {
+    let (verb, flags, nth, words) = match (seg.verb.as_str(), seg.rest.split_first()) {
+        ("worktree", Some((add, words))) if add == "add" => ("worktree-add", &WORKTREE_ADD, 0_usize, words),
+        ("clone", _) => ("clone", &CLONE, 1_usize, seg.rest.as_slice()),
+        _ => return None,
+    };
+    if words.iter().any(|word| word == "-h" || word == "--help") {
+        return None;
+    }
+    let to = match positionals(words, flags) {
+        None => Dest::Unresolved,
+        Some(found) => match found.get(nth) {
+            Some(word) => path_of(word, seg),
+            None if verb == "clone" => under(seg),
+            None => Dest::Unresolved,
+        },
+    };
+    Some(Place { verb, to })
+}
+
+/// 位置の語の行き先（literal でない・相対で作業 dir が解けない周は解けない）。
+fn path_of(word: &str, seg: &GitSegment) -> Dest {
+    let target = Path::new(word);
+    match (literal(word), target.is_absolute(), seg.resolved) {
+        (false, _, _) | (true, false, false) => Dest::Unresolved,
+        (true, true, _) => Dest::Path(normalized(target)),
+        (true, false, true) => Dest::Path(normalized(&seg.dir.join(target))),
+    }
+}
+
+/// 行き先の語を持たない clone の行き先（作業 dir の直下・作業 dir が解けなければ解けない）。
+fn under(seg: &GitSegment) -> Dest {
+    match seg.resolved {
+        true => Dest::Under(normalized(&seg.dir)),
+        false => Dest::Unresolved,
+    }
+}
+
+/// redirect の語か（頭に数字が在ってよく、続く字が `<` か `>` で始まる語）。
+fn is_redirect(word: &str) -> bool {
+    word.trim_start_matches(|found: char| found.is_ascii_digit()).starts_with(['<', '>'])
+}
+
+/// 語の途中（頭の数字の後ろでない所）に `<` か `>` を持つ語か。
+fn mid_redirect(word: &str) -> bool {
+    !is_redirect(word) && word.contains(['<', '>'])
+}
+
+/// 動詞の後ろの語から位置の語を取り出す（redirect の語は数えず、演算子だけの語は次の語も飛ばし、`--` の後ろは全部位置の語・
+/// flag は閉じた 2 列で読む）。読めない形（知らない flag・語の途中の redirect）は `None`。
+fn positionals<'a>(words: &'a [String], flags: &Flags) -> Option<Vec<&'a str>> {
+    if words.iter().any(|word| mid_redirect(word)) {
+        return None;
+    }
+    let (mut found, mut at, mut rest) = (Vec::new(), 0_usize, false);
+    while let Some(word) = words.get(at) {
+        at = at.saturating_add(1);
+        if is_redirect(word) {
+            let operator = word.chars().all(|ch| ch.is_ascii_digit() || ch == '<' || ch == '>');
+            at = at.saturating_add(usize::from(operator));
+        } else if rest || !word.starts_with('-') {
+            found.push(word.as_str());
+        } else if word == "--" {
+            rest = true;
+        } else {
+            let extra = flag_extra(word, flags)?;
+            if extra > 0 {
+                words.get(at)?;
+            }
+            at = at.saturating_add(extra);
+        }
+    }
+    Some(found)
+}
+
+/// flag の語が次の語を値として取る数（0 か 1）。閉じた 2 列の外・`-` だけの語は `None`。
+fn flag_extra(word: &str, flags: &Flags) -> Option<usize> {
+    match word.strip_prefix("--") {
+        Some(long) => long_extra(long, flags),
+        None => short_extra(word.strip_prefix('-').filter(|cluster| !cluster.is_empty())?, flags),
+    }
+}
+
+/// 長い flag（`--` を除いた語）が次の語を値として取る数（`--<名>=<値>` は 0・`--no-<名>` は取らない側）。
+fn long_extra(long: &str, flags: &Flags) -> Option<usize> {
+    let (name, inline) = match long.split_once('=') {
+        Some((name, _)) => (name, true),
+        None => (long, false),
+    };
+    if flags.value_long.contains(&name) {
+        return Some(usize::from(!inline));
+    }
+    let (base, negated) = name.strip_prefix("no-").map_or((name, false), |rest| (rest, true));
+    let known = flags.value_long.contains(&base) || flags.plain_long.contains(&base);
+    (known && (!inline || (!negated && OPTIONAL_VALUE.contains(&base)))).then_some(0)
+}
+
+/// 1 字の flag の束ね（左から読み、値を取る字に当たればその字の後ろの残りか次の語を値とする）が次の語を値として取る数。
+fn short_extra(cluster: &str, flags: &Flags) -> Option<usize> {
+    for (at, found) in cluster.char_indices() {
+        if flags.value_short.contains(found) {
+            return Some(usize::from(cluster.get(at.saturating_add(found.len_utf8())..)?.is_empty()));
+        }
+        if !flags.plain_short.contains(found) {
+            return None;
+        }
+    }
+    Some(0)
+}
+
 /// `cd` / `pushd` の後ろの作業 dir（引数が literal なら前の dir から解き、でなければ解けなくする）。
 fn moved(dir: &Path, resolved: bool, rest: &[String]) -> (PathBuf, bool) {
     let target = rest.iter().find(|word| !(word.starts_with('-') && word.len() > 1));
@@ -603,7 +779,7 @@ pub(crate) fn deny_sentence(hits: &[Hit], about: Option<&str>, state_dir: &Path,
 
 #[cfg(test)]
 mod tests {
-    use super::{deny_line, deny_sentence, exclude_own, git_segments, hits, hits_merging, Reason};
+    use super::{copy_places, deny_line, deny_sentence, exclude_own, git_segments, hits, hits_merging, Dest, Reason};
     use crate::fleet::Stage;
     use crate::name::NAME;
     use crate::pipe::cli::{LiveRun, Tag};
@@ -780,6 +956,75 @@ mod tests {
         assert!(none.contains(mouth) && none.contains(way) && none.ends_with(&stop), "{none}");
         let gated = sentence(Stage::Gated, Some("write-set"));
         assert!(gated.contains("stage=Gated") && !gated.contains(way) && !gated.contains("pipe answer"), "{gated}");
+    }
+
+    /// command 行（cwd `/w`・root `/root`）の写しの segment（動詞の語・行き先）の列。
+    fn places(line: &str) -> Vec<(&'static str, Dest)> {
+        copy_places(line, Path::new("/w"), Path::new("/root")).into_iter().map(|place| (place.verb, place.to)).collect()
+    }
+
+    /// (a) 読みの表（設計 §25 約束 1）: flag の値・続け書き・束ね・redirect を読み飛ばして行き先を取る。
+    #[test]
+    fn hook_drafts_place_reads_the_destination_through_flags() {
+        let path = |verb: &'static str, to: &str| vec![(verb, Dest::Path(PathBuf::from(to)))];
+        for (line, expected) in [
+            ("git worktree add ../x", path("worktree-add", "/x")),
+            ("git worktree add -b feat x main", path("worktree-add", "/w/x")),
+            ("git worktree add --lock --reason r x", path("worktree-add", "/w/x")),
+            ("git worktree add -bfeat x", path("worktree-add", "/w/x")),
+            ("git worktree add -fd x", path("worktree-add", "/w/x")),
+            ("git -C /d worktree add y", path("worktree-add", "/d/y")),
+            ("cd /d && git worktree add --detach y", path("worktree-add", "/d/y")),
+            ("git clone u /e", path("clone", "/e")),
+            ("git clone -b main --depth 1 u e", path("clone", "/w/e")),
+            ("git clone --branch=main -- u e", path("clone", "/w/e")),
+            ("git clone --recurse-submodules=p u e", path("clone", "/w/e")),
+            ("git clone --no-reference u e", path("clone", "/w/e")),
+            ("git clone u", vec![("clone", Dest::Under(PathBuf::from("/w")))]),
+            ("git worktree add -qb feat x", path("worktree-add", "/w/x")),
+            ("git worktree add 2>e x", path("worktree-add", "/w/x")),
+            ("git clone u e > log", path("clone", "/w/e")),
+            ("cd $X && git worktree add /e/y", path("worktree-add", "/e/y")),
+        ] {
+            assert_eq!(places(line), expected, "{line}");
+        }
+    }
+
+    /// (b) 解けない 9 形は行き先を持たない（`Dest::Unresolved`）。
+    #[test]
+    fn hook_drafts_place_unresolved_forms_have_no_destination() {
+        let tilde = concat!("git worktree add ~", "/x");
+        for line in [
+            "git worktree add \"$D\"",
+            tilde,
+            "git worktree add --frob x",
+            "git worktree add -qz x",
+            "git clone u {a,b}",
+            "cd $X && git clone u e",
+            "git --git-dir=y worktree add x",
+            "git worktree add x>log",
+            "git worktree add",
+        ] {
+            let verb = if line.contains("clone") { "clone" } else { "worktree-add" };
+            assert_eq!(places(line), vec![(verb, Dest::Unresolved)], "{line}");
+        }
+    }
+
+    /// (c) 読まない 8 形: 写しを作らない動詞・表示だけ・他の頭の語。
+    #[test]
+    fn hook_drafts_place_skips_what_does_not_make_a_copy() {
+        for line in [
+            "git worktree list",
+            "git worktree remove x",
+            "git worktree move a b",
+            "echo git clone u e",
+            "git clone -h",
+            "git clone --help",
+            "git cloned u",
+            "gh repo clone o/n",
+        ] {
+            assert!(places(line).is_empty(), "{line}");
+        }
     }
 
     /// 行 a と行 b を `(a, b)` の done にした本文。

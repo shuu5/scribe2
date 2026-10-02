@@ -292,7 +292,7 @@ mod tests {
         assert!(text.contains("役割 = orchestrator・target = fixture:seat・anchor = /srv/anchor"), "穴の値: {text}");
         assert!(text.contains("権能 = answer・edit-tests（"), "権能の名の列: {text}");
         assert!(text.contains(&format!("台帳の現在値 = {LEDGER} ")), "台帳の現在値: {text}");
-        assert!(text.contains(&format!("{DRAFTS} の下")), "起草の置き場: {text}");
+        assert!(text.contains(&format!("{DRAFTS} の直下（")), "起草の置き場: {text}");
         // 値の中の穴の字面は展開しない（1 走査）。
         let mut braced = registration(role);
         braced.target = "sess:{role}".to_owned();
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(text.matches(Hole::Drafts.as_str()).count(), 1, "穴は 1 回");
         assert!(text.lines().nth(11).is_some_and(|line| line.contains("seat.drafts_stale_h")), "12 行目は rules 行を名指す");
         let braced = render(role, &registration(role), &[Capability::Answer], "unknown", "/d/{role}/drafts");
-        assert!(braced.contains("/d/{role}/drafts の下"), "値の中の {{role}} は展開しない: {braced}");
+        assert!(braced.contains("/d/{role}/drafts の直下（"),"値の中の {{role}} は展開しない: {braced}");
         assert_eq!(braced.lines().count(), 12, "行の追加も削除もしない");
     }
 

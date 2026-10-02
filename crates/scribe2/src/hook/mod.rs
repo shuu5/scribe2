@@ -16,6 +16,7 @@ pub mod answer_mouth;
 pub mod bypass_guard;
 pub mod choice_question;
 pub mod command;
+pub mod drafts_guard;
 pub mod graph_guard;
 pub mod group;
 pub mod guard;
@@ -46,6 +47,7 @@ use anchor_guard::AnchorDecision;
 use bypass_guard::BypassDecision;
 use choice_question::ChoiceQuestionDecision;
 use command::CommandDecision;
+use drafts_guard::DraftsDecision;
 use guard::Decision;
 use ledger_guard::LedgerDecision;
 use live_row::LiveRowDecision;
@@ -669,7 +671,8 @@ fn brief_refused(reason: &str) -> String {
 /// role guard は anchor から解くので cwd に依らず評価する。起票の門（[`ledger_guard`]）は command guard の直後で、
 /// body-file の相対 path を payload の `cwd` から解き、台帳 write の断る形は command guard と同じ rules から読む。
 /// anchor の門（[`anchor_guard`]）は起票の門の直後・権能 guard の前で、7 語の git と `gh pr merge` の周だけ git を撃ち、その直後が merge の門（[`merge_gate`]）。
-/// 走っている便の行の門（[`live_row`]）は権能 guard が断らなかった周だけの最後の 1 段。
+/// 席の起草の写しの門（[`drafts_guard`]）は bypass の門の直後・走っている便の行の門の前で、`git worktree add` と `git clone` の
+/// 行き先だけを読む。走っている便の行の門（[`live_row`]）は権能 guard が断らなかった周だけの最後の 1 段。
 fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
     let (root, cwd) = (hooked.root, hooked.cwd);
     let tool = field(payload, KEY_TOOL).unwrap_or_default();
@@ -719,6 +722,11 @@ fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
     let bypass = bypass_guard::Scene { tool: &tool, command: command.as_deref(), path: path.as_deref(), cwd, state_dir: hooked.dir };
     if let BypassDecision::Deny { reason, line } = bypass_guard::decide(&bypass) {
         return denied(hooked, &format!("{} {}", bypass_guard::WHAT, reason.as_str()), line, started);
+    }
+    // bypass の門の直後・走っている便の行の門の前: 席の起草の写しの行き先（設計 vessel-hook.md §25・ADR-0096）。
+    let drafts = drafts_guard::Scene { tool: &tool, command: command.as_deref(), cwd, root, state_dir: hooked.dir, pane: hooked.pane, socket: hooked.socket };
+    if let DraftsDecision::Deny { reason, line } = drafts_guard::decide(&drafts) {
+        return denied(hooked, &format!("{} {}", drafts_guard::WHAT, reason.as_str()), line, started);
     }
     // 権能 guard が断らなかった周の後ろの 1 段（走っている便の行の門・設計 vessel-hook.md §15 形 7）。
     let scene = live_row::Scene { tool: &tool, command: command.as_deref(), payload, cwd, root, state_dir: hooked.dir };
