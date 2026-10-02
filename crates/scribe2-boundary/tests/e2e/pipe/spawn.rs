@@ -2191,6 +2191,25 @@ fn runner_touches_section_lists_other_rows_from_the_base_tree_without_own_row() 
     clean(&[&repo, &state]);
 }
 
+/// (g) 宣言の key `contract-tables` で `contracts/` を名乗る toy の、`contracts/t.toml` の行 b の touches の項目が、runner の stdin の
+/// 「ほかの行の touches」節に `contracts/t.toml#b` の pointer で載る（置き場は便の base の宣言から読む）。
+#[test]
+fn spawn_touches_from_declared_tables_lists_a_row_of_the_declared_place() {
+    let (repo, state) = repo_with_state();
+    let declaration = fs::read_to_string(repo.join(".vessel.toml")).expect("宣言を読める");
+    fs::write(repo.join(".vessel.toml"), format!("{declaration}contract-tables = [\"contracts/\"]\n")).expect("宣言を書ける");
+    let row = row_fields("b", &[], &[r#"touches = ["crate::declared::Place"]"#]);
+    fs::create_dir_all(repo.join("contracts")).expect("置き場の dir を作れる");
+    fs::write(repo.join("contracts/t.toml"), format!("schema = 1\n\n[[contract]]\n{}\n", row.join("\n"))).expect("置き場の表を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "declared-place"]);
+    let design = write_contract(&repo, &[], &[r#"touches = ["crate::pipe::refuse::Refuse"]"#]);
+    let id = intake(&repo, &state, &design);
+    let stdin = touches_spawn_stdin(&repo, &state, &id);
+    assert_eq!(touches_body(&stdin), "- crate::declared::Place ← contracts/t.toml#b\n", "置き場の行の touches が載る: {stdin}");
+    clean(&[&repo, &state]);
+}
+
 /// (b) 受付の後・spawn の前に別の doc の区間を壊して commit した便の節の本文は、doc の path を持つ理由の 1 行で、段は
 /// Implemented まで進む。
 #[test]

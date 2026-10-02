@@ -10,7 +10,7 @@ use super::approve::{block, Approval, Approve, RC_BLOCKED};
 use super::cli::int_row;
 use super::confine;
 use super::follow::{gate_base, Halt, Resumption, Section, RUNNER_UNREACHABLE};
-use super::declaration::Effective;
+use super::declaration::{Effective, TablePlaces, DECL_FILE};
 use super::gate::{fill_holes, last_json_object, record_checks, teeth_of, Counted, Limits, Logs, Shoot};
 use super::land::MAIN_REF;
 use super::refuse;
@@ -814,8 +814,10 @@ fn touches_rows(repo: &Path, base: &str) -> Result<Vec<(String, Vec<String>)>, S
         .ok_or_else(|| format!("base {base} の木を読めない"))?;
     let tracked: Vec<String> =
         String::from_utf8_lossy(&listed).split('\0').filter(|path| !path.is_empty()).map(str::to_owned).collect();
+    let places = TablePlaces::at(repo, base);
+    let items = places.items().ok_or_else(|| format!("base {base} の {DECL_FILE} を読めない（契約表の置き場 contract-tables）"))?;
     let mut rows = Vec::new();
-    for doc in design_docs(&tracked) {
+    for doc in design_docs(&tracked, items) {
         let shown = git_bytes(repo, &["show", &format!("{base}:{doc}")])
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .ok_or_else(|| format!("{doc} を base から読めない"))?;

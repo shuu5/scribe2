@@ -600,10 +600,64 @@ mod tests {
     // flip-check: moved s2-07l.374
 
     use super::{
-        read_rows, read_table, render_schema, Class, Need, Shape, TableError, DERIVED_GOAL, FIELDS, PROMISE_FIELDS,
-        WHOLE_HEAD,
+        declared_files, design_docs, read_rows, read_table, render_schema, tracked_files, Class, Need, Shape, TableError,
+        DERIVED_GOAL, FIELDS, PROMISE_FIELDS, WHOLE_HEAD,
     };
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
+
+    /// (c) 契約表の doc の列の 1 関数の表: 項目 0 は既定（`docs/design/` 直下の `.md`）だけ、dir 項目は直下で `form_of` が読める path、
+    /// file 項目は等しい path だけ、既定と重なる項目は同じ path を 2 度返さない。返りは入力の順。
+    #[test]
+    fn table_places_docs_enumerates_defaults_and_items_once_in_input_order() {
+        let paths: Vec<String> = [
+            "contracts/g.txt",
+            "docs/design/b.toml",
+            "contracts/e.md",
+            "docs/design/a.md",
+            "contracts/sub/f.toml",
+            "docs/design/sub/c.md",
+            "tables/one.toml.bak",
+            "contracts/d.toml",
+            "tables/one.toml",
+        ]
+        .iter()
+        .map(|path| (*path).to_owned())
+        .collect();
+        let pick = |items: &[&str]| -> Vec<&str> {
+            let items: Vec<String> = items.iter().map(|item| (*item).to_owned()).collect();
+            design_docs(&paths, &items).into_iter().map(String::as_str).collect()
+        };
+        assert_eq!(pick(&[]), ["docs/design/a.md"], "項目 0 は既定だけ");
+        assert_eq!(pick(&["contracts/"]), ["contracts/e.md", "docs/design/a.md", "contracts/d.toml"], "直下の .md と .toml だけ・.txt と下の dir は返さない");
+        assert_eq!(pick(&["tables/one.toml"]), ["docs/design/a.md", "tables/one.toml"], "file 項目は等しい path だけ");
+        assert_eq!(pick(&["docs/design/"]), ["docs/design/b.toml", "docs/design/a.md"], "既定と重なる a.md は 1 度");
+    }
+
+    /// (d) 宣言済みの新規 file は HEAD の宣言の項目の列を読む: key で `contracts/` を名乗る commit は `contracts/t.toml` の行の `+` の file と
+    /// `creates` を返し、key の無い commit は返さず、key の値を壊した commit は理由を返す。
+    #[test]
+    fn table_places_declared_files_reads_the_head_declaration() {
+        let repo = crate::pipe::fixture::scratch("table-places-declared");
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.name", "t"], &["config", "user.email", "t@example.invalid"], &["config", "commit.gpgsign", "false"]] {
+            assert!(crate::pipe::git_ok(&repo, args), "{args:?}");
+        }
+        let row = full_row(&[("id", "\"a\""), ("write-set", "[\"+src/new.rs\"]"), ("creates", "[\"made.rs\"]")]);
+        assert!(std::fs::create_dir_all(repo.join("contracts")).is_ok());
+        assert!(std::fs::write(repo.join("contracts/t.toml"), row).is_ok());
+        let commit = |key: &str| {
+            let declaration = format!("schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git status\"]\n{key}");
+            assert!(std::fs::write(repo.join(".vessel.toml"), declaration).is_ok(), "宣言を書ける");
+            assert!(crate::pipe::git_ok(&repo, &["add", "-A"]) && crate::pipe::git_ok(&repo, &["commit", "-q", "-m", "c"]), "commit");
+            tracked_files(&repo).unwrap_or_default()
+        };
+        let tracked = commit("contract-tables = [\"contracts/\"]\n");
+        assert_eq!(declared_files(&repo, &tracked), Ok(vec!["made.rs".to_owned(), "src/new.rs".to_owned()]), "key で名乗った置き場の行");
+        let tracked = commit("");
+        assert_eq!(declared_files(&repo, &tracked), Ok(Vec::new()), "key の無い commit は返さない");
+        let tracked = commit("contract-tables = \"contracts/\"\n");
+        let reason = declared_files(&repo, &tracked).expect_err("key の値を壊した commit は理由を返す");
+        assert!(reason.contains("contract-tables"), "key を名乗る理由: {reason}");
+    }
 
     /// [`TableError`] の全 variant の名（宣言順）。payload 付きの enum は `as` で判別子へ写せないので、名前の slice
     /// と `as_str` の網羅 match を対にして宣言順を pin する（`pipe::refuse::REFUSALS` と同じ形）。

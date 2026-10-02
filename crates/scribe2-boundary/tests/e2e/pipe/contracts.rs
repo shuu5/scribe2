@@ -134,6 +134,57 @@ fn contracts_untracked_doc_is_noticed_without_counting_and_joins_the_population_
     clean(&[&repo]);
 }
 
+/// 契約表の置き場を名乗る toy repo の宣言（`contract-tables` で `contracts/` を名乗る）。
+const TABLES_VESSEL: &str = "contract-tables = [\"contracts/\"]\n";
+
+/// `contracts/t.toml` の本文（版の宣言 + goal の無い行 `a` 1 つ）。
+fn tables_toml() -> String {
+    format!("schema = 1\n\n{}", table_row("a", &[]))
+}
+
+/// (e) 宣言の key `contract-tables` で `contracts/` を名乗る toy（docs/design/toy.md は区間を持たない）の `contracts check` は、置き場の
+/// `contracts/t.toml` の goal の無い行 a の `contract-table:section-missing` の 1 件だけを名指し、判定行は docs=2 rows=1・rc 1。key を消した
+/// 同じ repo は docs=1 rows=0・rc 0（置き場は既定だけ）。
+#[test]
+fn contracts_tables_key_counts_the_declared_places_and_leaves_them_out_without_the_key() {
+    let toml = tables_toml();
+    let keyed_vessel = format!("{TABLE_VESSEL}{TABLES_VESSEL}");
+    let keyed = table_repo(&table_doc(""), &[(".vessel.toml", &keyed_vessel), ("contracts/t.toml", &toml)]);
+    let out = contracts_check(&keyed);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "違反 1 件は rc 1: {text}{}", stderr_of(&out));
+    let head = format!("contracts: contracts/t.toml:{} contract-table:section-missing", table_line(&toml, "a"));
+    assert!(matches!(found.as_slice(), [only] if only.starts_with(&head)), "置き場の行 a の section-missing の 1 件だけ: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=1 untracked=0 findings=1 place-out=0/1"), "判定行: {text}");
+    let bare = table_repo(&table_doc(""), &[("contracts/t.toml", &toml)]);
+    let out = contracts_check(&bare);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "key を消した repo は置き場を既定だけで数える: {}", stdout_of(&out));
+    assert_eq!(stdout_of(&out).lines().collect::<Vec<&str>>(), ["contracts check: docs=1 rows=0 untracked=0 findings=0 place-out=0/0"]);
+    clean(&[&keyed, &bare]);
+}
+
+/// (f) 宣言した置き場の dir の未追跡の `contracts/u.toml` は、path を名乗る `contracts untracked-doc:` の知らせと判定行の `untracked=1` を出し、
+/// 母集団には入らない（doc 数は据え置き）。
+#[test]
+fn contracts_tables_key_notices_an_untracked_file_in_a_declared_place() {
+    let keyed_vessel = format!("{TABLE_VESSEL}{TABLES_VESSEL}");
+    let repo = table_repo(&table_doc(&table_region(&[table_row("a", &[])])), &[(".vessel.toml", &keyed_vessel)]);
+    fs::create_dir_all(repo.join("contracts")).expect("置き場の dir を作れる");
+    fs::write(repo.join("contracts/u.toml"), tables_toml()).expect("未追跡の file を書ける");
+    let out = contracts_check(&repo);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "未追跡は rc に数えない: {text}{}", stderr_of(&out));
+    assert_eq!(
+        text.lines().collect::<Vec<&str>>(),
+        [
+            "contracts untracked-doc: contracts/u.toml は未追跡の設計 doc（検査の母集団に入らない）",
+            "contracts check: docs=1 rows=1 untracked=1 findings=0 place-out=0/1",
+        ],
+        "知らせ 1 行 + 判定行: {text}"
+    );
+    clean(&[&repo]);
+}
+
 /// (3) `req` が要件面に無い行・`depends` が解決しない行・輪を持つ 2 行・`verify` に `(` を持つ行・末尾 `/` 無しの
 /// dir を指す行を、各 1 件ずつ行番号付きで名指す（全件・1 件目で止めない・輪は 2 行で 1 件）。
 #[test]
