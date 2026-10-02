@@ -131,6 +131,22 @@ pub fn run_part(latest: &Latest) -> Part {
     found
 }
 
+/// 同じ bead の便の現在地の列（run id の昇順）を最も新しい便から前へ見て、連続の非 PASS の便の数を返す（設計 dispatcher.md §45）。
+///
+/// 各便の局面は [`run_part`] で写す: run-review-failed・run-gate-failed・run-failed は 1 本と数え、run-ci-waiting と run-landed-open
+/// （Landed・札の生死に依らない）で止め、run-stopped とほかの局面（成否の判定に着かずに残った便）は数えず止めない。空の列は 0。
+pub fn streak(runs: &[Latest]) -> usize {
+    let mut count = 0;
+    for latest in runs.iter().rev() {
+        match run_part(latest).phase {
+            Phase::RunReviewFailed | Phase::RunGateFailed | Phase::RunFailed => count += 1,
+            Phase::RunCiWaiting | Phase::RunLandedOpen => break,
+            _ => {}
+        }
+    }
+    count
+}
+
 /// 段 → (語, 理由)（§2.1・`Stage` の網羅 `match`）。
 fn run_phase(latest: &Latest) -> (Phase, Option<String>) {
     let stage = Some(latest.stage.as_str().to_owned());
@@ -271,7 +287,7 @@ fn within_window(sorted_at: Option<&str>, input: &Input<'_>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{phases, run_part, Input, Judged, Latest, OpenContract, Refused, PASS};
+    use super::{phases, run_part, streak, Input, Judged, Latest, OpenContract, Refused, PASS};
     use crate::case::{Channel, Extra, Kind, Part, Phase, Sink, Turn};
     use crate::fleet::{Event, Stage};
     use std::collections::BTreeMap;
@@ -577,6 +593,71 @@ mod tests {
         assert!(after.iter().any(|found| found.id == before), "線を前へ動かせば載る");
         let none = phases(&Input { line: None, ..input_of(&world) });
         assert!(none.is_empty(), "線が無ければ発話は載らない");
+    }
+
+    /// 判定の語 `verdict` を持つ `stage` の便（札は死んでいる）。
+    fn judged_run(stage: Stage, verdict: &str) -> Latest {
+        Latest { verdict: Some(verdict.to_owned()), ..latest("b-1", "r-1", stage, false) }
+    }
+
+    fn failed() -> Latest {
+        Latest { detail_head: Some("rebase-conflict".to_owned()), ..latest("b-1", "r-1", Stage::Failed, false) }
+    }
+
+    fn landed(alive: bool) -> Latest {
+        Latest { terminal: Some("closed".to_owned()), ..latest("b-1", "r-1", Stage::Landed, alive) }
+    }
+
+    fn stopped() -> Latest {
+        latest("b-1", "r-1", Stage::Stopped, false)
+    }
+
+    /// (a) 数える 3 局面（INCONCLUSIVE の Reviewed・FAIL の Gated・Failed）は各 1 本で 1・3 本で 3・空で 0。
+    #[test]
+    fn phase_streak_counts_review_gate_and_failed_runs() {
+        let (reviewed, gated) = (judged_run(Stage::Reviewed, "INCONCLUSIVE"), judged_run(Stage::Gated, "FAIL"));
+        assert_eq!(streak(&[reviewed.clone(), gated.clone(), failed()]), 3);
+        for single in [reviewed, gated, failed()] {
+            assert_eq!(streak(&[single]), 1);
+        }
+        assert_eq!(streak(&[]), 0);
+    }
+
+    /// (b) Landed（札の死んだ便も生きた便も）で止め、それより前を数えない。
+    #[test]
+    fn phase_streak_stops_at_landed_dead_or_alive() {
+        for alive in [false, true] {
+            let runs = [failed(), failed(), landed(alive), judged_run(Stage::Gated, "FAIL")];
+            assert_eq!(streak(&runs), 1, "alive={alive}");
+        }
+    }
+
+    /// (c) Stopped は数えず止めもしない（最も新しい便が Stopped でも前を数える）。
+    #[test]
+    fn phase_streak_skips_stopped_without_stopping() {
+        assert_eq!(streak(&[failed(), stopped(), judged_run(Stage::Gated, "FAIL")]), 2);
+        assert_eq!(streak(&[judged_run(Stage::Gated, "FAIL"), stopped()]), 1);
+    }
+
+    /// (d) ほかの 8 局面は数えず止めない（Failed 2 本の間に置いても 2）。
+    #[test]
+    fn phase_streak_skips_the_other_eight_phases() {
+        let others = [
+            latest("b-1", "r-1", Stage::Intake, false),
+            judged_run(Stage::Reviewed, PASS),
+            latest("b-1", "r-1", Stage::Blocked, false),
+            latest("b-1", "r-1", Stage::Spawned, false),
+            latest("b-1", "r-1", Stage::Questioned, false),
+            latest("b-1", "r-1", Stage::RateLimited, false),
+            latest("b-1", "r-1", Stage::Implemented, false),
+            judged_run(Stage::Gated, PASS),
+        ];
+        let mut checked = 0;
+        for other in others {
+            assert_eq!(streak(&[failed(), other, failed()]), 2);
+            checked += 1;
+        }
+        assert_eq!(checked, 8);
     }
 
     fn input_of(world: &World) -> Input<'_> {

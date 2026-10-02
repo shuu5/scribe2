@@ -278,16 +278,19 @@ pub fn dispatch(args: &[String]) -> Outcome {
 ///
 /// 置き場を読めない周は宛先も段も測れないので 1 行も送らない（`no-seat` に読み替えない・C10）。
 fn notices(queue: &Queue<'_>, run: Option<&str>, turn: &queue::Turn) -> Vec<String> {
-    let Ok(state) = super::current(&queue.state_dir) else {
+    let Ok(events) = crate::fleet::store::read_all(&queue.state_dir) else {
         return Vec::new();
     };
+    let state = crate::fleet::replay(&events);
+    // 同じ bead の便の連続の非 PASS の数（便の現在地は局面の出力の書き手と同じ読み・数えるのは `phase::streak` だけ・設計 §45）。
+    let streak_of = |bead: &str| crate::fleet::phase::streak(&crate::fleet::lifecycle_mark::bead_runs(&queue.state_dir, &events, &state, bead));
     // 送るかと語は局面の出力の便の部品から読む（比べる印は event log・case-lifecycle §15 の表・設計 §43 行 ar）。
     // 終端の語は event log の印で・memo の要約は台帳の印で古さを測るので、1 回の読みで両方と比べる（行 au）。
     let output = lifecycle_read::read(&queue.state_dir, &queue.repo, &[lifecycle_read::Input::Events, lifecycle_read::Input::Ledger]);
     let mut payloads = Vec::new();
     if let Some(found) = run.and_then(|id| state.runs.get(id)) {
         if let Some(word) = word_of(&output, &found.id) {
-            let line = notify::Terminal { bead: &found.bead, run: &found.id, stage: found.stage.as_str(), word: &word };
+            let line = notify::Terminal { bead: &found.bead, run: &found.id, stage: found.stage.as_str(), word: &word, streak: streak_of(&found.bead) };
             payloads.push(notify::terminal_line(&line));
         }
     }
@@ -304,7 +307,9 @@ fn notices(queue: &Queue<'_>, run: Option<&str>, turn: &queue::Turn) -> Vec<Stri
     let pending: Vec<notify::Terminal<'_>> = settled
         .iter()
         .zip(&words)
-        .filter_map(|(last, word)| Some(notify::Terminal { bead: &last.bead, run: &last.id, stage: last.stage.as_str(), word: word.as_deref()? }))
+        .filter_map(|(last, word)| {
+            Some(notify::Terminal { bead: &last.bead, run: &last.id, stage: last.stage.as_str(), word: word.as_deref()?, streak: streak_of(&last.bead) })
+        })
         .collect();
     // 出力が無いか読めない周は、`Settled` の候補が 1 本以上の周だけ ` pending=unreadable`（0 本の周は key を出さない）。
     let unread = !matches!(output, lifecycle_read::Lifecycle::Read(_)) && !settled.is_empty();

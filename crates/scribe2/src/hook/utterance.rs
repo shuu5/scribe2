@@ -191,7 +191,7 @@ mod tests {
         let pace = crate::seat::tick::signal::Pace::of(60, &["30".to_owned(), "90".to_owned()]).expect("梯子を読める");
         let pressed = crate::hook::group::Pressed { window: crate::fleet::WindowKind::FiveHour, used: 90, cap: 85 };
         let made = [
-            ("notify::terminal_line", terminal_line(&Terminal { bead: "b", run: "r", stage: "Landed", word: "ok" })),
+            ("notify::terminal_line", terminal_line(&Terminal { bead: "b", run: "r", stage: "Landed", word: "ok", streak: 0 })),
             ("notify::idle_line", idle_line(&turn, &facts, Some(&[]), &Memos::default()).expect("候補が在る周は idle の行")),
             ("notify::precheck_line", precheck_line(&(vec![("x".to_owned(), PathBuf::from("/p"))], 1))),
             ("deliver::line", crate::seat::deliver::line("r-1")),

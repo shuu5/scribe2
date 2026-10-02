@@ -8,7 +8,7 @@
 use crate::pipe::{
     bin_cmd, ceiling_rules, clean, design_doc_rows, design_pointer, embedded_int, fake_lens, gate_once, gated_pass, git,
     intake_bead, lens_verdict, repo_with_state, review_lens_pass, row_fields, run_pipe, spawn_with, stderr_of, stdout_of,
-    write_design, DESIGN_FILE, TOY_COMMIT,
+    stop_run_ok, write_design, DESIGN_FILE, TOY_COMMIT,
 };
 use crate::TOOLBOX_BIN;
 use std::fs;
@@ -464,7 +464,7 @@ fn pending_round() -> (Output, Vec<String>) {
 }
 
 /// (§29 歯 (a)) 審査 FAIL の終端の bead が `Settled` の候補に並ぶ周の終端: idle の行は既存の `reason=settled:` を持ったまま
-/// ` pending=1:<bead>/Reviewed=FAIL` で終わる。base は key が無い（RED）。
+/// ` pending=1:<bead>/Reviewed=FAIL/streak=1` で終わる（前の便の無い bead）。base は key が無い（RED）。
 // flip-check: retroactive s2-07l.738.39.5
 #[test]
 fn pipe_notify_pending_reviewed_fail_rides_the_idle_line() {
@@ -472,7 +472,7 @@ fn pipe_notify_pending_reviewed_fail_rides_the_idle_line() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stop は rc 0: {}", told(&out));
     let line = idle_of(&sent);
     assert!(line.contains("ready=1 launched=0 reason=settled:"), "既存の字面は同じ行に在る: {line} / {sent:?}");
-    assert!(line.ends_with(&format!(" pending=1:{PENDING}/Reviewed=FAIL")), "末尾に未処置の終端: {line} / {sent:?}");
+    assert!(line.ends_with(&format!(" pending=1:{PENDING}/Reviewed=FAIL/streak=1")), "末尾に未処置の終端: {line} / {sent:?}");
 }
 
 /// (§29 歯 (b)) 同じ周の終端の stderr が stdout の `notify=` の行と同じ行を同じ順で持つ（base は stderr に無い＝RED）。
@@ -945,7 +945,7 @@ fn pipe_notify_lifecycle_fresh_round_reads_the_word_from_the_part_reason() {
     assert_fresh(&state, "Gated の FAIL");
     assert!(part_of(&state, &gated).contains(" phase=run-gate-failed "), "前提: Gated の FAIL の部品: {}", shown(&state));
     let sent = sends(&state);
-    assert!(idle_of(&sent).ends_with(" pending=1:s2-gf.1/Gated=FAIL"), "pending の語は FAIL: {sent:?} / {}", told(&out));
+    assert!(idle_of(&sent).ends_with(" pending=1:s2-gf.1/Gated=FAIL/streak=1"), "pending の語は FAIL: {sent:?} / {}", told(&out));
     clean(&[&repo, &state]);
 }
 
@@ -1025,7 +1025,7 @@ fn pipe_notify_lifecycle_stale_round_marks_the_word_and_never_stays_quiet() {
     let text = shown(&state);
     assert!(text.lines().next().is_some_and(|head| head.ends_with(" stale=ledger-gate")), "印が残る: {text}");
     let sent = sends(&state);
-    assert!(idle_of(&sent).ends_with(" pending=1:s2-rf.1/Reviewed=FAIL:stale"), "pending の古い形: {sent:?} / {}", told(&out));
+    assert!(idle_of(&sent).ends_with(" pending=1:s2-rf.1/Reviewed=FAIL:stale/streak=1"), "pending の古い形: {sent:?} / {}", told(&out));
     clean(&[&repo, &state]);
 }
 
@@ -1199,5 +1199,190 @@ fn pipe_notify_memos_close_drops_the_actionable_count_and_then_the_line() {
     live_run(&state);
     let round = memo_round(&repo, &state, &bd);
     assert_eq!(idle_of(&round), "", "actionable が 0 で候補 0 の周は行が消える: {round:?}");
+    clean(&[&repo, &state]);
+}
+
+// ───── 終端の行と pending の項目の streak（設計 dispatcher.md §45・行 at・接頭辞 `pipe_notify_streak_`） ─────
+
+/// 前の便 1 本を `fleet record` で置く（run id は `<bead>-<UTC の秒>`・終端の周の便より古い時刻・`second` の昇順が新しくなる順）。返すのは run id。
+fn prior(state: &Path, bead: &str, second: u32, stage: &str, detail: &str) -> String {
+    let id = format!("{bead}-20200101T0000{second:02}Z");
+    record_stage(state, &id, bead, stage, detail);
+    id
+}
+
+/// 前の便を段の列の順（時刻の昇順）に置く。返すのは run id の列。
+fn earlier_runs(state: &Path, bead: &str, stages: &[&str]) -> Vec<String> {
+    stages.iter().zip(1u32..).map(|(stage, second)| prior(state, bead, second, stage, "x")).collect()
+}
+
+/// 送った payload のうち、bead と便の終端の行（無ければ空）。
+fn terminal_of(sent: &[String], bead: &str, run: &str) -> String {
+    let head = format!("pipe: {bead} {run} ");
+    sent.iter().find(|line| line.contains(&head)).cloned().unwrap_or_default()
+}
+
+/// 終端の行の `<段>=` の後ろが「空白の無い 1 語」と ` streak=<n> — 次の 1 手は pipe dispatch ls` だけである。
+fn assert_streak_tail(line: &str, stage: &str, streak: usize) {
+    let tail = line.split_once(&format!(" {stage}=")).map(|(_, tail)| tail).unwrap_or_default();
+    let (word, rest) = tail.split_once(' ').unwrap_or_default();
+    assert!(!word.is_empty(), "語は空白の無い 1 語: {line}");
+    assert_eq!(rest, format!("streak={streak} — 次の 1 手は pipe dispatch ls"), "{line}");
+}
+
+/// 読めない出力の置き場（helper `stop` と同じ手）で、`place` が前の便を置いた後の live な便 `RUN`（bead `BEAD`）を道具を渡さずに止め、
+/// 終端の行を返す。歯の中で先に、出力の file が書いた 1 行のまま在ることと、送った payload が 1 本で `<BEAD> <RUN> Stopped=` を持つことを測る。
+fn unreadable_round(place: impl FnOnce(&Path)) -> String {
+    let (repo, state) = repo_with_state();
+    fake_tmux(&state);
+    register(&state, &repo);
+    place(&state);
+    live_run(&state);
+    let out = stop(&repo, &state);
+    let fleet = state.join("fleet").join("lifecycle.json");
+    assert_eq!(fs::read_to_string(&fleet).unwrap_or_default(), "not json\n", "前提: 出力の file が在って読めない: {}", told(&out));
+    let sent = sends(&state);
+    assert_eq!(sent.len(), 1, "送った payload は 1 本: {sent:?} / {}", told(&out));
+    let line = terminal_of(&sent, BEAD, RUN);
+    assert!(line.contains(&format!("pipe: {BEAD} {RUN} Stopped=")), "終端の行: {sent:?}");
+    clean(&[&repo, &state]);
+    line
+}
+
+/// (e) 読めない枝と行の形: FAIL の Gated → Landed → FAIL の Gated → INCONCLUSIVE の Reviewed → Failed の後の live な便を止めた終端の行は
+/// 語が空白の無い 1 語で、その後ろが ` streak=3 — 次の 1 手は pipe dispatch ls` だけ。
+#[test]
+fn pipe_notify_streak_unreadable_branch_carries_the_count_and_nothing_else() {
+    let line = unreadable_round(|state| {
+        prior(state, BEAD, 1, "Gated", "verdict:FAIL");
+        prior(state, BEAD, 2, "Landed", "closed");
+        prior(state, BEAD, 3, "Gated", "verdict:FAIL");
+        prior(state, BEAD, 4, "Reviewed", "verdict:INCONCLUSIVE");
+        prior(state, BEAD, 5, "Failed", "rebase-conflict");
+    });
+    assert_streak_tail(&line, "Stopped", 3);
+}
+
+/// (f) ほかの bead の Failed の便は数えない（bead で絞らない実装は 2）。
+#[test]
+fn pipe_notify_streak_does_not_count_another_beads_runs() {
+    let line = unreadable_round(|state| {
+        prior(state, BEAD, 1, "Gated", "verdict:FAIL");
+        prior(state, "s2-other.1", 2, "Failed", "rebase-conflict");
+    });
+    assert_streak_tail(&line, "Stopped", 1);
+}
+
+/// (g) run id の順で並べる: 記帳の順が [3 本目の時刻の FAIL の Gated, 1 本目の時刻の Failed, 2 本目の時刻の Landed] でも数は 1（記帳の順で
+/// 並べる実装は Landed が最も新しくなり 0）。
+#[test]
+fn pipe_notify_streak_orders_by_run_id_not_by_the_event_log() {
+    let line = unreadable_round(|state| {
+        let third = prior(state, BEAD, 3, "Gated", "verdict:FAIL");
+        let first = prior(state, BEAD, 1, "Failed", "rebase-conflict");
+        let second = prior(state, BEAD, 2, "Landed", "closed");
+        let raw = fs::read_to_string(state.join("fleet").join("events.jsonl")).unwrap_or_default();
+        let at = |id: &str| raw.find(id).unwrap_or(usize::MAX);
+        assert!(at(&third) < at(&first) && at(&first) < at(&second), "前提: 記帳の順は run id の昇順でない: {raw}");
+    });
+    assert_streak_tail(&line, "Stopped", 1);
+}
+
+/// (h) 判定の語は最新の段の event の detail から読む: PASS の Reviewed の便に FAIL の review.json・PASS の Gated の便に FAIL の verdict.json を
+/// 置いても、FAIL の Gated の後の数は 1（それぞれの file を読む実装は 2）。
+#[test]
+fn pipe_notify_streak_reads_the_verdict_word_from_the_event_not_the_files() {
+    let line = unreadable_round(|state| {
+        prior(state, BEAD, 1, "Gated", "verdict:FAIL");
+        let reviewed = prior(state, BEAD, 2, "Reviewed", "verdict:PASS");
+        let gated = prior(state, BEAD, 3, "Gated", "verdict:PASS");
+        let (review, verdict) = (state.join("pipe").join(&reviewed).join(REVIEW_FILE), state.join("pipe").join(&gated).join("verdict.json"));
+        for (file, body) in [(&review, "{\"verdict\":\"FAIL\"}\n"), (&verdict, "{\"verdict\":\"FAIL\"}\n")] {
+            assert!(file.parent().is_some_and(|dir| fs::create_dir_all(dir).is_ok()), "便の dir を作れる");
+            assert!(fs::write(file, body).is_ok(), "判定の file を書ける");
+            assert!(fs::read_to_string(file).unwrap_or_default().contains("FAIL"), "前提: {} は FAIL", file.display());
+        }
+    });
+    assert_streak_tail(&line, "Stopped", 1);
+}
+
+/// 読める枝の bead X と Y。
+const STREAK_X: &str = "s2-sx.1";
+const STREAK_Y: &str = "s2-sy.1";
+
+/// 書ける置き場（登録 row・偽の tmux・台帳の印と origin/main の ref）に、X の前の便 `before` を置き、`with_y` なら Y（前の便が Failed 1 本）を
+/// intake して道具を渡さずに止め、X を intake し、測る周の前に書き直しを 1 回撃つ。返すのは repo・置き場・偽の台帳・X の intake した便。
+fn streak_site(before: &[&str], with_y: bool) -> (PathBuf, PathBuf, String, String) {
+    let (repo, state) = site();
+    earlier_runs(&state, STREAK_X, before);
+    let mut issues = vec![issue_json(STREAK_X, "open")];
+    if with_y {
+        earlier_runs(&state, STREAK_Y, &["Failed"]);
+        let y_run = intake_bead(&repo, &state, &design_pointer(), STREAK_Y);
+        stop_run_ok(&state, &y_run);
+        issues.push(issue_json(STREAK_Y, "open"));
+    }
+    let x_run = intake_bead(&repo, &state, &design_pointer(), STREAK_X);
+    let bd = ledger_bd(&state, "bd-streak", &issues, 0);
+    switch_line(&state, &repo, &bd);
+    (repo, state, bd, x_run)
+}
+
+/// (i) 読める枝: X の前の便が Failed → Stopped → Failed・Y の前の便が Failed 1 本の置き場で X の便を止めた終端の行は
+/// ` Stopped=Stopped streak=2 — 次の 1 手は pipe dispatch ls` で終わり、pending の X の項目は `/streak=2`・Y の項目は `/streak=1`。
+#[test]
+fn pipe_notify_streak_readable_branch_counts_each_pending_beads_own_runs() {
+    let (repo, state, bd, x_run) = streak_site(&["Failed", "Stopped", "Failed"], true);
+    let out = terminal_round(&repo, &state, &bd, &queue_rules(&state), &["stop", "--run", &x_run]);
+    assert_fresh(&state, "streak (i)");
+    assert!(part_of(&state, &x_run).contains(" phase=run-stopped "), "前提: 止めた便の部品は run-stopped: {}", shown(&state));
+    let sent = sends(&state);
+    let idle = idle_of(&sent);
+    assert!(idle.contains(" reason=settled:"), "前提: idle の行は settled: {idle} / {}", told(&out));
+    let terminal = terminal_of(&sent, STREAK_X, &x_run);
+    assert!(terminal.ends_with(" Stopped=Stopped streak=2 — 次の 1 手は pipe dispatch ls"), "終端の行: {sent:?}");
+    assert!(idle.contains(" pending=2:"), "pending は 2 本: {idle}");
+    assert!(idle.contains(&format!("{STREAK_X}/Stopped=Stopped/streak=2")), "X の項目: {idle}");
+    assert!(idle.contains(&format!("{STREAK_Y}/Stopped=Stopped/streak=1")), "Y の項目: {idle}");
+    clean(&[&repo, &state]);
+}
+
+/// (j) 古い枝（Busy の周）: 出力が event log より後れ、終端の語が `stale` でも数は同じ（終端の行は ` Stopped=stale streak=2 — 次の 1 手は
+/// pipe dispatch ls`・pending の項目は `/streak=2` で終わる）。
+#[test]
+fn pipe_notify_streak_stale_branch_carries_the_same_count() {
+    let (repo, state, bd, x_run) = streak_site(&["Failed", "Stopped", "Failed"], false);
+    assert!(part_of(&state, &x_run).contains(" phase=run-reviewed "), "前提: X の便の部品が在る: {}", shown(&state));
+    assert!(fs::write(state.join("fleet").join("lifecycle.lock"), format!("{}\n", std::process::id())).is_ok(), "lock を置ける");
+    let out = terminal_round(&repo, &state, &bd, &fast_rules(&state), &["stop", "--run", &x_run]);
+    assert!(stderr_of(&out).lines().any(|line| line == "lifecycle=busy"), "書き直しは Busy: {}", told(&out));
+    assert_behind(&state, "streak (j)");
+    let sent = sends(&state);
+    let terminal = terminal_of(&sent, STREAK_X, &x_run);
+    assert!(terminal.ends_with(" Stopped=stale streak=2 — 次の 1 手は pipe dispatch ls"), "終端の行: {sent:?} / {}", told(&out));
+    assert!(idle_of(&sent).ends_with("/streak=2"), "pending の項目: {sent:?}");
+    clean(&[&repo, &state]);
+}
+
+/// (k) 終端の便を数える: X の前の便が Failed 1 本で、X の便が Failed の終端に着いた周の終端の行は ` streak=2 — 次の 1 手は pipe dispatch ls` で
+/// 終わる（終端の便を数えない実装は 1）。
+#[test]
+fn pipe_notify_streak_counts_the_terminal_run_itself() {
+    let (repo, state) = site();
+    let before = earlier_runs(&state, STREAK_X, &["Failed"]);
+    let bd = ledger_bd(&state, "bd-streak-failed", &[issue_json(STREAK_X, "open")], 0);
+    switch_line(&state, &repo, &bd);
+    let out = run_pipe(&[
+        "run", "--design", &design_pointer(), "--bead", STREAK_X,
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &queue_rules(&state), "--bd", &bd, "--runner", "exit 2", "--lens", &review_lens_pass(&state),
+    ]);
+    let sent = sends(&state);
+    let head = format!("pipe: {STREAK_X} ");
+    let line = sent.iter().find(|line| line.contains(&head) && line.contains(" Failed=")).cloned().unwrap_or_default();
+    let run = line.split_once(&head).and_then(|(_, rest)| rest.split_whitespace().next()).unwrap_or_default().to_owned();
+    assert!(before[0] < run, "前提: 前の便の run id が終端の便より前: {} < {run}", before[0]);
+    assert!(line.contains(&format!("{run} Failed=")), "前提: 終端の行の段は Failed: {sent:?} / {}", told(&out));
+    assert!(line.ends_with(" streak=2 — 次の 1 手は pipe dispatch ls"), "終端の行: {line}");
     clean(&[&repo, &state]);
 }

@@ -49,13 +49,15 @@ pub(crate) struct Terminal<'a> {
     pub(crate) stage: &'a str,
     /// 局面の出力の便の部品の理由の語（古い周の `:stale` は呼び手が添えた字面）。
     pub(crate) word: &'a str,
+    /// 同じ bead の便を新しい方から数えた連続の非 PASS の数（呼び手が `streak` で数えた値・設計 §45）。
+    pub(crate) streak: usize,
 }
 
 /// 終端の 1 行（§19 形 3 (a)・次の 1 手が末尾に在る 1 行・逐語も path も載せない）。
 pub(crate) fn terminal_line(terminal: &Terminal<'_>) -> String {
     format!(
-        "{NAME} pipe: {} {} {}={} — 次の 1 手は pipe dispatch ls",
-        terminal.bead, terminal.run, terminal.stage, terminal.word
+        "{NAME} pipe: {} {} {}={} streak={} — 次の 1 手は pipe dispatch ls",
+        terminal.bead, terminal.run, terminal.stage, terminal.word, terminal.streak
     )
 }
 
@@ -75,7 +77,7 @@ pub(crate) struct Memos {
 /// 末尾に同じ周の並列の実測の字面（[`facts::line`]・設計 §26 形 4）を足す。
 ///
 /// その後ろに未処置の終端（`pending`・呼び手が候補の順に判じた字面・`run` は載せない）を
-/// ` pending=<k>:<bead>/<段>=<語>,…` で足す。0 本の周は key を出さない（設計 §29 形 2）。`None` は局面の出力を読めない周で、
+/// ` pending=<k>:<bead>/<段>=<語>/streak=<n>,…` で足す。0 本の周は key を出さない（設計 §29 形 2）。`None` は局面の出力を読めない周で、
 /// 呼び手が候補を 1 本以上数えた周だけ渡し ` pending=unreadable` を足す（設計 §43 行 ar）。
 pub(crate) fn idle_line(turn: &Turn, facts: &Facts, pending: Option<&[Terminal<'_>]>, memos: &Memos) -> Option<String> {
     if !turn.launches.is_empty() {
@@ -91,7 +93,7 @@ pub(crate) fn idle_line(turn: &Turn, facts: &Facts, pending: Option<&[Terminal<'
         None => " pending=unreadable".to_owned(),
         Some([]) => String::new(),
         Some(found) => {
-            let listed: Vec<String> = found.iter().map(|each| format!("{}/{}={}", each.bead, each.stage, each.word)).collect();
+            let listed: Vec<String> = found.iter().map(|each| format!("{}/{}={}/streak={}", each.bead, each.stage, each.word, each.streak)).collect();
             format!(" pending={}:{}", listed.len(), listed.join(","))
         }
     };

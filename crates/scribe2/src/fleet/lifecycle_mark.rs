@@ -750,6 +750,11 @@ pub fn latest_runs(state_dir: &Path, events: &[Event], state: &State) -> Vec<Lat
     newest.values().filter_map(|(_, id)| state.runs.get(*id)).map(|run| latest_of(state_dir, events, run)).collect()
 }
 
+/// 同じ bead の便の現在地の列（run id の昇順・書き手と同じ [`latest_of`] で組む・設計 dispatcher.md §45 の `streak` の入力）。
+pub fn bead_runs(state_dir: &Path, events: &[Event], state: &State, bead: &str) -> Vec<Latest> {
+    state.runs.values().filter(|run| run.bead == bead).map(|run| latest_of(state_dir, events, run)).collect()
+}
+
 /// 便 1 本の最新の現在地。
 fn latest_of(state_dir: &Path, events: &[Event], run: &super::Run) -> Latest {
     let at_stage = events.iter().rev().find(|event| event.run == run.id && event.stage == Some(run.stage));
