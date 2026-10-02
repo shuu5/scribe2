@@ -15,10 +15,10 @@
 use super::json_tree::{self, Tree};
 use super::lifecycle_line::{book_lines, read_lines, Lines as EventLines};
 use super::lifecycle_mark::{
-    self as mark, bindings_of, events_of, events_order, events_tree, fleet_dir, hold, is_open_contract, ledger_is_newer, ledger_of, ledger_order,
+    self as mark, bindings_of, census_anchors, events_of, events_order, events_tree, fleet_dir, hold, is_open_contract, ledger_is_newer, ledger_of, ledger_order,
     ledger_tree, latest_runs, main_is_descendant, main_of, main_order, num, num_of, open_write_set, publish, read_commits, read_marks, read_rows,
     read_srs, read_stale, refusals_of, secs_of, unreflected_questions, verdict_unhandled, Face, Kind as MarkKind, Ledger, Marks, Stale,
-    JSON_FILE, JSON_LOCK, UNMEASURED_UNREFLECTED,
+    AnchorCensus, JSON_FILE, JSON_LOCK, MULTI_ANCHOR_PARTS, UNMEASURED_MULTI_ANCHOR, UNMEASURED_UNREFLECTED,
 };
 use super::phase::{self as run_phase, Judged, OpenContract};
 use super::store::{self, LockPolicy};
@@ -661,10 +661,13 @@ fn gather(place: &Place<'_>, source: Source<'_>) -> Result<World, &'static str> 
         Face::Missing | Face::Fault => (None, Vec::new()),
     };
     let prefix = prefix_of(place.repo);
-    let (unreflected, unmeasured) = match unreflected_questions(place.state_dir, prefix.as_deref(), &issues) {
+    let (unreflected, mut unmeasured) = match unreflected_questions(place.state_dir, prefix.as_deref(), &issues) {
         Asked::Ids(ids) => (ids, Vec::new()),
         Asked::Unreadable => (Vec::new(), vec![(Kind::Question, UNMEASURED_UNREFLECTED)]),
     };
+    if census_anchors(place.state_dir, place.repo, &events) == AnchorCensus::Many {
+        unmeasured.extend(MULTI_ANCHOR_PARTS.map(|kind| (kind, UNMEASURED_MULTI_ANCHOR)));
+    }
     Ok(World {
         write_set: open_write_set(&issues, &write_sets),
         unjudged: verdict_unhandled(&issues, &events),

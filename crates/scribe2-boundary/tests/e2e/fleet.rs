@@ -3713,3 +3713,34 @@ fn fleet_lifecycle_feeds_name_an_unreadable_store_and_recover_after_the_next_dis
     assert_eq!(life.shape("toy-qd"), Some(unreflected), "ruling-unreflected に戻る");
     super::pipe::clean(&[&life.repo, &life.state]);
 }
+
+/// 置き場の anchor が 2 つの周（設定の無い repo の登録 row を足した置き場）は rc 0 で部品を書き、`unmeasured` に multi-anchor を 8 つの種類の順で
+/// 1 件ずつ名指す（発話は名指さない）。その repo の設定に別の在る dir を書き台帳を伸ばした後の書き直しと、`Life` の repo だけの登録の置き場は
+/// 名指さない（同じ歯の中の対）。
+#[test]
+fn anchor_census_names_the_many_anchor_place_in_the_unmeasured_list() {
+    let life = Life::new();
+    let (other, away) = (super::pipe::tmp(), super::pipe::tmp());
+    super::pipe::git(&other, &["init", "-q", "-b", "main"]);
+    register_anchored_account(&life.state, &other.display().to_string(), "a1");
+    let first = life.write(&[]);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "{}", super::pipe::stderr_of(&first));
+    assert_queued(&life.shown(), "many");
+    let parts = ["question", "memo", "contract", "run", "row", "requirement", "epic", "commit"];
+    let named: Vec<(String, String)> = parts.iter().map(|part| ((*part).to_owned(), "multi-anchor".to_owned())).collect();
+    assert_eq!(life.named(), named, "8 つの種類の順に 1 件ずつ（utterance は無い）");
+
+    super::pipe::git(&other, &["config", &format!("{}.stateDir", vessel::name::NAME), &away.display().to_string()]);
+    life.retime();
+    fs::write(life.repo.join(".beads/issues.jsonl"), "[]\n\n").expect("台帳の file を伸ばせる");
+    let second = life.write(&[]);
+    assert_eq!(second.status.code(), Some(i32::from(RC_OK)), "{}", super::pipe::stderr_of(&second));
+    assert_ne!(life.generated().as_deref(), Some(LIFE_OLD), "書き直しが走った（generated_at が進んだ）");
+    assert_eq!(life.named(), Vec::<(String, String)>::new(), "別の置き場を名乗る anchor は数えない");
+
+    let single = Life::new();
+    register_anchored_account(&single.state, &single.repo.display().to_string(), "a1");
+    assert_eq!(single.write(&[]).status.code(), Some(i32::from(RC_OK)));
+    assert_eq!(single.named(), Vec::<(String, String)>::new(), "Life の repo だけの登録");
+    super::pipe::clean(&[&life.repo, &life.state, &single.repo, &single.state, &other, &away]);
+}

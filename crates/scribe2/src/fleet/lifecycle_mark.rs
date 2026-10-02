@@ -17,8 +17,10 @@ use super::json_tree::{self, Tree};
 use super::phase::{Latest, Refused};
 use super::store::{acquire_with, events_path, LockPolicy, Reclaim};
 use super::wait::epoch_of;
-use super::{Case, Event, State};
+use super::{replay, Case, Event, State};
+use crate::case::Kind as Part;
 use crate::hook::vessel::digest::fnv1a_64;
+use crate::hook::vessel::state_dir as named_state_dir;
 use crate::ledger::form::{is_memo, is_question, pointer_text};
 use crate::ledger::phase_main::{Commit, Row};
 use crate::pipe::declaration::requirements_at_sha;
@@ -29,7 +31,7 @@ use crate::pipe::table::{read_table as table_rows, requirement_ids, DESIGN_DIR};
 use crate::pipe::{git_bytes, live_driver};
 use crate::seat::ledger::Issue;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -803,6 +805,55 @@ pub fn secs_of(ts: &str) -> Option<u64> {
 /// `unmeasured` の理由: 未反映の裁定の置き場が在って読めない（部品の種類は問い）。
 pub const UNMEASURED_UNREFLECTED: &str = "unreflected-unreadable";
 
+/// `unmeasured` の理由: 置き場の anchor が 2 つ以上（設計 §20）。
+pub const UNMEASURED_MULTI_ANCHOR: &str = "multi-anchor";
+
+/// [`UNMEASURED_MULTI_ANCHOR`] で名指す部品の種類（§2 の種類の順・発話は置き場の event log 全部から作るので外す）。
+pub const MULTI_ANCHOR_PARTS: [Part; 8] =
+    [Part::Question, Part::Memo, Part::Contract, Part::Run, Part::Row, Part::Requirement, Part::Epic, Part::Commit];
+
+/// 置き場の anchor の数え（閉じた 3 値・設計 §20）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AnchorCensus {
+    /// 1 つ。
+    One,
+    /// 2 つ以上。
+    Many,
+    /// 書き直す repo が別の置き場を名乗る。
+    Foreign,
+}
+
+/// path の正規化した字（正規化できない path は字のまま）。
+fn canon(path: &Path) -> String {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).display().to_string()
+}
+
+/// `root` の設定が、正規化した字が `mine` と違う在る dir を名乗るか（設定が無い・読めない・在らない path は偽）。
+fn names_other(root: &Path, mine: &str) -> bool {
+    named_state_dir(root).and_then(|named| fs::canonicalize(named).ok()).is_some_and(|named| named.display().to_string() != mine)
+}
+
+/// 置き場の anchor を数える（`events` の登録 row の anchor から別の置き場を名乗る anchor を除き、`repo` と合わせて 2 つ以上なら
+/// [`AnchorCensus::Many`]・1 つで `repo` が別の置き場を名乗れば [`AnchorCensus::Foreign`]・ほかは [`AnchorCensus::One`]）。
+pub(crate) fn census_anchors(state_dir: &Path, repo: &Path, events: &[Event]) -> AnchorCensus {
+    let mine = canon(state_dir);
+    let mut set: BTreeSet<String> = BTreeSet::new();
+    for latest in replay(events).registrations.values() {
+        let anchor = Path::new(&latest.registration.anchor);
+        if !names_other(anchor, &mine) {
+            set.insert(canon(anchor));
+        }
+    }
+    set.insert(canon(repo));
+    if set.len() >= 2 {
+        AnchorCensus::Many
+    } else if names_other(repo, &mine) {
+        AnchorCensus::Foreign
+    } else {
+        AnchorCensus::One
+    }
+}
+
 /// 閉じて未反映の裁定を持つ問いの bead id（置き場・台帳の接頭辞・台帳の全件から引く・置き場の無い周は空・読めない周は `Unreadable`）。
 pub(crate) fn unreflected_questions(state_dir: &Path, prefix: Option<&str>, issues: &[Issue]) -> Asked {
     let closed: Vec<Question<'_>> =
@@ -832,8 +883,8 @@ pub(crate) fn verdict_unhandled(issues: &[Issue], events: &[Event]) -> Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        add_mark, events_order, ledger_is_newer, ledger_order, main_is_descendant, main_order, read_events, read_ledger, read_main, read_marks,
-        read_stale, settle, unreflected_questions, verdict_unhandled, Added, Events, Kind, Ledger, Mark, Settled, Stale, Value, JSON_FILE, MAIN_REF,
+        add_mark, census_anchors, events_order, ledger_is_newer, ledger_order, main_is_descendant, main_order, read_events, read_ledger, read_main, read_marks,
+        read_stale, settle, unreflected_questions, verdict_unhandled, Added, AnchorCensus, Events, Kind, Ledger, Mark, Settled, Stale, Value, JSON_FILE, MAIN_REF,
         STALE_FILE,
     };
     use crate::fleet::store::LockPolicy;
@@ -1242,5 +1293,64 @@ mod tests {
         let events: Vec<Event> = ["m-same", "m-after", "m-before", "m-absent", "m-garbled"].iter().map(|bead| judged_line(ts, bead, "close")).collect();
         let expected = ["m-same", "m-before", "m-absent", "m-garbled"].map(str::to_owned);
         assert_eq!(verdict_unhandled(&issues, &events), expected);
+    }
+
+    /// git の repo（`stateDir` を名乗る設定は `named` の字・無ければ設定しない）。
+    fn census_repo(name: &str, named: Option<&str>) -> PathBuf {
+        let repo = scratch(&format!("anchor-census-{name}"));
+        assert!(crate::pipe::git_ok(&repo, &["init", "-q", "-b", "main"]), "git init");
+        if let Some(value) = named {
+            assert!(crate::pipe::git_ok(&repo, &["config", &format!("{}.stateDir", crate::name::NAME), value]), "設定を書ける");
+        }
+        repo
+    }
+
+    /// 登録（か退役）の event の 1 行（役割は orchestrator）。
+    fn census_event(kind: &str, anchor: &Path) -> Event {
+        let line = format!(
+            "{{\"schema\":1,\"ts\":\"2026-10-02T00:00:00Z\",\"kind\":\"{kind}\",\"role\":\"orchestrator\",\"anchor\":\"{}\",\"target\":\"s:w\",\"account\":\"a\",\"launch\":\"l\",\"host\":\"h\",\"actor\":\"machine\"}}",
+            anchor.display()
+        );
+        Event::from_line(&line).unwrap_or_else(|why| panic!("{line}: {why}"))
+    }
+
+    /// 登録が無い周・R だけの周・`..` を含む R の path は One で、設定の無い B を足すと Many。
+    #[test]
+    fn anchor_census_counts_the_registered_anchors_of_the_place() {
+        let (state, repo, other) = (scratch("anchor-census-place"), census_repo("a-r", None), census_repo("a-b", None));
+        assert_eq!(census_anchors(&state, &repo, &[]), AnchorCensus::One, "登録が無い");
+        let registered = [census_event("SeatRegistered", &repo)];
+        assert_eq!(census_anchors(&state, &repo, &registered), AnchorCensus::One, "R だけ");
+        let leaf = repo.file_name().unwrap_or_default();
+        assert_eq!(census_anchors(&state, &repo.join("..").join(leaf), &registered), AnchorCensus::One, ".. を含む R の path");
+        let both = [registered[0].clone(), census_event("SeatRegistered", &other)];
+        assert_eq!(census_anchors(&state, &repo, &both), AnchorCensus::Many, "設定の無い B を足す");
+    }
+
+    /// B の設定が別の在る dir なら One・置き場なら Many（対）・在らない path の C は Many・B の退役で One に戻る。
+    #[test]
+    fn anchor_census_leaves_out_the_anchors_of_other_places() {
+        let (state, away) = (scratch("anchor-census-mine"), scratch("anchor-census-away"));
+        let repo = census_repo("b-r", None);
+        let other = census_repo("b-b", Some(&away.display().to_string()));
+        let events = [census_event("SeatRegistered", &repo), census_event("SeatRegistered", &other)];
+        assert_eq!(census_anchors(&state, &repo, &events), AnchorCensus::One, "B は別の置き場");
+        assert!(crate::pipe::git_ok(&other, &["config", &format!("{}.stateDir", crate::name::NAME), &state.display().to_string()]), "設定を書き直せる");
+        assert_eq!(census_anchors(&state, &repo, &events), AnchorCensus::Many, "B は同じ置き場");
+        let gone = census_repo("b-c", Some(&away.join("absent").display().to_string()));
+        assert_eq!(census_anchors(&state, &repo, &[events[0].clone(), census_event("SeatRegistered", &gone)]), AnchorCensus::Many, "在らない path の C");
+        let retired = [census_event("SeatRegistered", &repo), census_event("SeatRegistered", &other), census_event("SeatRetired", &other)];
+        assert_eq!(census_anchors(&state, &repo, &retired), AnchorCensus::One, "B の退役");
+    }
+
+    /// R が別の在る dir を名乗り登録が R だけなら Foreign で、設定の無い B を足すと Many（先に Many を判じる）。
+    #[test]
+    fn anchor_census_names_a_repo_of_another_place_foreign() {
+        let (state, away) = (scratch("anchor-census-home"), scratch("anchor-census-elsewhere"));
+        let repo = census_repo("c-r", Some(&away.display().to_string()));
+        let registered = [census_event("SeatRegistered", &repo)];
+        assert_eq!(census_anchors(&state, &repo, &registered), AnchorCensus::Foreign, "R だけ");
+        let both = [registered[0].clone(), census_event("SeatRegistered", &census_repo("c-b", None))];
+        assert_eq!(census_anchors(&state, &repo, &both), AnchorCensus::Many, "設定の無い B を足す");
     }
 }
