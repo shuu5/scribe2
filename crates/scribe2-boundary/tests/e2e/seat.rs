@@ -333,7 +333,7 @@ fn seat_working_memory_subcommands_are_gone_from_the_usage() {
     fs::remove_dir_all(&dir).ok();
     assert!(!usage.contains("--wm-dir"), "退避物の置き場の flag も残らない: {usage}");
     let takers: Vec<&str> = usage.split(['<', '|', '>']).filter(|mouth| mouth.contains("--rules")).collect();
-    let unit = |verb: &str| format!("tick {verb} --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]");
+    let unit = |verb: &str| format!("tick {verb} --state-dir S --target S:W --unit-dir U --binary PATH [--rules F] [--bd B]");
     let status = "tick status --state-dir S [--target S:W] [--rules F]".to_owned();
     let launch = "launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]".to_owned();
     assert_eq!(takers, [launch, TICK_USAGE.to_owned(), unit("install"), unit("uninstall"), status], "席の口で `--rules` を受けるのは起動（`s2-07l.627`）と tick（と unit の口 2 つ・`s2-07l.583`・status の口・`s2-07l.650`）だけ: {usage}");
@@ -2859,7 +2859,7 @@ fn seat_unit_doctor_names_present_absent_and_foreign_per_row() {
 fn seat_unit_usage_names_install_and_uninstall() {
     let usage = stderr_of(&run_seat(&[]));
     for verb in ["install", "uninstall"] {
-        let mouth = format!("|tick {verb} --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|");
+        let mouth = format!("|tick {verb} --state-dir S --target S:W --unit-dir U --binary PATH [--rules F] [--bd B]|");
         assert!(usage.contains(&mouth), "{verb} は使い方に在る: {usage}");
     }
     let place = unit_place(true);
@@ -2940,6 +2940,130 @@ fn seat_doctor_tick_without_face_or_flags_adds_nothing() {
         assert_eq!(doctor_tick_host_lines(&out), [host.to_owned()], "host の面の行は従来の字面");
         assert_eq!(unit_doctor_rows(&out).len(), 1, "登録 row の行は在る");
     }
+    fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+// ─────────── tick の unit が台帳 client を運ぶ（seat-heartbeat.md §25・契約表の行 ad・接頭辞 `seat_unit_bd_` / `seat_doctor_tick_bd_`） ───────────
+//
+// `--bd B`（か面の `[[tick]]` の `bd`）を受けた導出だけ `ExecStart=` の末尾に `--bd B` を載せる。B は在らない path でよい（在るかを見ない）。
+
+/// service の期待の本文の末尾（`\n` の前）に ` --bd <bd>` を足す（[`unit_expected`] の署名は変えない）。
+fn unit_with_bd(service: &str, bd: &str) -> String {
+    format!("{} --bd {bd}\n", service.strip_suffix('\n').unwrap_or(service))
+}
+
+/// (b) install `--rules R --bd B` は期待の service の行末の前に ` --bd B` を足した bytes（timer は期待と等しい・reload → enable の 2 回）。
+/// bd 無しの uninstall は `unit-exists`（2 file 不変・disable 0 回）、`--bd B` の uninstall は `retired`（`.retired` に同じ bytes）、続く bd 無しの
+/// install は bd 無しの bytes で、その上の `--bd B` の install は `unit-exists`（file 不変・systemctl 不増）。
+#[test]
+fn seat_unit_bd_is_carried_by_install_and_uninstall_and_a_different_one_is_refused() {
+    let place = unit_place(true);
+    let [service_name, timer_name] = place.names();
+    let rules = unit_rules(&place, 90);
+    let bd = place.tick.dir.join("no-such").join("bd").display().to_string();
+    let out = unit_run(&place, "install", &["--rules", &rules, "--bd", &bd]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert!(stdout_of(&out).starts_with(&format!("seat tick install: installed timer={timer_name} ")), "{}", stdout_of(&out));
+    let [plain_service, timer] = unit_expected(&place, Some(&rules), 90);
+    let carried = [unit_with_bd(&plain_service, &bd), timer.clone()];
+    assert_eq!(unit_bodies(&place), carried, "service の行末の前に --bd B・timer は期待と等しい");
+    assert_eq!(unit_calls(&place), ["--user daemon-reload".to_owned(), format!("--user enable --now {timer_name}")], "reload → enable の 2 回");
+    unit_assert_refused(&place, "uninstall", &["--binary", &place.binary, "--rules", &rules], &format!("reason=unit-exists unit={service_name}"));
+    assert_eq!(unit_bodies(&place), carried, "bd 無しの uninstall は 2 file 不変");
+    assert!(!unit_calls(&place).iter().any(|call| call.contains("disable")), "disable 0 回");
+    let out = unit_run(&place, "uninstall", &["--rules", &rules, "--bd", &bd]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert!(stdout_of(&out).starts_with(&format!("seat tick uninstall: retired timer={timer_name} ")), "{}", stdout_of(&out));
+    let retired = place.units.join(".retired");
+    let moved: Vec<String> =
+        unit_listing(&retired).iter().map(|entry| fs::read_to_string(retired.join(entry)).unwrap_or_default()).collect();
+    assert!(carried.iter().all(|body| moved.contains(body)), ".retired に同じ bytes: {moved:?}");
+    let out = unit_run(&place, "install", &["--rules", &rules]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(unit_bodies(&place), [plain_service, timer], "bd 無しの install は bd 無しの bytes");
+    let before = unit_bodies(&place);
+    unit_assert_refused(&place, "install", &["--binary", &place.binary, "--rules", &rules, "--bd", &bd], &format!("reason=unit-exists unit={service_name}"));
+    assert_eq!(unit_bodies(&place), before, "B の違う install は file 不変");
+    fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+/// (c) PATH に実行できる `bd` が在っても、`--bd` も面の bd も無い install は bd 無しの bytes（器は PATH で解かない）。`--bd ""` の install と
+/// uninstall は使い方の誤り（rc 1・file 0・systemctl 0 回）・`--bd <在らない絶対 path>` の install は rc 0 でその字面で `ExecStart=` が終わる。
+#[test]
+fn seat_unit_bd_is_taken_from_the_flag_only_and_an_empty_value_is_a_usage_error() {
+    let place = unit_place(true);
+    let fake = place.tick.dir.join("bin").join("bd");
+    fs::write(&fake, "#!/bin/sh\nexit 0\n").ok();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).ok();
+    let executable = fs::metadata(&fake).map(|meta| meta.permissions().mode() & 0o111 != 0).unwrap_or(false);
+    assert!(executable && place.tick.path.starts_with(&place.tick.dir.join("bin").display().to_string()), "偽の PATH に実行できる bd が在る");
+    let out = unit_run(&place, "install", &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(unit_bodies(&place), unit_expected(&place, None, 15), "bd 無しの service は期待と等しい（PATH の bd を載せない）");
+    fs::remove_dir_all(&place.tick.dir).ok();
+    let place = unit_place(true);
+    for verb in ["install", "uninstall"] {
+        let out = unit_run(&place, verb, &["--bd", ""]);
+        assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_REFUSED), String::new()), "{verb}: 空文字は使い方の誤り");
+        assert!(stderr_of(&out).starts_with("usage: seat"), "{verb}: {}", stderr_of(&out));
+        let out = unit_run(&place, verb, &["--bd"]);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{verb}: 値欠けは使い方の誤り: {}", stderr_of(&out));
+        assert!(unit_listing(&place.units).is_empty() && unit_calls(&place).is_empty(), "{verb}: file 0・systemctl 0 回");
+    }
+    let bd = "/no/such/dir/bd";
+    let out = unit_run(&place, "install", &["--bd", bd]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let [service, _] = unit_bodies(&place);
+    assert!(service.ends_with(&format!(" --target {TICK_TARGET} --bd {bd}\n")), "{service}");
+    fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+/// 面に `[[tick]]` を `bd`（在れば）つきで書く（unit dir = 置き場の unit dir・binary = 置き場の binary）。
+fn doctor_tick_bd_face(place: &UnitPlace, bd: Option<&str>) {
+    let bd = bd.map(|found| format!("bd = \"{found}\"\n")).unwrap_or_default();
+    let body = format!("schema = 1\n\n[[tick]]\nunit-dir = \"{}\"\nbinary = \"{}\"\n{bd}", place.units.display(), place.binary);
+    fs::write(place.tick.state.join(vessel::rules::HOST_MANIFEST), body).ok();
+}
+
+/// (e) 面に `bd = B` で flag 無しの doctor は、`--bd B` の install の前は absent・後は present（host の行は `tick=declared run-accounts=0`）。
+/// 面から bd を消した周は同じ unit が foreign。
+#[test]
+fn seat_doctor_tick_bd_face_set_is_used_whole_without_flags() {
+    let place = unit_place(true);
+    let bd = "/opt/bin/bd";
+    let host = "host-manifest=present tick=declared run-accounts=0";
+    doctor_tick_bd_face(&place, Some(bd));
+    doctor_tick_assert(&place, &[], "absent", host);
+    assert_eq!(rc_of(&unit_run(&place, "install", &["--bd", bd])), i32::from(RC_OK));
+    doctor_tick_assert(&place, &[], "present", host);
+    doctor_tick_bd_face(&place, None);
+    doctor_tick_assert(&place, &[], "foreign", host);
+    fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+/// (f) flag の組が在る周は面の bd を読まない: flag 無しが present であることを前提に、`--unit-dir U --binary P --bd B` は present・
+/// `--unit-dir U --binary P` は foreign・`--bd B` だけと `--bd B --unit-dir U` は使い方の誤り（登録 row の行 0）。help の doctor の FLAGS に
+/// 先頭の語が `--bd` の行がちょうど 1 行。
+#[test]
+fn seat_doctor_tick_bd_flag_set_is_used_whole_and_a_partial_set_is_a_usage_error() {
+    let place = unit_place(true);
+    let bd = "/opt/bin/bd";
+    let host = "host-manifest=present tick=declared run-accounts=0";
+    doctor_tick_bd_face(&place, Some(bd));
+    assert_eq!(rc_of(&unit_run(&place, "install", &["--bd", bd])), i32::from(RC_OK));
+    doctor_tick_assert(&place, &[], "present", host);
+    let units = place.units.display().to_string();
+    doctor_tick_assert(&place, &["--unit-dir", &units, "--binary", &place.binary, "--bd", bd], "present", host);
+    doctor_tick_assert(&place, &["--unit-dir", &units, "--binary", &place.binary], "foreign", host);
+    for partial in [&["--bd", bd][..], &["--bd", bd, "--unit-dir", &units]] {
+        let out = unit_doctor(&place, partial);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{partial:?}: 使い方の誤り");
+        assert!(unit_doctor_rows(&out).is_empty(), "{partial:?}: {}", stdout_of(&out));
+    }
+    let help = Command::new(bin()).args(["help", "doctor"]).output().expect("binary を起動できる");
+    let page = stdout_of(&help);
+    let flags: Vec<&str> = page.lines().skip_while(|line| *line != "FLAGS").take_while(|line| !line.is_empty()).collect();
+    assert_eq!(flags.iter().filter(|line| line.split_whitespace().next() == Some("--bd")).count(), 1, "{page}");
     fs::remove_dir_all(&place.tick.dir).ok();
 }
 

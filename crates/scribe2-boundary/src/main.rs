@@ -65,10 +65,11 @@ fn render_doctor() -> Vec<String> {
 /// [`vessel::ledger::lint::doctor_lines`]・contract-source.md §6 / ledger-form.md §3 の 4 / dispatcher.md §36・台帳は 1 回だけ読む・
 /// `--state-dir` 無しでも `--rules` と並べて撃てる）。`--unit-dir U --binary PATH`（`--state-dir` と並べる・2 つはそろって在る）は登録 row の行の末尾に `tick-unit=` の
 /// 1 語を足す（seat-heartbeat.md §3）。2 つとも無い周は host の面の `[[tick]]` の値が既定（面にも無ければ足さない・flag が勝つ・§5 形 3）。
-/// 値欠け・空文字・重複・未知の引数・片方だけの `--unit-dir` / `--binary` は使い方の誤り（`Err`）。
+/// 任意の `--bd B`（台帳 client・`--unit-dir` と `--binary` がそろった周だけ受け、組の導出に `--bd` を足す）。
+/// 値欠け・空文字・重複・未知の引数・片方だけの `--unit-dir` / `--binary`・それらを欠いた `--bd` は使い方の誤り（`Err`）。
 fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
     let (mut lines, mut state_dir, mut socket, mut rules, mut repo, mut bin) = (render_doctor(), None, None, None, None, None);
-    let (mut unit_dir, mut binary) = (None, None);
+    let (mut unit_dir, mut binary, mut bd) = (None, None, None);
     for pair in rest.chunks(2) {
         match (pair.first().map(String::as_str), pair.get(1).filter(|v| !v.trim().is_empty() && !v.starts_with("--"))) {
             (Some("--state-dir"), Some(found)) if state_dir.is_none() => state_dir = Some(found),
@@ -78,12 +79,13 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
             (Some("--bin"), Some(found)) if bin.is_none() => bin = Some(found.as_str()),
             (Some("--unit-dir"), Some(found)) if unit_dir.is_none() => unit_dir = Some(Path::new(found.as_str())),
             (Some("--binary"), Some(found)) if binary.is_none() => binary = Some(Path::new(found.as_str())),
+            (Some("--bd"), Some(found)) if bd.is_none() => bd = Some(Path::new(found.as_str())),
             _ => return Err(()),
         }
     }
-    let units = match (unit_dir, binary) {
-        (Some(unit_dir), Some(binary)) => Some(vessel::seat::tick::install::Probe { unit_dir, binary, rules: rules.map(Path::new) }),
-        (None, None) => None,
+    let units = match (unit_dir, binary, bd) {
+        (Some(unit_dir), Some(binary), bd) => Some(vessel::seat::tick::install::Probe { unit_dir, binary, rules: rules.map(Path::new), bd }),
+        (None, None, None) => None,
         _ => return Err(()),
     };
     // 骨格の 2 行の直後に雛形の pointer の 1 行（置き場を渡さない周も出す＝`init` の前に確かめられる・host-init.md §3）と、

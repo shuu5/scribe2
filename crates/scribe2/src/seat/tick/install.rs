@@ -46,22 +46,26 @@ pub struct Spec {
     pub binary: PathBuf,
     /// rules の写し（`--rules` を受けた周だけ）。
     pub rules: Option<PathBuf>,
+    /// 台帳 client の写し（`--bd` か面の `[[tick]]` の `bd` を受けた周だけ・unit の `ExecStart=` の末尾に `--bd` で載る）。
+    pub bd: Option<PathBuf>,
     /// timer の周期（秒・`seat.tick_interval_s`）。
     pub interval_s: u64,
 }
 
 impl Spec {
-    /// 引数の path を絶対化して組む（`std::path::absolute`＝symlink も存在も見ない・置き場の解き方と同じ）。解けない周は `None`。
-    pub fn resolve(target: &str, state_dir: &Path, binary: &Path, rules: Option<&Path>, interval_s: u64) -> Option<Self> {
-        let rules = match rules {
-            Some(found) => Some(std::path::absolute(found).ok()?),
-            None => None,
+    /// 引数の path を絶対化して組む（`std::path::absolute`＝symlink も存在も見ない・置き場の解き方と同じ・`bd` も在るかを見ない）。
+    /// 解けない周は `None`。
+    pub fn resolve(target: &str, state_dir: &Path, probe: &Probe, interval_s: u64) -> Option<Self> {
+        let absolute = |found: Option<&Path>| match found {
+            Some(found) => std::path::absolute(found).map(Some).ok(),
+            None => Some(None),
         };
         Some(Self {
             target: target.to_owned(),
             state_dir: std::path::absolute(state_dir).ok()?,
-            binary: std::path::absolute(binary).ok()?,
-            rules,
+            binary: std::path::absolute(probe.binary).ok()?,
+            rules: absolute(probe.rules)?,
+            bd: absolute(probe.bd)?,
             interval_s,
         })
     }
@@ -98,16 +102,17 @@ pub fn unit_word(text: &str) -> String {
 }
 
 /// 導出（**pure な 1 関数**・設計 §3）: service は `Type=oneshot` の `ExecStart=<binary> seat tick --state-dir S --target S:W`
-/// （`--rules` を受けた周だけ末尾に `--rules F`）・timer は単調時計の `OnBootSec` / `OnUnitActiveSec`（周期）と `Persistent=false`。
+/// （`--rules` を受けた周だけ末尾に `--rules F`・`bd` を受けた周だけその後ろに `--bd B`）・timer は単調時計の `OnBootSec` / `OnUnitActiveSec`（周期）と `Persistent=false`。
 /// `Environment=` / `WorkingDirectory=` / `%h` を持たず、2 file の先頭行は器の印（[`mark`]）。
 pub fn derive(spec: &Spec) -> Units {
     let stem = format!("{NAME}-seat-tick-{}", sanitize_target(&spec.target));
     let word = |path: &Path| unit_word(&path.display().to_string());
     let rules = spec.rules.as_deref().map(|found| format!(" --rules {}", word(found))).unwrap_or_default();
+    let bd = spec.bd.as_deref().map(|found| format!(" --bd {}", word(found))).unwrap_or_default();
     let mark = mark();
     let target = unit_word(&spec.target);
     let service = format!(
-        "{mark}\n[Unit]\nDescription={NAME} seat tick {target}\n\n[Service]\nType=oneshot\nExecStart={} seat tick --state-dir {} --target {target}{rules}\n",
+        "{mark}\n[Unit]\nDescription={NAME} seat tick {target}\n\n[Service]\nType=oneshot\nExecStart={} seat tick --state-dir {} --target {target}{rules}{bd}\n",
         word(&spec.binary),
         word(&spec.state_dir)
     );
@@ -196,13 +201,15 @@ pub struct Probe<'a> {
     pub binary: &'a Path,
     /// `--rules`（導出の `--rules` の有無と周期の出所）。
     pub rules: Option<&'a Path>,
+    /// `--bd`（導出の `--bd` の有無）。
+    pub bd: Option<&'a Path>,
 }
 
 /// doctor の登録 row 1 行に足す語（`tick-unit=<present|absent|foreign>`・`systemctl` は呼ばない＝bytes で判じる）。周期の行が
 /// 読めない周は導出できない＝`tick-unit=<no-rule の語>`（在るとも無いとも書かない・C10）。
 pub fn doctor_word(state_dir: &Path, target: &str, probe: &Probe, manifest: &Result<Manifest, RuleRead>) -> String {
     let interval = manifest.as_ref().map_err(|failed| *failed).and_then(|found| crate::seat::int_rule_of(found, ROW_INTERVAL));
-    let spec = interval.map(|n| Spec::resolve(target, state_dir, probe.binary, probe.rules, n));
+    let spec = interval.map(|n| Spec::resolve(target, state_dir, probe, n));
     match spec {
         Ok(Some(spec)) => {
             let units = derive(&spec);
@@ -279,6 +286,8 @@ pub struct Flags<'a> {
     pub binary: &'a str,
     /// `--rules`。
     pub rules: Option<&'a str>,
+    /// `--bd`。
+    pub bd: Option<&'a str>,
 }
 
 /// 口の動詞（閉じた 2 値）。
@@ -320,9 +329,12 @@ pub fn run(verb: Verb, flags: &Flags, manifest: Result<Manifest, Vec<RuleError>>
     let request = Request {
         state_dir: Path::new(flags.state_dir),
         target: flags.target,
-        unit_dir: Path::new(flags.unit_dir),
-        binary: Path::new(flags.binary),
-        rules: flags.rules.map(Path::new),
+        probe: Probe {
+            unit_dir: Path::new(flags.unit_dir),
+            binary: Path::new(flags.binary),
+            rules: flags.rules.map(Path::new),
+            bd: flags.bd.map(Path::new),
+        },
     };
     let result = prepared(&request, &manifest).and_then(|(spec, units, unit_dir)| match verb {
         Verb::Install => install(&spec, &units, &unit_dir)
@@ -337,15 +349,13 @@ pub fn run(verb: Verb, flags: &Flags, manifest: Result<Manifest, Vec<RuleError>>
 
 /// 席の起動が撃つ install の 1 本（設計 seat-heartbeat.md §5 形 2・ADR-0064）: `seat tick install` と同じ門・導出・照合・書き・
 /// `daemon-reload` → `enable --now` を、置き場 = 起動の置き場・target = 起動の target・unit dir と binary = host の面の
-/// `[[tick]]`・rules = 起動が開いた manifest（`--rules` の写しは持たない＝unit の `ExecStart=` に `--rules` は載らない）で撃つ。
-/// 返すのは起動の行の末尾に足す 1 語 `tick-unit=<installed|unchanged|refused:<理由の語>>`（断りは起動の rc を変えない）。
+/// `[[tick]]`・bd = 面の `[[tick]]` の `bd`（無い表は載せない）・rules = 起動が開いた manifest（`--rules` の写しは持たない＝unit の
+/// `ExecStart=` に `--rules` は載らない）で撃つ。返すのは起動の行の末尾に足す 1 語 `tick-unit=<installed|unchanged|refused:<理由の語>>`（断りは起動の rc を変えない）。
 pub fn on_launch(state_dir: &Path, target: &str, tick: &TickUnit, manifest: &Manifest) -> String {
     let request = Request {
         state_dir,
         target,
-        unit_dir: Path::new(tick.unit_dir()),
-        binary: Path::new(tick.binary()),
-        rules: None,
+        probe: Probe { unit_dir: Path::new(tick.unit_dir()), binary: Path::new(tick.binary()), rules: None, bd: tick.bd().map(Path::new) },
     };
     let done = prepared(&request, manifest).and_then(|(spec, units, unit_dir)| install(&spec, &units, &unit_dir));
     match done {
@@ -360,19 +370,15 @@ struct Request<'a> {
     state_dir: &'a Path,
     /// `S:W`。
     target: &'a str,
-    /// unit dir。
-    unit_dir: &'a Path,
-    /// unit が撃つ binary。
-    binary: &'a Path,
-    /// rules の写し（導出の `--rules`）。
-    rules: Option<&'a Path>,
+    /// unit dir・unit が撃つ binary・rules の写し（導出の `--rules`）・台帳 client（導出の `--bd`）。
+    probe: Probe<'a>,
 }
 
 /// 撃つ前の門を通して導出する（周期の行 → 登録 row → 導出の入力 → 導出 → unit dir の絶対化・どれかで止まる周は 1 file も触らない）。
 fn prepared(request: &Request, manifest: &Manifest) -> Result<(Spec, Units, PathBuf), Refusal> {
     let spec = spec_of(request, manifest)?;
     let units = derive(&spec);
-    let unit_dir = std::path::absolute(request.unit_dir).map_err(|_| Refusal::Path)?;
+    let unit_dir = std::path::absolute(request.probe.unit_dir).map_err(|_| Refusal::Path)?;
     Ok((spec, units, unit_dir))
 }
 
@@ -383,7 +389,7 @@ fn spec_of(request: &Request, manifest: &Manifest) -> Result<Spec, Refusal> {
     let events = store::read_all(&state_dir).map_err(|_| Refusal::Store)?;
     let fleet = crate::fleet::replay(&events);
     crate::seat::role::registration_of_target(&fleet, request.target).ok_or(Refusal::NoRow)?;
-    Spec::resolve(request.target, &state_dir, request.binary, request.rules, interval_s).ok_or(Refusal::Path)
+    Spec::resolve(request.target, &state_dir, &request.probe, interval_s).ok_or(Refusal::Path)
 }
 
 /// install: 2 file を照合し、どちらかが導出と違えば 1 file も書かず `systemctl` も撃たない。無い file だけを一時 file → rename で
@@ -495,8 +501,30 @@ mod tests {
             state_dir: PathBuf::from("/st/state"),
             binary: PathBuf::from("/opt/bin/x"),
             rules: rules.map(PathBuf::from),
+            bd: None,
             interval_s: 60,
         }
+    }
+
+    /// 台帳 client を載せる導出（`--bd` は `--rules` の後ろ・受けない導出の service は逐語の fixture のまま・timer は bd に依らない）。
+    #[test]
+    fn seat_unit_bd_is_appended_after_rules_and_only_when_received() {
+        let plain = derive(&spec(None));
+        let both = derive(&Spec { bd: Some(PathBuf::from("/opt/bin/bd")), ..spec(Some("/st/rules.toml")) });
+        assert!(both.service.ends_with(" --target tk:tk --rules /st/rules.toml --bd /opt/bin/bd\n"), "{}", both.service);
+        let only = derive(&Spec { bd: Some(PathBuf::from("/opt/bin/bd")), ..spec(None) });
+        assert!(only.service.ends_with(" --target tk:tk --bd /opt/bin/bd\n"), "{}", only.service);
+        let spaced = derive(&Spec { bd: Some(PathBuf::from("/b d/%h")), ..spec(None) });
+        assert!(spaced.service.ends_with(" --target tk:tk --bd \"/b d/%%h\"\n"), "{}", spaced.service);
+        assert_eq!(both.timer, plain.timer, "timer は bd に依らない");
+        assert_eq!(only.timer, plain.timer, "timer は bd に依らない");
+        assert_eq!(
+            plain.service,
+            format!(
+                "# {NAME} tick-install schema=1\n[Unit]\nDescription={NAME} seat tick tk:tk\n\n[Service]\nType=oneshot\nExecStart=/opt/bin/x seat tick --state-dir /st/state --target tk:tk\n"
+            ),
+            "bd の無い Spec の service は逐語の fixture のまま"
+        );
     }
 
     /// 導出は fixture の逐語と一致する（service → timer・印が先頭行・周期は単調時計の 2 行）。`--rules` は受けた周だけ末尾に載る。
