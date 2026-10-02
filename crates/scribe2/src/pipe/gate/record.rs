@@ -469,17 +469,21 @@ fn first_line(path: &Path) -> Option<String> {
 /// 混ぜると `n` が飛ぶ。診断 file の読み手は人だけで、通知は段の見出しを持たない 1 行に閉じる。
 ///
 /// 削除の run を 1 つ以上畳んだ周だけ、[`notice_line`] の末尾（` elided=` の後ろ）に ` pruned=<run 数>/<省いた行数>` を足す
-/// （設計 gate-cost.md §46 形 3・0 の周は従来の字面のまま）。
+/// （設計 gate-cost.md §46 形 3・0 の周は従来の字面のまま）。§46 の本文と違う本文を §49 の縮めで作った周は、その後ろに ` tight` を足す
+/// （`tight` は `pruned` と対で渡す・設計 §49 形 5）。
 pub(super) fn record_notice(
     entry: &Gate<'_>,
     input: &LensInput,
     elided: (u64, u64),
-    pruned: (u64, u64),
+    (pruned, tight): ((u64, u64), bool),
 ) -> Result<(), String> {
     let path = verify_log_path(entry.state_dir, entry.run).with_file_name(STDERR_LOG_FILE);
     let line = match pruned {
         (0, _) => notice_line(input, elided),
-        (runs, lines) => format!("{} pruned={runs}/{lines}", notice_line(input, elided)),
+        (runs, lines) => {
+            let tail = if tight { " tight" } else { "" };
+            format!("{} pruned={runs}/{lines}{tail}", notice_line(input, elided))
+        }
     };
     append_line(&path, &line, entry.policy).map_err(|err| err.to_string())?;
     Ok(())

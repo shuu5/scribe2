@@ -296,7 +296,19 @@ fn pruned_mark(run: usize, omitted: usize) -> String {
 /// （`\` 行を飛ばした次）が `+` 行でない run だけ（置き換えの塊は畳まない）。畳み方は [`shallow_lines`]。header と `@@` と
 /// context と `+` 行は 1 字も変えない。戻りは（畳んだ後の本文, 畳んだ run 数, 省いた行数）。
 pub(super) fn prune_deletions(diff: &[u8]) -> (Vec<u8>, u64, u64) {
-    let mut prune = Prune { out: Vec::with_capacity(diff.len()), runs: 0, lines: 0 };
+    prune_runs(diff, false)
+}
+
+/// [`prune_deletions`] の後もまだ cap を超える周だけ当てる、浅い行の連なりを最後の 1 行に縮める版（設計 gate-cost.md §49 形 1・
+/// **pure**）。run の選び方・m・印の置き場・戻りは [`prune_deletions`] と同じで、違うのは残す行だけ（[`tight_lines`]）。浅い行が
+/// 続けて並ばない run の出力は [`prune_deletions`] と 1 byte も違わない。
+pub(super) fn prune_deletions_tight(diff: &[u8]) -> (Vec<u8>, u64, u64) {
+    prune_runs(diff, true)
+}
+
+/// [`prune_deletions`] と [`prune_deletions_tight`] の走査（`tight` は残す行の選び方）。
+fn prune_runs(diff: &[u8], tight: bool) -> (Vec<u8>, u64, u64) {
+    let mut prune = Prune { out: Vec::with_capacity(diff.len()), runs: 0, lines: 0, tight };
     let mut run: Vec<&[u8]> = Vec::new();
     let mut in_hunk = false;
     for line in diff.split_inclusive(|byte| *byte == b'\n') {
@@ -324,21 +336,30 @@ struct Prune {
     runs: u64,
     /// 省いた行数。
     lines: u64,
+    /// 浅い行の連なりを最後の 1 行に縮めるか（[`prune_deletions_tight`]）。
+    tight: bool,
 }
 
 impl Prune {
     /// 終わった run を、畳めれば残す行と印 1 行・畳めなければ逐語（`\` 行も）で出す。`before_plus` は直後の行が `+` 行か。
     fn flush(&mut self, run: &mut Vec<&[u8]>, before_plus: bool) {
         let minus: Vec<&[u8]> = run.iter().copied().filter(|line| line.starts_with(b"-")).collect();
-        let kept = if before_plus || minus.len() < PRUNE_MIN_RUN { None } else { shallow_lines(&minus) };
+        let kept = if before_plus || minus.len() < PRUNE_MIN_RUN {
+            None
+        } else if self.tight {
+            tight_lines(&minus)
+        } else {
+            shallow_lines(&minus).map(|kept| (kept, false))
+        };
         match kept {
-            Some(kept) => {
+            Some((kept, tight)) => {
                 kept.iter().for_each(|line| self.out.extend_from_slice(line));
                 if !self.out.ends_with(b"\n") {
                     self.out.push(b'\n');
                 }
                 let omitted = minus.len().saturating_sub(kept.len());
-                self.out.extend_from_slice(pruned_mark(minus.len(), omitted).as_bytes());
+                let mark = if tight { tight_mark(minus.len(), omitted) } else { pruned_mark(minus.len(), omitted) };
+                self.out.extend_from_slice(mark.as_bytes());
                 self.runs = self.runs.saturating_add(1);
                 self.lines = self.lines.saturating_add(line_count(omitted));
             }
@@ -360,6 +381,28 @@ fn shallow_lines<'a>(minus: &[&'a [u8]]) -> Option<Vec<&'a [u8]>> {
         .map(|(line, _)| *line)
         .collect();
     (kept.len() < minus.len()).then_some(kept)
+}
+
+/// 浅い行の連なりを最後の 1 行に縮めた run の末尾に置く 1 行の印（`N` は run の `-` 行の数・`M` は省いた行の数）。
+fn tight_mark(run: usize, omitted: usize) -> String {
+    format!("~ 削除だけの run（-{run} 行）から浅い行の連なりの最後の行だけを残し {omitted} 行を省いた\n")
+}
+
+/// [`shallow_lines`] の行のうち、列で直後の行も空白以外の字を持つ字下げ m の行であるものを省いた行（連なりの最後の行・順のまま）。
+/// 戻りの `bool` は [`shallow_lines`] より省く行が増えたか（増えない run は [`shallow_lines`] の行のまま・`false`）。
+fn tight_lines<'a>(minus: &[&'a [u8]]) -> Option<(Vec<&'a [u8]>, bool)> {
+    let shallow = shallow_lines(minus)?;
+    let indents: Vec<Option<usize>> = minus.iter().map(|line| indent_of(line)).collect();
+    let shallowest = indents.iter().flatten().min().copied();
+    let followers = indents.iter().skip(1).map(Some).chain(std::iter::once(None));
+    let last: Vec<&[u8]> = minus
+        .iter()
+        .zip(&indents)
+        .zip(followers)
+        .filter(|((_, indent), next)| **indent == shallowest && *next != Some(&shallowest))
+        .map(|((line, _), _)| *line)
+        .collect();
+    Some(if last.len() < shallow.len() { (last, true) } else { (shallow, false) })
 }
 
 /// `-` 行の字下げ（行頭の ' ' と '\t' の数・どちらも 1 字）。空白以外の字を持たない行（行末の '\r' は字に数えない）は `None`。
@@ -583,7 +626,7 @@ pub(super) fn write_verdict(path: &Path, text: &str) -> Result<(), String> {
 mod tests {
     // flip-check: moved s2-07l.286
     use super::super::verify::tests::{names, scratch};
-    use super::{dir_pairs, prune_deletions, substitute, write_verdict};
+    use super::{dir_pairs, prune_deletions, prune_deletions_tight, substitute, write_verdict};
     use std::path::Path;
 
     /// 判定の書きは完了後に書きかけを残さず、本 file の中身は完全（前の判定を丸ごと置き換える）。
@@ -731,5 +774,64 @@ mod tests {
         let windows = hunk_of(&format!("{crlf}-\r\n context\n"));
         let mark = "~ 削除だけの run（-16 行）から字下げの深い行と空行 1 行を省いた\n";
         assert_eq!(pruned(&windows), (hunk_of(&format!("{crlf}{mark} context\n")), 1, 1), "行末の `\\r` は字でない");
+    }
+
+    /// 本文を本節の 1 本で縮めて（本文, run 数, 省いた行数）を文字列で返す。
+    fn tightened(diff: &str) -> (String, u64, u64) {
+        let (body, runs, lines) = prune_deletions_tight(diff.as_bytes());
+        (String::from_utf8_lossy(&body).into_owned(), runs, lines)
+    }
+
+    /// 字下げ 0 の頭・字下げ 4 の本文 `count` 本・字下げ 0 の閉じの塊（行ごとに字面が違う）。
+    fn block(tag: &str, count: usize) -> String {
+        format!("-head {tag}\n{}-close {tag}\n", deep_lines(count))
+    }
+
+    /// (a) 浅い行の連なりは最後の 1 行だけ残る（設計 gate-cost.md §49・[`prune_deletions_tight`]）。空行は連なりを切る。
+    #[test]
+    fn lens_prune_tight_keeps_only_the_last_line_of_each_shallow_block() {
+        let notes = |tag: &str, count: usize| -> String { (0..count).map(|n| format!("-note {tag}{n}\n")).collect() };
+        let run = format!("{}{}-\n{}{}", notes("a", 2), block("one", 6), notes("b", 1), block("two", 4));
+        let diff = hunk_of(&format!("{run} context\n"));
+        let mark = "~ 削除だけの run（-18 行）から浅い行の連なりの最後の行だけを残し 14 行を省いた\n";
+        let expected = hunk_of(&format!("-head one\n-close one\n-head two\n-close two\n{mark} context\n"));
+        assert_eq!(tightened(&diff), (expected, 1, 14), "頭 2 と閉じ 2 と印だけ");
+        assert_ne!(tightened(&diff).0, pruned(&diff).0, "§46 は注の行も残す");
+        let joined = format!("{}{}{}{}", notes("a", 2), block("one", 6), notes("b", 1), block("two", 4));
+        let diff = hunk_of(&format!("{joined} context\n"));
+        let mark = "~ 削除だけの run（-17 行）から浅い行の連なりの最後の行だけを残し 14 行を省いた\n";
+        let expected = hunk_of(&format!("-head one\n-head two\n-close two\n{mark} context\n"));
+        assert_eq!(tightened(&diff), (expected, 1, 14), "1 つ目の閉じも直後の注の行とつながって省く");
+        let tail = hunk_of(&format!("{}{}\\ No newline at end of file\n", notes("c", 1), block("end", 15)));
+        let mark = "~ 削除だけの run（-18 行）から浅い行の連なりの最後の行だけを残し 16 行を省いた\n";
+        let expected = hunk_of(&format!("-head end\n-close end\n{mark}"));
+        assert_eq!(tightened(&tail), (expected, 1, 16), "file の末尾の閉じは残り `\\` 行は出ない");
+    }
+
+    /// (b) 浅い行が続けて並ばない run の出力は [`prune_deletions`] と 1 byte も違わない。
+    #[test]
+    fn lens_prune_tight_leaves_alone_the_runs_without_consecutive_shallow_lines() {
+        let one = hunk_of(&format!("{} context\n", block("solo", 18)));
+        let two = hunk_of(&format!("{} context\n{} context\n", block("x", 18), block("y", 18)));
+        for diff in [one, two] {
+            let tight = prune_deletions_tight(diff.as_bytes());
+            assert_eq!(tight, prune_deletions(diff.as_bytes()), "§46 の出力・run 数・行数と等しい");
+            assert!(tight.1 > 0, "前提: §46 は畳む");
+        }
+    }
+
+    /// (c) §46 が逐語のまま残す run は本節でも逐語で数えない。
+    #[test]
+    fn lens_prune_tight_leaves_verbatim_the_runs_the_shallow_fold_leaves_verbatim() {
+        let flat: String = (0..16).map(|number| format!("-line {number}\n")).collect();
+        let blank: String = (0..16).map(|number| format!("-{}\n", " ".repeat(number))).collect();
+        for diff in [
+            hunk_of(&format!("{flat} context\n")),
+            hunk_of(&format!("-head\n{} context\n", deep_lines(14))),
+            hunk_of(&format!("{}+added\n", block("rep", 18))),
+            hunk_of(&format!("{blank} context\n")),
+        ] {
+            assert_eq!(tightened(&diff), (diff.clone(), 0, 0), "逐語のまま数えない");
+        }
     }
 }

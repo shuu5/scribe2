@@ -703,3 +703,73 @@ fn pipe_gate_prune_still_refuses_a_body_that_exceeds_the_cap_after_folding() {
     assert!(gated.notices.iter().all(|line| line.ends_with(" pruned=1/38")), "畳んだ周は pruned= が在る: {:?}", gated.notices);
     clean(&[&gated.repo, &gated.state]);
 }
+
+// ───── §46 の畳みの後もまだ cap を超える周の浅い行の連なりの縮め（設計 gate-cost.md §49・行 at・接頭辞 `pipe_gate_prune_tight_`） ─────
+
+/// 字下げ 0 の注の行 2 本（40 byte 以上・塊ごとに違う字面）・字下げ 0 の頭・字下げ 4 の本文 3 本・字下げ 0 の閉じ・空行の塊。
+fn tight_block(number: usize) -> String {
+    let notes: String = ["first", "second"]
+        .iter()
+        .map(|which| format!("// note t{number} {which} line of the doc comment, long enough\n"))
+        .collect();
+    let body: String = (0..3).map(|line| format!("    t{number} body line {line} with some filler words\n")).collect();
+    format!("{notes}block t{number} {{\n{body}}}\n\n")
+}
+
+/// 8 つの塊を持つ file を丸ごと消す toy（浅い行が続けて並ぶ run が 1 つ・64 行）。
+fn tight_toy() -> PruneToy {
+    let file: String = (0..8).map(tight_block).collect();
+    PruneToy { base: vec![("src/gone.txt".to_owned(), file)], head: Vec::new(), removed: vec!["src/gone.txt".to_owned()], rename: false }
+}
+
+/// 生 diff の `-` 行のうち `drop` を満たす行の byte（改行を含む）。
+fn removed_bytes(raw: &str, drop: impl Fn(&str) -> bool) -> usize {
+    raw.lines().filter(|line| line.starts_with('-') && drop(line)).map(|line| line.len() + 1).sum()
+}
+
+/// (d) 1 本目の便は cap が生 diff の byte − 1 で §46 だけで収まる（通知に tight が無い）。2 本目は別の toy で cap が 1 本目の `bytes=` − 1
+/// → 本節を当てて lens が呼ばれ PASS（8 つの頭と閉じと本節の印・注の行と本文の行は無い・通知の末尾 ` pruned=1/48 tight`）。
+#[test]
+fn pipe_gate_prune_tight_runs_only_while_the_shallow_fold_is_over_the_cap() {
+    let first = tight_toy().gate(Some(&one_below));
+    assert_pruned_pass(&first, " pruned=1/32", "§46 だけで収まる");
+    let gated = &first.gated;
+    assert!(gated.stdin.contains("-// note t0 first line"), "§46 は注の行を残す: {}", gated.stdin);
+    assert!(gated.stdin.contains("~ 削除だけの run（-64 行）から字下げの深い行と空行 32 行を省いた\n"), "§46 の印: {}", gated.stdin);
+    assert!(!gated.stdin.contains("body line"), "本文の行は無い: {}", gated.stdin);
+    assert!(!gated.notices.iter().any(|line| line.contains(" tight")), "tight が無い: {:?}", gated.notices);
+    let cap = gated.stdin.len().saturating_sub(1);
+    assert!(token_of(&gated.line, "bytes=").parse::<usize>().is_ok_and(|bytes| bytes < gated.raw.len()), "前提: cap（生 diff − 1）以下");
+    clean(&[&gated.repo, &gated.state]);
+
+    let second = tight_toy().gate(Some(&|_| cap));
+    assert_pruned_pass(&second, " pruned=1/48 tight", "本節で収まる");
+    let gated = &second.gated;
+    assert!(token_of(&gated.line, "bytes=").parse::<usize>().is_ok_and(|bytes| bytes <= cap), "bytes= は cap 以下: {}", gated.line);
+    for number in 0..8 {
+        assert!(gated.stdin.contains(&format!("-block t{number} {{\n-}}\n")), "頭と閉じ t{number}: {}", gated.stdin);
+    }
+    assert!(gated.stdin.contains("~ 削除だけの run（-64 行）から浅い行の連なりの最後の行だけを残し 48 行を省いた\n"), "本節の印: {}", gated.stdin);
+    assert!(!gated.stdin.contains("// note") && !gated.stdin.contains("body line"), "注の行と本文の行は無い: {}", gated.stdin);
+    clean(&[&gated.repo, &gated.state]);
+}
+
+/// (e) 同じ fixture の便を cap 100 で gate → INCONCLUSIVE（lens を呼ばない）。evidence の byte は本節の本文の byte（生 diff から注と本文と
+/// 空行を引いて本節の印を足した値）で、§46 の本文の byte より小さい。通知の末尾は ` pruned=1/48 tight`。
+#[test]
+fn pipe_gate_prune_tight_still_refuses_a_body_over_the_cap_after_tightening() {
+    let observed = tight_toy().gate(Some(&|_| 100));
+    let gated = &observed.gated;
+    assert_over_cap(&observed, 100, "縮めても超える");
+    let shallow_mark = "~ 削除だけの run（-64 行）から字下げの深い行と空行 32 行を省いた\n".len();
+    let tight_mark = "~ 削除だけの run（-64 行）から浅い行の連なりの最後の行だけを残し 48 行を省いた\n".len();
+    let deeper = removed_bytes(&gated.raw, |line| line.starts_with("-    ") || line == "-");
+    let folded = gated.raw.len() - deeper + shallow_mark;
+    let tight = gated.raw.len() - deeper - removed_bytes(&gated.raw, |line| line.starts_with("-// note")) + tight_mark;
+    assert!(tight < folded, "前提: 本節の本文は §46 の本文より小さい: {tight} {folded}");
+    let pairs = verdict_pairs(&gated.state, &gated.id);
+    assert!(value_of(&pairs, "evidence").contains(&format!("diff {tight} byte が cap 100")), "evidence の byte は本節の本文: {}", value_of(&pairs, "evidence"));
+    assert_eq!(gated.notices.len(), 1, "通知は 1 行: {:?}", gated.notices);
+    assert!(gated.notices.iter().all(|line| line.ends_with(" pruned=1/48 tight")), "本節の周は tight が在る: {:?}", gated.notices);
+    clean(&[&gated.repo, &gated.state]);
+}

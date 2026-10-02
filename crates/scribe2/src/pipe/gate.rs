@@ -73,8 +73,8 @@ use crate::rules::manifest::Manifest;
 use crate::seat::state::now_secs;
 use findings::Tally;
 use lens::{
-    ask_lens, fold_renamed_paths, head_paths, lens_input, prune_deletions, substitute, unjudged, write_verdict, Judged,
-    LENS_STAGE,
+    ask_lens, fold_renamed_paths, head_paths, lens_input, prune_deletions, prune_deletions_tight, substitute, unjudged, write_verdict,
+    Judged, LENS_STAGE,
 };
 use record::{record_notice, record_verify};
 use std::io::ErrorKind;
@@ -554,20 +554,27 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str, cap: u64) -> Result<Me
     // **畳むのは diff の周だけ**（設計 gate-cost.md §41 形 2）。生 diff は記録（`diff_bytes`）のまま残す。
     // HEAD の path の列は読めた周だけ渡す（§42 形 2・読めない周は dir の対を導かない）。
     // **cap を超える周だけ**、§41 / §42 の畳みの後の本文の削除の run を畳む（§46 形 2・要約の周の腕は動かさない）。
-    let (lens_diff, elided, pruned) = match &input {
+    // §46 の畳みの後もまだ cap を超える周だけ、同じ本文に §49 の縮めを当てる（本文が §46 と違う周だけ通知に tight が付く）。
+    let (lens_diff, elided, pruned, tight) = match &input {
         LensInput::Diff(_) => {
             let head = head_paths(worktree);
             let (folded, hunks, lines) = fold_renamed_paths(&diff, head.as_deref());
             if byte_count(&folded) > cap {
                 let (body, runs, omitted) = prune_deletions(&folded);
-                (body, (hunks, lines), (runs, omitted))
+                if byte_count(&body) > cap {
+                    let (short, runs, omitted) = prune_deletions_tight(&folded);
+                    let differs = short != body;
+                    (short, (hunks, lines), (runs, omitted), differs)
+                } else {
+                    (body, (hunks, lines), (runs, omitted), false)
+                }
             } else {
-                (folded, (hunks, lines), (0, 0))
+                (folded, (hunks, lines), (0, 0), false)
             }
         }
-        LensInput::Summary(_) => (diff.clone(), (0, 0), (0, 0)),
+        LensInput::Summary(_) => (diff.clone(), (0, 0), (0, 0), false),
     };
-    record_notice(entry, &input, elided, pruned)?;
+    record_notice(entry, &input, elided, (pruned, tight))?;
     Ok(Measured { red, diff, unreadable, killed, busy, input, lens_diff })
 }
 
