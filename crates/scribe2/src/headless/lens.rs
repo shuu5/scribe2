@@ -12,8 +12,10 @@
 //! 頼ると、呼び手が変わった周に憲法の載らない判定が静かに出る（fail-closed・C11.2）。
 //!
 //! **憲法の file が載らない周も claude を呼ばない**（設計 gate-cost.md §47 行 ar）。diff の審査の周は cap の後・prompt の前に
-//! `--worktree` の木の [`CONSTITUTION_FILE`] を在る・無い・読めないの 3 値に測り（[`constitution_of`]・中身は読まない）、
+//! `--worktree` の木の憲法の file を在る・無い・読めないの 3 値に測り（[`constitution_of`]・中身は読まない）、
 //! 無い周と読めない周は置く物か直す物を名指す INCONCLUSIVE の 1 行を返す。在る周の prompt は 1 字も変わらない。
+//! 憲法の file は既定の 1 本だが、`--worktree` の HEAD の宣言の任意 key `constitution` が列を名乗れば既定を置き換え、1 本ずつ測って
+//! 頼みの文の path の句を差し替える（[`template_of`]・設計 gate-cost.md §48）。
 //!
 //! **cap を超えた diff では claude を呼ばない**。呼んでから「長すぎた」と言うのでは、
 //! 上限を置いた意味（NFR1）が無い。判定に届かなかった周はすべて INCONCLUSIVE へ倒す——
@@ -81,6 +83,7 @@ use crate::fleet::Usage;
 use crate::hook::vessel::digest::fnv1a_64;
 use crate::pipe::confine;
 use crate::pipe::contract::Contract;
+use crate::pipe::declaration::{ConstitutionFiles, DECL_FILE};
 use crate::pipe::move_proof::RULINGS_FILE;
 use crate::pipe::review::{base_block, outside_block, BASE_FILE, DESIGN_FILE, FINDING_KINDS, OUTSIDE_FILE, PROMISES_FILE};
 use crate::pipe::review::ITEMS_FILE;
@@ -166,15 +169,16 @@ pub fn usage() -> String {
 /// 封筒の `subtype` が `error_max_turns` の周の evidence（行の id を名指す・gate の撃ち直しの理由に載る）。
 const TURNS_EVIDENCE: &str = "lens が turn の上限（lens.max_turns）で終わった";
 
-/// 憲法の file の `--worktree` からの相対 path（lens の観点 `constitution` が読む面・設計 gate-cost.md §47 行 ar）。
-const CONSTITUTION_FILE: &str = "docs/constitution.md";
+/// 雛形 [`TEMPLATE`] にちょうど 1 回在る憲法の path の句（宣言 `constitution` が列を名乗る周に「（木の file `<path>`・…）」へ差し替える・
+/// 雛形の字の写しで path としては読まない・設計 gate-cost.md §48 形 5）。
+const CONSTITUTION_PHRASE: &str = "（起動 cwd の生成 file `docs/constitution.md`）";
 
 /// 判定に届かなかった 1 行を組む。
 fn inconclusive(reason: &str) -> String {
     format!(r#"{{"verdict":"INCONCLUSIVE","evidence":"{reason}"}}"#)
 }
 
-/// `--worktree` の木の [`CONSTITUTION_FILE`] の 3 値（中身は読まない）。
+/// `--worktree` の木の憲法の file 1 本の 3 値（中身は読まない）。
 enum Constitution {
     /// symlink を辿って開けた先が通常の file。
     Present,
@@ -184,10 +188,10 @@ enum Constitution {
     Unreadable,
 }
 
-/// 起こす前に `worktree` の木の [`CONSTITUTION_FILE`] を測る。lens の cwd と契約の dir は読まない。
+/// 起こす前に `worktree` の木の `file`（repo 相対）を測る。lens の cwd と契約の dir は読まない。
 /// 開く前に辿った先の種別を見る（FIFO を開いて待たない）。
-fn constitution_of(worktree: &Path) -> Constitution {
-    let path = worktree.join(CONSTITUTION_FILE);
+fn constitution_of(worktree: &Path, file: &str) -> Constitution {
+    let path = worktree.join(file);
     match std::fs::symlink_metadata(&path) {
         Err(err) if err.kind() == ErrorKind::NotFound => return Constitution::Absent,
         Err(_) => return Constitution::Unreadable,
@@ -440,19 +444,9 @@ fn prompt_of(contract: &Path, stated: &str, rulings: &str, (cap, worktree): (u64
             }
             // **憲法が載らない周も claude を呼ばない**（観点 `constitution` を 0 と数えさせない・設計 gate-cost.md §47 行 ar）。
             // 測るのは diff の審査の周の cap の後だけ（契約の審査と memo の段は憲法を載せる面でない）。
-            match constitution_of(worktree) {
-                Constitution::Present => {}
-                Constitution::Absent => {
-                    return Err(Outcome::ok_line(inconclusive(&format!(
-                        "constitution file absent: {CONSTITUTION_FILE} (place the constitution or a pointer to it)"
-                    ))));
-                }
-                Constitution::Unreadable => {
-                    return Err(Outcome::ok_line(inconclusive(&format!("constitution file unreadable: {CONSTITUTION_FILE}"))));
-                }
-            }
+            let template = template_of(worktree)?;
             Ok(fill(
-                TEMPLATE,
+                &template,
                 &[("{contract}", stated), ("{rulings}", rulings), ("{diff}", &String::from_utf8_lossy(&diff))],
             ))
         }
@@ -491,6 +485,29 @@ fn prompt_of(contract: &Path, stated: &str, rulings: &str, (cap, worktree): (u64
             ))
         }
     }
+}
+
+/// 憲法の測りと頼みの文の雛形（設計 gate-cost.md §48 形 4・5）: `worktree` の HEAD の宣言（作業ツリーでなく）が名乗る列を [`ConstitutionFiles`] で読み、
+/// 読めない宣言と最初に在るでない file は claude を起こさない INCONCLUSIVE の 1 行（`Err`）。全部在れば、Fixed は [`TEMPLATE`] のまま・
+/// Declared は [`CONSTITUTION_PHRASE`] を木の file の列（書いた順・`・` 区切り）に差し替えた雛形を返す。
+fn template_of(worktree: &Path) -> Result<String, Outcome> {
+    let places = ConstitutionFiles::at(worktree, "HEAD");
+    let Some(files) = places.files() else {
+        return Err(Outcome::ok_line(inconclusive(&format!("constitution declaration unreadable: {DECL_FILE}"))));
+    };
+    for file in &files {
+        let reason = match constitution_of(worktree, file) {
+            Constitution::Present => continue,
+            Constitution::Absent => format!("constitution file absent: {file} (place the constitution or a pointer to it)"),
+            Constitution::Unreadable => format!("constitution file unreadable: {file}"),
+        };
+        return Err(Outcome::ok_line(inconclusive(&reason)));
+    }
+    if !matches!(places, ConstitutionFiles::Declared { .. }) {
+        return Ok(TEMPLATE.to_owned());
+    }
+    let named: Vec<String> = files.iter().map(|file| format!("`{file}`")).collect();
+    Ok(TEMPLATE.replacen(CONSTITUTION_PHRASE, &format!("（木の file {}）", named.join("・")), 1))
 }
 
 /// 契約の写しの隣の任意の材料（[`PROMISES_FILE`]〔Promised の行だけ `pipe::review` が置く〕と [`BASE_FILE`] と [`OUTSIDE_FILE`] と
@@ -694,6 +711,12 @@ mod tests {
     use crate::cli_outcome::Outcome;
     use crate::pipe::review::{BASE_FILE, DESIGN_FILE, ITEMS_FILE, OUTSIDE_FILE, REQUIREMENTS_FILE};
     use std::path::{Path, PathBuf};
+
+    /// (h) 雛形が差し替えの句をちょうど 1 回持つ（差し替えは `replacen` の 1 回・句が雛形から消えると Declared の周の差し替えが空振りする）。
+    #[test]
+    fn lens_constitution_phrase_is_in_the_template_exactly_once() {
+        assert_eq!(super::TEMPLATE.matches(super::CONSTITUTION_PHRASE).count(), 1);
+    }
 
     /// 契約の審査の周（材料が在る周）だけを撃つ歯なので worktree は測られない（憲法の測りは diff の審査の周だけ）。
     fn prompt_of(contract: &Path, stated: &str, rulings: &str, cap: u64) -> Result<String, Outcome> {

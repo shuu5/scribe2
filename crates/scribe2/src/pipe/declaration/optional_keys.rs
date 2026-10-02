@@ -33,6 +33,7 @@ pub(super) const DECLARED_KEYS: &[&str] = &[
     INDEX_ROLES_KEY,
     ROW_REVIEW_KEY,
     CONTRACT_TABLES_KEY,
+    CONSTITUTION_KEY,
 ];
 
 /// **歯の検査を撃つか**の key（任意・設計 contract-source.md §67）。真偽だけを読んで値は捨てる。
@@ -50,6 +51,13 @@ const ROW_REVIEW_KEY: &str = "row-review";
 /// **契約表の置き場**の key（任意・設計 contract-source.md §69 形 1）。repo 相対の項目の配列で、既定の置き場
 /// （`docs/design/` の直下の `.md`）に足す（置き換えない）。末尾 `/` の項目は dir の直下、ほかは 1 file。
 const CONTRACT_TABLES_KEY: &str = "contract-tables";
+
+/// **憲法の file の列**の key（任意・設計 gate-cost.md §48・ADR-0110）。repo 相対の file の path の配列（書いた順）で、既定の
+/// [`DEFAULT_CONSTITUTION`] を**置き換える**（足さない）。
+const CONSTITUTION_KEY: &str = "constitution";
+
+/// 憲法の file の既定 path（宣言 `constitution` が無い周・lens が測る 1 本）。
+pub const DEFAULT_CONSTITUTION: &str = "docs/constitution.md";
 
 /// 読んで値を捨てる key（`teeth-check` は真偽）の形だけを確かめる（`Declared` にも便の写しにも field を持たない）。
 /// 型違いは key と行番号を名指す不備。
@@ -131,6 +139,69 @@ pub(super) fn contract_tables_of(found: &[(String, Raw, u64)], errors: &mut Vec<
         errors.push(DeclError::new(*line, reason));
     }
     Some((items.clone(), *line))
+}
+
+/// 憲法の file の列と key の行番号（任意・無ければ `None`）。項目は repo 相対の file で、末尾 `/`・英数字と `.` `_` `/` `-` のほかの字
+/// （頼みの文に差し込むので字を閉じる）・空・絶対 path・home の短縮記号・`..` の段は key の行番号を名指す不備。配列でない値も不備。
+pub(super) fn constitution_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<(Vec<String>, u64)> {
+    let (_, value, line) = found.iter().find(|(seen, _, _)| seen == CONSTITUTION_KEY)?;
+    let Raw::List(items) = value else {
+        errors.push(DeclError::new(*line, format!("{CONSTITUTION_KEY} は repo 相対の file の path の配列である")));
+        return None;
+    };
+    let closed = |item: &str| item.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '/' | '-'));
+    for item in items.iter().filter(|item| !repo_relative(item) || item.ends_with('/') || !closed(item)) {
+        let reason = format!("{CONSTITUTION_KEY} の {item:?} は repo 相対の file の path である（空・絶対 path・home の短縮記号・..・末尾 /・英数字と . _ / - のほかの字は書けない）");
+        errors.push(DeclError::new(*line, reason));
+    }
+    Some((items.clone(), *line))
+}
+
+/// 名指した rev の宣言が名乗る憲法の file の列（閉じた 3 値・設計 gate-cost.md §48 形 3）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConstitutionFiles {
+    /// 既定の 1 本（宣言 file がその rev に無い・git を撃てない・key の無い宣言）。
+    Fixed,
+    /// 宣言が名乗った列（key の項目の列と key の行番号）。
+    Declared {
+        /// `constitution` の項目（書いた順）。
+        items: Vec<String>,
+        /// key が書かれていた行。
+        line: u64,
+    },
+    /// 読めない（宣言が在って不備＝key を書いたかも読めない）。既定に倒さない（C10）。
+    Unreadable,
+}
+
+impl ConstitutionFiles {
+    /// 名指した rev の tree の宣言から読む（`git show <rev>:.vessel.toml` を `Declared::parse` に掛ける・作業ツリーは読まない）。
+    pub fn at(repo: &Path, rev: &str) -> Self {
+        let spec = format!("{rev}:{}", super::DECL_FILE);
+        match super::super::git_bytes(repo, &["show", &spec]) {
+            None => Self::Fixed,
+            Some(bytes) => match Declared::parse(&String::from_utf8_lossy(&bytes)) {
+                Err(_) => Self::Unreadable,
+                Ok(declared) => declared.constitution.map_or(Self::Fixed, |(items, line)| Self::Declared { items, line }),
+            },
+        }
+    }
+
+    /// 測る file の列（`Fixed` は [`DEFAULT_CONSTITUTION`] の 1 本・`Declared` は書いた順で 2 度目以降の同じ path を除いた列・`Unreadable` は `None`）。
+    pub fn files(&self) -> Option<Vec<String>> {
+        match self {
+            Self::Fixed => Some(vec![DEFAULT_CONSTITUTION.to_owned()]),
+            Self::Declared { items, .. } => {
+                let mut files: Vec<String> = Vec::new();
+                for item in items {
+                    if !files.contains(item) {
+                        files.push(item.clone());
+                    }
+                }
+                Some(files)
+            }
+            Self::Unreadable => None,
+        }
+    }
 }
 
 /// 名指した rev の宣言が名乗る契約表の置き場（閉じた 3 値・設計 contract-source.md §69 形 4）。
@@ -249,6 +320,7 @@ pub(super) const OPTIONAL_KEYS: &[&str] = &[
     INDEX_ROLES_KEY,
     ROW_REVIEW_KEY,
     CONTRACT_TABLES_KEY,
+    CONSTITUTION_KEY,
 ];
 
 /// 床の検査の 1 行（任意）。前後の空白を除いて空でない文字列だけを受ける（列・整数・真偽・空・空白だけは key と行番号を名指す不備）。
@@ -529,7 +601,7 @@ pub fn terminal_facts(repo: &Path) -> Result<TerminalFacts, Vec<DeclError>> {
 #[cfg(test)]
 mod tests {
     use super::super::Declared;
-    use super::{check_of, close_check, close_check_at_sha, floor_check_at, index_at, index_lines, route_of, ruling_keys_at, CloseCheck, IndexLines, QuestionRoute, RulingKeys, TablePlaces};
+    use super::{check_of, close_check, close_check_at_sha, floor_check_at, index_at, index_lines, route_of, ruling_keys_at, CloseCheck, ConstitutionFiles, IndexLines, QuestionRoute, RulingKeys, TablePlaces};
 
     /// 必須 key だけの宣言の本文（3 行）の後ろに `extra` を足す。
     fn with(extra: &str) -> String {
@@ -875,6 +947,43 @@ mod tests {
         assert_eq!(TablePlaces::at(&repo, &keyed), declared, "HEAD でなく名指した古い sha は Declared");
         assert_eq!(declared.items(), Some(&["contracts/".to_owned()][..]), "Declared の項目");
         assert_eq!(TablePlaces::at(std::path::Path::new("/nonexistent-table-places-dir"), "HEAD"), TablePlaces::Fixed, "git を撃てない dir");
+    }
+
+    /// (f) constitution: key の無い宣言は項目 0、2 項目の key は 2 項目と key の行番号（4 行目）、不備 7 形（空・空白だけ・絶対 path・home の短縮記号・
+    /// .. の段・末尾 /・閉じた字の外の字〔空白・{・backtick〕）と文字列の値は key と行番号を名指す不備。
+    #[test]
+    fn declaration_constitution_reads_items_and_refuses_the_seven_bad_forms() {
+        let read = |extra: &str| Declared::parse(&with(extra)).map(|found| found.constitution);
+        assert_eq!(read(""), Ok(None), "key の無い宣言は項目 0");
+        assert_eq!(read("constitution = [\"spec/c.yaml\", \"b-1_2.md\"]\n"), Ok(Some((vec!["spec/c.yaml".to_owned(), "b-1_2.md".to_owned()], 4))));
+        for value in ["[\"\"]", "[\"   \"]", "[\"/abs/c.md\"]", "[\"~c.md\"]", "[\"a/../c.md\"]", "[\"spec/\"]", "[\"a b.md\"]", "[\"a{b}.md\"]", "[\"a`b.md\"]", "\"spec/c.yaml\""] {
+            let errors = read(&format!("constitution = {value}\n")).expect_err(value);
+            assert!(errors.iter().any(|error| error.line == 4 && error.reason.contains("constitution")), "{value}: {errors:?}");
+        }
+    }
+
+    /// (g) 名指した rev の宣言を読む: 宣言 file の無い repo と存在しない path は Fixed（files は DEFAULT_CONSTITUTION の 1 本）、key を持つ commit は
+    /// Declared（b・a・b は b・a）、key の値を壊した commit と key の無いまま別の key を壊した commit は Unreadable（files は無し）、key を消した commit は Fixed。
+    #[test]
+    fn declaration_constitution_files_reads_the_named_rev_in_three_values() {
+        let repo = crate::pipe::fixture::scratch("constitution-files");
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.name", "t"], &["config", "user.email", "t@example.invalid"], &["config", "commit.gpgsign", "false"]] {
+            assert!(crate::pipe::git_ok(&repo, args), "{args:?}");
+        }
+        assert!(std::fs::write(repo.join("other.txt"), "x").is_ok());
+        assert!(crate::pipe::git_ok(&repo, &["add", "-A"]) && crate::pipe::git_ok(&repo, &["commit", "-q", "-m", "no declaration"]));
+        let default = Some(vec![super::DEFAULT_CONSTITUTION.to_owned()]);
+        assert_eq!((ConstitutionFiles::at(&repo, "HEAD"), ConstitutionFiles::at(&repo, "HEAD").files()), (ConstitutionFiles::Fixed, default.clone()), "宣言 file の無い repo");
+        assert_eq!(ConstitutionFiles::at(std::path::Path::new("/nonexistent-constitution-dir"), "HEAD").files(), default, "存在しない path");
+        commit_declaration(&repo, Some(&with("constitution = [\"b\", \"a\", \"b\"]\n")));
+        let declared = ConstitutionFiles::at(&repo, "HEAD");
+        assert_eq!((&declared, declared.files()), (&ConstitutionFiles::Declared { items: vec!["b".to_owned(), "a".to_owned(), "b".to_owned()], line: 4 }, Some(vec!["b".to_owned(), "a".to_owned()])));
+        for broken in ["constitution = \"b\"\n", "ruling-check = \"yes\"\n"] {
+            commit_declaration(&repo, Some(&with(broken)));
+            assert_eq!((ConstitutionFiles::at(&repo, "HEAD"), ConstitutionFiles::at(&repo, "HEAD").files()), (ConstitutionFiles::Unreadable, None), "{broken}");
+        }
+        commit_declaration(&repo, Some(&with("")));
+        assert_eq!(ConstitutionFiles::at(&repo, "HEAD"), ConstitutionFiles::Fixed, "key を消した commit");
     }
 
     /// 真偽を書いた他の key は key ごとの型の不備になり、entrance-flip = true は 3 語の外として key と行番号を名指す。
