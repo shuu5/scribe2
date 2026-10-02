@@ -56,6 +56,7 @@ mod requirements;
 pub(in crate::pipe) mod tree;
 pub use base::base_block;
 pub use index::index_block;
+pub(crate) use items::done_items;
 pub use outside::outside_block;
 pub use judgement::{judgement_of, review_dir, review_path, unaddressed, verdict_of};
 pub use judgement::{Judgement, Rework, ROW_SAME_KIND_STOP};

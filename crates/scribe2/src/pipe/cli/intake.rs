@@ -553,7 +553,10 @@ fn generated_row(row: &ContractRow, generated: &Generated) -> ContractRow {
 fn check_row(path: &str, text: &str, row: &ContractRow, materials: &Materials) -> Vec<table::Finding> {
     let rows = table::read_rows(path, text).unwrap_or_default();
     let ids: Vec<&str> = rows.iter().map(|other| other.id.as_str()).collect();
-    table::check_table(text, std::slice::from_ref(row), &ids, &materials.context())
+    let mut found = table::check_table(text, std::slice::from_ref(row), &ids, &materials.context());
+    // 欄 done-teeth の在りか（設計 contract-source.md §66 形 2 の (e)）は base を渡す口だけが撃つ＝受付と preflight（表の検査の本体は撃たない）。
+    found.extend(table::done_teeth_located_findings(row, &materials.base()));
+    found
 }
 
 /// 契約 file が読めない周の断り（rc 2・理由を全件出す）。

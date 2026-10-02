@@ -848,6 +848,76 @@ pub(super) fn declared_teeth_row(id: &str, filter: &str, write_set: &str) -> Str
     table_row(id, &[("write-set", write_set), ("verify", verify.as_str())])
 }
 
+// ───── 欄 done-teeth の照らし（設計 docs/design/contract-source.md §66 行 bw・接頭辞 `done_teeth_table_`） ─────
+
+/// 欄 done-teeth の toy の歯の file（`tooth_` の歯が 2 本）。
+pub(super) const TEETH_FILES: &[(&str, &str)] = &[("crates/toy/tests/teeth.rs", "#[test]\nfn tooth_a() {}\n\n#[test]\nfn tooth_kept() {}\n")];
+
+/// 欄 done-teeth の toy の 7 行（id と欄の値）: 適合・4 形の外の要素・項目 2 の要素の欠け・本数を越える `@` の番号・どの検証行にも選ばれない名・
+/// base に無い既存の歯・`=` の項目を持たない `!place-only`。
+pub(super) const TEETH_ROWS: [(&str, &str); 7] = [
+    ("ok", "[\"1:tooth_a\", \"2:=tooth_kept\", \"3:@1\"]"),
+    ("shape", "[\"1:tooth_a\", \"2:path::x\", \"3:@1\"]"),
+    ("gap", "[\"1:tooth_a\", \"3:@1\"]"),
+    ("past", "[\"1:tooth_a\", \"2:=tooth_kept\", \"3:@2\"]"),
+    ("unsel", "[\"1:tooth_a\", \"2:=tooth_kept\", \"3:unrelated\"]"),
+    ("gone", "[\"1:tooth_a\", \"2:=tooth_gone\", \"3:@1\"]"),
+    ("place", "[\"1:tooth_a\", \"2:=tooth_kept\", \"3:!place-only\"]"),
+];
+
+/// [`TEETH_ROWS`] のうち `ids` の行を載せた設計 doc（done は 3 項目・歯の file は write-set の中・verify は `tooth_` を選ぶ 1 行）。
+pub(super) fn teeth_doc(ids: &[&str]) -> String {
+    let write_set = "[\"crates/toy/src/tint.rs\", \"crates/toy/tests/teeth.rs\"]";
+    let verify = "[\"cargo nextest run -p toy --no-tests=fail tooth_\"]";
+    let rows: Vec<String> = TEETH_ROWS
+        .iter()
+        .filter(|(id, _)| ids.contains(id))
+        .map(|(id, teeth)| {
+            table_row(id, &[("write-set", write_set), ("verify", verify), ("done", "\"(1) a (2) b (3) c\""), ("done-teeth", teeth)])
+        })
+        .collect();
+    table_doc(&table_region(&rows))
+}
+
+/// (8) 受付と preflight の側: 6 行（適合の行を除く）はどれも `contract-table:done-teeth` の断り（rc 1）で、理由は行ごとの外れを名乗り、
+/// run dir も event も作らない。`gone`（base に無い既存の歯）は受付と preflight だけが名指す（表の検査は名指さない）。適合の行は受付が
+/// 通す（rc 0）。base は欄を読んで捨てるので 6 行とも通ってしまう（RED）。
+#[test]
+fn done_teeth_table_intake_refuses_six_rows() {
+    let all: Vec<&str> = TEETH_ROWS.iter().map(|(id, _)| *id).collect();
+    let (repo, state) = derive_repo_with(&teeth_doc(&all), TEETH_FILES);
+    let wants = [
+        ("shape", "path::x"),
+        ("gap", "done の項目 2 を覆う要素が無い"),
+        ("past", "@2 が検証行 1〜1 の外"),
+        ("unsel", "撃たれない歯"),
+        ("gone", "無い歯"),
+        ("place", "place-only"),
+    ];
+    let (dirs, events) = (run_dirs(&state), event_count(&state));
+    for (id, want) in wants {
+        let design = pointed_contract(&repo, "t.toml", id);
+        let out = intake_raw(&repo, &state, &design, &format!("s2-{id}"));
+        let err = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{id} は rc 1: {err}");
+        assert!(err.contains("contract-table:done-teeth") && err.contains(want), "{id} は done-teeth の理由 {want} を名乗る: {err}");
+        assert_eq!((run_dirs(&state), event_count(&state)), (dirs.clone(), events), "{id} は run も event も作らない");
+        let checked = preflight_raw(&repo, &state, &design, &format!("s2-{id}"), true);
+        let pre = stderr_of(&checked);
+        assert_eq!(checked.status.code(), Some(i32::from(RC_REFUSED)), "{id} の preflight も rc 1: {pre}");
+        assert!(pre.contains("contract-table:done-teeth") && pre.contains(want), "preflight も同じ断りを名指す: {pre}");
+        assert_eq!(tail_line(&checked), "preflight: refused n=1", "{id}: 外れは 1 件");
+    }
+    // 適合の行は done が番号つきの 3 項目なので、偽 lens は key done に項目ごとの表を返す（審査の表の読み・§64）。
+    let ok = pointed_contract(&repo, "t.toml", "ok");
+    let (rules, repo_arg, state_arg) = (ceiling_rules(&state), repo.display().to_string(), state.display().to_string());
+    let table = format!("{},\"done\":\"1:a,2:b,3:c\"}}", lens_verdict("PASS").trim_end_matches('}'));
+    let lens = fake_lens(&state.join(REVIEW_MARKER), &table);
+    let passed = run_pipe(&["intake", "--design", &ok, "--bead", "s2-ok", "--repo", &repo_arg, "--state-dir", &state_arg, "--rules", &rules, "--lens", &lens]);
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "適合の行は受ける: {}", stderr_of(&passed));
+    clean(&[&repo, &state]);
+}
+
 // flip-check: moved s2-07l.198.2
 /// 現物の 2 つの cli module と、それぞれの件数 pin の歯の file（base の字面そのもの・`include_str!`・core の src は
 /// 境界 crate の外＝`crates/scribe2/src/` を指す）。

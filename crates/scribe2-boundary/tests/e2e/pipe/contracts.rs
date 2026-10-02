@@ -7,7 +7,7 @@
 use super::*;
 use super::intake::{
     capped_rules, contracts_check, declared_teeth_row, findings_of, grown_contract, intake_tokens, intake_with_rules,
-    repo_with_big_file, sized_contract, table_repo, SUBCOMMAND_FILES, TABLE_VESSEL,
+    repo_with_big_file, sized_contract, table_repo, teeth_doc, SUBCOMMAND_FILES, TABLE_VESSEL, TEETH_FILES, TEETH_ROWS,
 };
 
 /// 契約の印 `opens`（`s2-07l.201`・設計 seat-roles.md §3「契約が開く例外」・AC16）: `classes` と同じ optional list
@@ -50,8 +50,8 @@ fn pipe_contract_opens_is_an_optional_list_of_path_kinds_copied_by_intake() {
 
 // ─────────────────── 契約表（設計 docs/design/contract-source.md §2 / §3 / §9・`s2-07l.208`・接頭辞 `contract_`） ───────────────────
 
-/// (1) 区間 1 つ・3 行（適合 / 型の構築点を write-set が欠く / 節が無い）の doc で、findings 2 件を `file:line` 付きで
-/// 名指し rc 1・判定行 `docs=1 rows=3 findings=2`。適合だけの doc は rc 0（AC21 の表側）。
+/// (1) 区間 1 つ・4 行（適合 / 型の構築点を write-set が欠く / 節が無い / 欄 done-teeth が項目 2 を覆わない）の doc で、findings 3 件を
+/// `file:line` 付きで名指し rc 1・判定行 `docs=1 rows=4 findings=3`。適合だけの doc は rc 0（AC21 の表側・AC26）。
 #[test]
 fn contract_check_names_the_incomplete_write_set_and_the_missing_section_with_file_line() {
     let touches = ("touches", "[\"crate::tint::Tint\"]");
@@ -59,20 +59,23 @@ fn contract_check_names_the_incomplete_write_set_and_the_missing_section_with_fi
         table_row("a", &[]),
         table_row("b", &[("section", "\"2\""), ("write-set", "[\"src/tint.rs\"]"), touches]),
         table_row("c", &[("section", "\"9\"")]),
+        table_row("d", &[("done", "\"(1) x (2) y\""), ("done-teeth", "[\"1:@1\"]")]),
     ];
     let doc = table_doc(&table_region(&rows));
     let repo = table_repo(&doc, &[]);
     let out = contracts_check(&repo);
     let (text, found) = (stdout_of(&out), findings_of(&out));
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "違反 ≥ 1 は rc 1: {text}{}", stderr_of(&out));
-    assert_eq!(found.len(), 2, "2 件ちょうど: {text}");
+    assert_eq!(found.len(), 3, "3 件ちょうど: {text}");
     let head = |id: &str| format!("contracts: docs/design/toy.md:{} ", table_line(&doc, id));
     let incomplete = found.iter().find(|line| line.starts_with(&head("b"))).cloned().unwrap_or_default();
     assert!(incomplete.contains("write-set-incomplete") && incomplete.contains("src/show.rs"), "閉包の足りない file: {text}");
     assert!(!incomplete.contains("src/tint.rs"), "write-set に在る file は名指さない: {incomplete}");
     let section = found.iter().find(|line| line.starts_with(&head("c"))).cloned().unwrap_or_default();
     assert!(section.contains("contract-table:section-missing"), "節の無い行を名指す: {text}");
-    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=3 untracked=0 findings=2 place-out=0/3"), "判定行: {text}");
+    let teeth = found.iter().find(|line| line.starts_with(&head("d"))).cloned().unwrap_or_default();
+    assert!(teeth.contains("contract-table:done-teeth") && teeth.contains("\"2:\""), "項目 2 を覆わない欄を名指す: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=4 untracked=0 findings=3 place-out=0/4"), "判定行: {text}");
     // 適合だけの doc は rc 0（write-set が閉包を覆えば touches を持つ行も通る）。
     let covering = ("write-set", "[\"src/tint.rs\", \"src/show.rs\"]");
     let good = table_repo(&table_doc(&table_region(&[table_row("a", &[]), table_row("b", &[covering, touches])])), &[]);
@@ -1066,14 +1069,13 @@ fn contract_growth_schema_lists_growth_as_an_optional_list() {
     assert_eq!(tracked.matches(block).count(), 1, "growth は任意の list で 1 回: {tracked}");
 }
 
-/// §67 の (a): 欄 `done-teeth` と `code-facts` を持つ行の doc と key 3 つ（`teeth-check` / `index-scip` / `index-roles`）を持つ
-/// 宣言の repo は、2 欄と 3 key を消した同じ repo と判定行が同じ字で rc 0・findings 0（読んで値を捨てる）。
+/// §67 の (a): 欄 `code-facts` を持つ行の doc と key 3 つ（`teeth-check` / `index-scip` / `index-roles`）を持つ
+/// 宣言の repo は、欄と 3 key を消した同じ repo と判定行が同じ字で rc 0・findings 0（読んで値を捨てる）。欄 `done-teeth` は行 bw が
+/// 照らすので、この fixture は持たない（番号つきの項目の無い done は欄を持てない）。
+// flip-check: retroactive s2-07l.736.33.20.2
 #[test]
 fn contract_fields_read_only_fields_and_keys_leave_the_verdict_unchanged() {
-    let fielded = table_doc(&table_region(&[table_row(
-        "a",
-        &[("done-teeth", "[\"a_tooth\"]"), ("code-facts", "[\"crate::x::Y\", \"z\"]")],
-    )]));
+    let fielded = table_doc(&table_region(&[table_row("a", &[("code-facts", "[\"crate::x::Y\", \"z\"]")])]));
     let plain = table_doc(&table_region(&[table_row("a", &[])]));
     let keyed = format!("{TABLE_VESSEL}teeth-check = true\nindex-scip = [\"a.scip\"]\nindex-roles = [\"def\", \"ref\"]\n");
     let with = table_repo(&fielded, &[(".vessel.toml", &keyed)]);
@@ -1084,6 +1086,37 @@ fn contract_fields_read_only_fields_and_keys_leave_the_verdict_unchanged() {
     assert!(findings_of(&kept).is_empty(), "findings 0: {}", stdout_of(&kept));
     assert_eq!(stdout_of(&kept), stdout_of(&bare), "判定行は 2 欄と 3 key を消した同じ repo と同じ字");
     clean(&[&with, &without]);
+}
+
+/// 欄 done-teeth の toy の宣言（`cargo` を許す＝行の verify に nextest の行を書ける）。
+const CARGO_VESSEL: &str = "schema = 1\nallowed-commands = [\"git\", \"cargo\"]\ncommon-verify = [\"git status\"]\n";
+
+/// 欄 done-teeth の照らし（設計 §66 行 bw・AC77 の base を持たない側・接頭辞 `done_teeth_table_`）: done が 3 項目の 7 行の toy repo を
+/// `contracts check` に通すと、base に無い既存の歯の行（`gone`）を除く 5 行を行の見出しの行で名指して rc 1・判定行の findings=5（表の検査は
+/// base を持たないので在りかを照らさない）。適合の行だけの repo は findings 0・rc 0。base は欄を読んで捨てる（RED）。
+#[test]
+fn done_teeth_table_listing_names_five_rows() {
+    let all: Vec<&str> = TEETH_ROWS.iter().map(|(id, _)| *id).collect();
+    let doc = teeth_doc(&all);
+    let mut files = vec![(".vessel.toml", CARGO_VESSEL), ("crates/toy/src/tint.rs", TABLE_TINT)];
+    files.extend(TEETH_FILES.iter().copied());
+    let repo = table_repo(&doc, &files);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "外れは rc 1: {text}{}", stderr_of(&out));
+    let wants = [("shape", "path::x"), ("gap", "\"2:\""), ("past", "@2 が検証行 1〜1 の外"), ("unsel", "撃たれない歯"), ("place", "place-only")];
+    assert_eq!(found.len(), wants.len(), "5 件ちょうど（1 行 1 件）: {text}");
+    for (id, want) in wants {
+        let head = format!("contracts: docs/design/toy.md:{} contract-table:done-teeth: ", table_line(&doc, id));
+        assert!(found.iter().any(|line| line.starts_with(&head) && line.contains(want)), "{id} を行の見出しの行で名指す: {text}");
+    }
+    assert!(found.iter().all(|line| !line.contains("tooth_gone")), "base に無い既存の歯は表の検査が名指さない: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=7 untracked=0 findings=5 place-out=0/7"), "判定行: {text}");
+    let good = table_repo(&teeth_doc(&["ok"]), &files);
+    let passed = contracts_check(&good);
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "適合の行だけは rc 0: {}", stdout_of(&passed));
+    assert_eq!(stdout_of(&passed).lines().collect::<Vec<&str>>(), ["contracts check: docs=1 rows=1 untracked=0 findings=0 place-out=0/1"]);
+    clean(&[&repo, &good]);
 }
 
 /// §67 の (b): 2 欄に文字列を書いた行は欄の名と「は文字列の配列でなければならない」の字で欄の行番号に名指され rc 2。3 key に

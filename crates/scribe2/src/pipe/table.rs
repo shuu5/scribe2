@@ -24,7 +24,7 @@
 //! 受けるので、約束の行の区間は契約の本文から抜いて値の層〔`scalar` / `list`〕だけを共有する）、`of` の親の行の実在と
 //! `n` の連番は表の検査の段が [`TableError::PromiseOrphan`] / [`TableError::PromiseNumber`] で名指す。
 
-use super::closure::{ClosureError, Source};
+use super::closure::{Base, ClosureError, Source};
 use super::contract::{Class, CLASS_ROW};
 use super::declaration::{TablePlaces, DECL_FILE};
 use super::refuse::{Evidence, Refuse};
@@ -36,13 +36,13 @@ use std::path::Path;
 
 mod check;
 mod parse;
+mod teeth;
 
 pub use check::{check_promises, check_table, requirement_ids};
 pub use parse::{
     contract_id, find_row, form_of, parse_pointer, promises_of, read_rows, read_table, Form, Pointer, PointerError,
 };
 pub(crate) use check::{check_repo, declared_files, design_docs, read, read_all, repo_findings, tracked_files, Located};
-
 /// 区間の始まりの行（CLAUDE.md の憲法区間と同じ marker 形・行全体が marker の行だけを数える）。
 pub const BEGIN: &str = "<!-- contracts:begin -->";
 
@@ -234,6 +234,8 @@ pub struct ContractRow {
     pub targets: Vec<String>,
     /// file ごとの見込み行数（`<path>:<行数>` の列・空 = 全 file が `size` の見込み・設計 contract-source.md §46）。
     pub growth: Vec<String>,
+    /// done の番号つき項目ごとの歯の対応（`<番号>:<歯>` の列・空 = 欄を持たない行・設計 contract-source.md §66 形 1・行 bw）。
+    pub done_teeth: Vec<String>,
     /// 節の本文の逐語（導出物の行だけの欄 [`DERIVED_GOAL`]・空 = `section` の節を doc から読む・設計 contract-source.md §47）。
     pub goal: String,
 }
@@ -394,6 +396,16 @@ pub enum TableError {
         /// 先に列挙された相手の doc（repo 相対）。
         other: String,
     },
+    /// 欄 `done-teeth` の要素が外れる（形・覆い・検証行の番号・選ばれ・仕組みの測る物・base の在りか・行の見出しの行・1 件に 1 要素・
+    /// 設計 contract-source.md §66 形 2・行 bw）。
+    DoneTeeth {
+        /// 行番号。
+        line: u64,
+        /// 外れた要素の字（覆いの欠けは `<番号>:`）。
+        element: String,
+        /// 外れの理由。
+        reason: String,
+    },
 }
 
 impl TableError {
@@ -418,7 +430,8 @@ impl TableError {
             | Self::GrowthForm { line, .. }
             | Self::ClassUndeclared { line, .. }
             | Self::PlaceEmpty { line, .. }
-            | Self::DocIdDuplicate { line, .. } => line,
+            | Self::DocIdDuplicate { line, .. }
+            | Self::DoneTeeth { line, .. } => line,
         }
     }
 
@@ -444,6 +457,7 @@ impl TableError {
             Self::ClassUndeclared { .. } => "class-undeclared",
             Self::PlaceEmpty { .. } => "place-empty",
             Self::DocIdDuplicate { .. } => "doc-id-duplicate",
+            Self::DoneTeeth { .. } => "done-teeth",
         }
     }
 
@@ -490,6 +504,7 @@ impl TableError {
             Self::DocIdDuplicate { ref doc, ref other, .. } => {
                 format!("{doc} の file 名の stem が {other} と重なる（doc id は一意でなければならない）")
             }
+            Self::DoneTeeth { ref element, ref reason, .. } => format!("done-teeth {element:?} が外れている: {reason}"),
         }
     }
 
@@ -506,7 +521,7 @@ impl TableError {
     /// 測れない（置き場と同じ側に倒す）。置き場の欠陥は名指した path の列（place-empty は項目・doc-id-duplicate は 2 本の doc）。
     pub(crate) fn evidence(&self) -> Evidence {
         match *self {
-            Self::SurfaceUnknown { .. } | Self::TeethOutsideWriteSet { .. } => Evidence::Name,
+            Self::SurfaceUnknown { .. } | Self::TeethOutsideWriteSet { .. } | Self::DoneTeeth { .. } => Evidence::Name,
             Self::PlaceEmpty { ref item, .. } => Evidence::Files(vec![item.clone()]),
             Self::DocIdDuplicate { ref doc, ref other, .. } => Evidence::Files(vec![doc.clone(), other.clone()]),
             Self::Unreadable { .. } => Evidence::Place,
@@ -526,6 +541,24 @@ impl TableError {
             | Self::ClassUndeclared { .. } => Evidence::Row,
         }
     }
+}
+
+/// 行の欄 `done-teeth` の形の照らし（設計 contract-source.md §66 形 2 の (a)(b)(c)(d)(f)・[`teeth::done_teeth_misses`] の外れを
+/// [`TableError::DoneTeeth`] の 1 件ずつに包む・欄を持たない行は 0 件）。表の検査（[`check_table`]）が行ごとに撃つ。
+fn done_teeth_findings(row: &ContractRow) -> Vec<Finding> {
+    let given = teeth::Given { done: &row.done, verify: &row.verify, write_set: &row.write_set, creates: &row.creates, elements: &row.done_teeth };
+    done_teeth_wrapped(row.line, teeth::done_teeth_misses(&given, NAME))
+}
+
+/// 行の欄 `done-teeth` の在りかの照らし（§66 形 2 の (e)・base を渡す口だけが撃つ＝受付と preflight・表の検査の本体は撃たない）。
+pub(crate) fn done_teeth_located_findings(row: &ContractRow, base: &Base<'_>) -> Vec<Finding> {
+    done_teeth_wrapped(row.line, teeth::done_teeth_located(&row.done_teeth, &row.verify, base))
+}
+
+/// 照らしの外れ（teeth の型 `Miss`）を行 `line` の [`TableError::DoneTeeth`] の 1 件ずつに包む。
+fn done_teeth_wrapped(line: u64, misses: Vec<teeth::Miss>) -> Vec<Finding> {
+    let error = |miss: teeth::Miss| TableError::DoneTeeth { line, element: miss.element, reason: miss.reason };
+    misses.into_iter().map(|miss| Finding::table(error(miss))).collect()
 }
 
 /// 置き場の項目 `item` が path を含むか（末尾 `/` は dir の直下で `form_of` が読める path・ほかは等しい path）。契約表の doc の
@@ -664,9 +697,10 @@ pub fn render_schema() -> Vec<String> {
 mod tests {
     // flip-check: moved s2-07l.374
 
+    use super::teeth::{done_teeth_located, done_teeth_misses, Given};
     use super::{
-        declared_files, design_docs, read_rows, read_table, render_schema, tracked_files, Class, Need, Shape, TableError,
-        DERIVED_GOAL, FIELDS, PROMISE_FIELDS, WHOLE_HEAD,
+        declared_files, design_docs, read_rows, read_table, render_schema, tracked_files, Base, Class, Need, Shape, Source,
+        TableError, DERIVED_GOAL, FIELDS, PROMISE_FIELDS, WHOLE_HEAD,
     };
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
 
@@ -746,6 +780,7 @@ mod tests {
         "class-undeclared",
         "place-empty",
         "doc-id-duplicate",
+        "done-teeth",
     ];
 
     /// 宣言順に 1 つずつ組んだ全 variant（行番号は 1 から順）。
@@ -771,6 +806,7 @@ mod tests {
             TableError::ClassUndeclared { line: 17, verify: text("git push o m"), sequence: text("git push"), class: Class::Publish },
             TableError::PlaceEmpty { line: 18, item: text("tables/none.toml") },
             TableError::DocIdDuplicate { line: 19, doc: text("docs/design/toy.md"), other: text("contracts/toy.toml") },
+            TableError::DoneTeeth { line: 20, element: text("2:x_tooth"), reason: text("r") },
         ]
     }
 
@@ -780,7 +816,7 @@ mod tests {
         let found = samples();
         let names: Vec<&str> = found.iter().map(TableError::as_str).collect();
         assert_eq!(names, TABLE_ERRORS, "名前の slice は宣言順（母集団 {} 値）", TABLE_ERRORS.len());
-        assert_eq!(TABLE_ERRORS.len(), 19, "母集団は 19 値");
+        assert_eq!(TABLE_ERRORS.len(), 20, "母集団は 20 値");
         for (index, error) in found.iter().enumerate() {
             assert_eq!(error.line(), index as u64 + 1, "{} は行番号を持つ", error.as_str());
             assert!(!error.reason().is_empty() && !error.reason().contains('\n'), "{} の理由は 1 行", error.as_str());
@@ -811,18 +847,18 @@ mod tests {
         assert!(twice.contains("docs/design/toy.md") && twice.contains("contracts/toy.toml"), "重なった 2 本の doc を名乗る: {twice}");
     }
 
-    /// 在り処は 19 variant の母集団で 1 つずつ決まり（設計 dispatcher.md §27 形 3・宣言順）、契約表の欠陥の断りは同じ値を
-    /// 受付の側（`Refuse::ContractTable`）へ渡す。本文の読み手が解くのは外形の名と歯の置き場の 2 つ・読めない周は測れない。
+    /// 在り処は全 variant の母集団（20）で 1 つずつ決まり（設計 dispatcher.md §27 形 3・宣言順）、契約表の欠陥の断りは同じ値を
+    /// 受付の側（`Refuse::ContractTable`）へ渡す。本文の読み手が解くのは外形の名と歯の置き場と欄 done-teeth の在りかの 3 つ・読めない周は測れない。
     #[test]
-    fn pipe_table_evidence_is_decided_once_for_each_of_the_19_variants() {
+    fn pipe_table_evidence_is_decided_once_for_every_variant() {
         use crate::pipe::refuse::Refuse;
         let found: Vec<&str> = samples().iter().map(|error| error.evidence().as_str()).collect();
         let want = [
             "row", "row", "place", "row", "row", "row", "row", "row", "row", "row", "name", "row", "row", "row", "name", "row",
-            "row", "files", "files",
+            "row", "files", "files", "name",
         ];
         assert_eq!(found, want, "母集団 {} variant の在り処（宣言順）", TABLE_ERRORS.len());
-        assert_eq!(found.len(), TABLE_ERRORS.len(), "19 variant すべてに 1 つ");
+        assert_eq!(found.len(), TABLE_ERRORS.len(), "全 variant に 1 つ");
         for error in samples() {
             assert_eq!(Refuse::ContractTable(error.clone()).evidence(), error.evidence(), "{} は受付の側も同じ値", error.as_str());
         }
@@ -978,5 +1014,124 @@ mod tests {
             let named = errors.iter().any(|error| error.reason().starts_with(&format!("{} は", field.name)));
             assert!(named, "約束の行の {} の形を名指す: {errors:?}", field.name);
         }
+    }
+
+    /// 項目 3 つの done（欄 done-teeth の照らしの fixture）。
+    const DONE3: &str = "(1) a (2) b (3) c";
+
+    /// 歯の名の接頭辞 `tooth_` を部分一致で選ぶ検証行。
+    const TOOTH_LINE: &str = "cargo nextest run -p toy --no-tests=fail tooth_";
+
+    /// 文字列の列。
+    fn own(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| (*item).to_owned()).collect()
+    }
+
+    /// 欄 done-teeth の形の照らしを撃ち、外れを (要素, 理由) の列で返す（core の crate は `toy`）。
+    fn teeth_misses(done: &str, verify: &[&str], write_set: &[&str], creates: &[&str], elements: &[&str]) -> Vec<(String, String)> {
+        let (verify, write_set, creates, elements) = (own(verify), own(write_set), own(creates), own(elements));
+        let given = Given { done, verify: &verify, write_set: &write_set, creates: &creates, elements: &elements };
+        done_teeth_misses(&given, "toy").into_iter().map(|miss| (miss.element, miss.reason)).collect()
+    }
+
+    /// 外れた要素の字の列。
+    fn elements_of(found: &[(String, String)]) -> Vec<&str> {
+        found.iter().map(|(element, _)| element.as_str()).collect()
+    }
+
+    /// (1) 形（§66 形 2 (a)）: 4 形の要素は外れず、空白か , を含む要素・: の無い要素・番号が数字でない要素・4 形の外の歯・同じ要素の重なりを
+    /// 名指す（番号を読めた要素は覆いに数えるので、形の外れだけが並ぶ）。
+    #[test]
+    fn done_teeth_table_shape_names_bad_elements() {
+        let good = ["1:tooth_a", "2:=tooth_b", "3:@1", "3:!write-set"];
+        assert!(teeth_misses(DONE3, &[TOOTH_LINE], &[], &[], &good).is_empty(), "4 形すべてが適合なら外れ 0");
+        let bad = ["1:tooth_a", "2:tooth b", "2:a,b", "3", "x:tooth_c", "3:path::tooth_c", "3:@", "3:=", "3:!bogus", "1:tooth_a"];
+        let found = teeth_misses(DONE3, &[TOOTH_LINE], &[], &[], &bad);
+        let want = ["2:tooth b", "2:a,b", "3", "x:tooth_c", "3:path::tooth_c", "3:@", "3:=", "3:!bogus", "1:tooth_a"];
+        assert_eq!(elements_of(&found), want, "外れた要素を全件・要素の順に: {found:?}");
+        let reason = |element: &str| found.iter().find(|(found, _)| found == element).map(|(_, reason)| reason.as_str()).unwrap_or_default();
+        assert!(reason("1:tooth_a").contains("重なる"), "重なりは 2 つ目: {found:?}");
+        assert!(reason("2:tooth b").contains("空白"), "{found:?}");
+        assert!(reason("x:tooth_c").contains("数字"), "{found:?}");
+        assert!(reason("3:!bogus").contains("bogus"), "仕組みの名を名乗る: {found:?}");
+        assert!(teeth_misses(DONE3, &[TOOTH_LINE], &[], &[], &[]).is_empty(), "欄を持たない行（要素が空）は外れ 0");
+    }
+
+    /// (2) 覆い（(b)）: 番号の集合が done の項目 1〜K とちょうど等しいこと。無い番号と余る番号（0 を含む）を名指し、K が 0 の行は欄を持てない。
+    #[test]
+    fn done_teeth_table_cover_names_missing_and_extra_numbers() {
+        let found = teeth_misses(DONE3, &[TOOTH_LINE], &[], &[], &["1:tooth_a", "3:tooth_c", "5:tooth_e", "0:tooth_z"]);
+        assert_eq!(elements_of(&found), ["2:", "5:tooth_e", "0:tooth_z"], "無い番号が先・余る番号が要素の順: {found:?}");
+        assert!(found.iter().all(|(_, reason)| reason.contains("1〜3")), "項目の範囲を名乗る: {found:?}");
+        let all = ["1:tooth_a", "2:tooth_b", "3:tooth_c", "3:@1"];
+        assert!(teeth_misses(DONE3, &[TOOTH_LINE], &[], &[], &all).is_empty(), "番号が 1〜3 を覆えば（2 本以上の歯も）外れ 0");
+        let plain = teeth_misses("番号の無い done", &[TOOTH_LINE], &[], &[], &["1:tooth_a"]);
+        assert_eq!(elements_of(&plain), ["done-teeth"], "K が 0 の行が欄を持つことを名指す: {plain:?}");
+    }
+
+    /// (3) 検証行の番号（(c)）: @ の番号が 1〜検証行の本数に在ること（0 と本数より大きい番号を名指す）。
+    #[test]
+    fn done_teeth_table_line_names_numbers_past_the_verify_lines() {
+        let verify = [TOOTH_LINE, "cargo xtask check"];
+        let found = teeth_misses(DONE3, &verify, &[], &[], &["1:@2", "2:@3", "3:@0"]);
+        assert_eq!(elements_of(&found), ["2:@3", "3:@0"], "本数 2 の外の番号だけ: {found:?}");
+        assert!(found.iter().all(|(_, reason)| reason.contains("1〜2")), "検証行の範囲を名乗る: {found:?}");
+    }
+
+    /// (4) 選ばれ（(d)）: 名の歯と既存の歯が、検証行のどれか 1 本の filter 語に行の一致の型で当たること。部分一致の行は名が語を含めば選ばれ、
+    /// `--exact` の行は等しい名だけが選ばれる（語を名の部分に持つだけの名は選ばれない）。
+    #[test]
+    fn done_teeth_table_select_names_unselected_teeth() {
+        let verify = [TOOTH_LINE, "cargo nextest run -p toy --no-tests=fail -- --exact one_exact", "cargo xtask check"];
+        let done = "(1) a (2) b (3) c (4) d (5) e";
+        let elements = ["1:tooth_a", "2:one_exact", "3:one_exact_more", "4:=unrelated", "5:@3"];
+        let found = teeth_misses(done, &verify, &[], &[], &elements);
+        assert_eq!(elements_of(&found), ["3:one_exact_more", "4:=unrelated"], "--exact の行の部分一致と、どの行にも当たらない名: {found:?}");
+        assert!(found.iter().all(|(_, reason)| reason.contains("撃たれない歯")), "撃たれない歯として名指す: {found:?}");
+    }
+
+    /// (5) 仕組み（(f)）: ! の後ろが 4 語のどれかで、place-only は = の項目・new-file は + か ~ の項目か creates・closure は契約表の検査を撃つ検証行を
+    /// 行が持つこと（write-set は測る物を要らない）。
+    #[test]
+    fn done_teeth_table_mechanism_needs_its_measure() {
+        let done = "(1) a (2) b (3) c (4) d (5) e";
+        let elements = ["1:!write-set", "2:!place-only", "3:!new-file", "4:!closure", "5:!bogus"];
+        let bare = teeth_misses(done, &["cargo xtask check"], &["src/a.rs"], &[], &elements);
+        assert_eq!(elements_of(&bare), ["2:!place-only", "3:!new-file", "4:!closure", "5:!bogus"], "測る物の無い 3 語と 4 語の外: {bare:?}");
+        let check = "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo .";
+        let full = teeth_misses(done, &[check], &["=src/a.rs", "+src/new.rs"], &[], &elements);
+        assert_eq!(elements_of(&full), ["5:!bogus"], "測る物が在れば 4 語は外れない: {full:?}");
+        let moved = teeth_misses("(1) a", &[check], &["~src/old.rs"], &[], &["1:!new-file"]);
+        assert!(moved.is_empty(), "~ の項目も new-file の測る物: {moved:?}");
+        let created = teeth_misses("(1) a", &[check], &["src/a.rs"], &["src/made.rs"], &["1:!new-file"]);
+        assert!(created.is_empty(), "creates も new-file の測る物: {created:?}");
+        let word = teeth_misses("(1) a", &["cargo xtask check contracts"], &[], &[], &["1:!closure"]);
+        assert_eq!(elements_of(&word), ["1:!closure"], "contracts check の並びでない行は測る物でない: {word:?}");
+    }
+
+    /// (6) 在りか（(e)）: base を渡す口（`done_teeth_located`）は、既存の歯の 0 か所（無い歯）と 2 か所（2 か所の名）と、名の歯の 2 か所を名指し、
+    /// base に無い名の歯（新しい歯）と 1 か所の歯は名指さない。scope（`--lib`）は数える所を狭める。base を渡さない形の照らし（表の検査の本体）は
+    /// 同じ要素を名指さない。
+    #[test]
+    fn done_teeth_table_located_names_absent_and_twice_placed_teeth() {
+        let source = |path: &str, body: &str| Source { path: path.to_owned(), body: Ok(body.to_owned()) };
+        let sources = vec![
+            source("crates/toy/src/a.rs", "pub fn plain() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn tooth_once() {}\n\n    #[test]\n    fn tooth_twice() {}\n}\n"),
+            source("crates/toy/tests/e2e.rs", "#[test]\nfn tooth_twice() {}\n"),
+        ];
+        let roots = crate::pipe::declaration::fixed_roots();
+        let base = Base { sources: &sources, snapshots: &[], tracked: &[], core_crate: "toy", roots: &roots };
+        let elements = own(&["1:=tooth_once", "2:=tooth_gone", "3:=tooth_twice", "4:tooth_twice", "5:tooth_fresh", "6:tooth_once"]);
+        let found = done_teeth_located(&elements, &own(&[TOOTH_LINE]), &base);
+        let named: Vec<&str> = found.iter().map(|miss| miss.element.as_str()).collect();
+        assert_eq!(named, ["2:=tooth_gone", "3:=tooth_twice", "4:tooth_twice"], "0 か所の既存の歯と 2 か所の既存の歯・名の歯: {found:?}");
+        assert!(found.first().is_some_and(|miss| miss.reason.contains("無い歯")), "0 か所は無い歯: {found:?}");
+        let twice = found.get(1).map(|miss| miss.reason.as_str()).unwrap_or_default();
+        assert!(twice.contains("2 か所の名") && twice.contains("crates/toy/src/a.rs") && twice.contains("crates/toy/tests/e2e.rs"), "2 か所の path を名乗る: {twice}");
+        let lib = own(&["cargo nextest run -p toy --lib --no-tests=fail tooth_"]);
+        let narrowed: Vec<String> = done_teeth_located(&elements, &lib, &base).into_iter().map(|miss| miss.element).collect();
+        assert_eq!(narrowed, ["2:=tooth_gone"], "--lib は src の 1 か所だけを数える");
+        let blind = teeth_misses("(1) a (2) b (3) c (4) d (5) e (6) f", &[TOOTH_LINE], &[], &[], &["1:=tooth_once", "2:=tooth_gone", "3:=tooth_twice", "4:tooth_twice", "5:tooth_fresh", "6:tooth_once"]);
+        assert!(blind.is_empty(), "base を渡さない口は在りかを名指さない: {blind:?}");
     }
 }

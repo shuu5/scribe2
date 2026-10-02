@@ -194,6 +194,30 @@ pub(crate) fn teeth_words(verify: &[String]) -> Vec<&str> {
     verify.iter().filter_map(|line| nextest_filter(line, "").map(|(_, filter, _)| filter)).collect()
 }
 
+/// 検証行 `line` が歯の名 `name` を選ぶか（設計 contract-source.md §66 形 2 (d)・[`teeth_places`] と同じ一致の型の述語 [`Match::hits`]・
+/// nextest の形でない行は選ばない）。
+pub(crate) fn selects(line: &str, name: &str, core_crate: &str) -> bool {
+    nextest_read(line, core_crate).is_some_and(|(_, filter, _, kind)| kind.hits(name, filter))
+}
+
+/// 検証行 `line` の crate と scope の base の歯の区間で、`#[test]` の直下の fn の名が `name` と等しい所（§66 形 2 (e)）: file の path と
+/// fn の本文（[`fn_body`]）の対を、同じ file の中の出現ごとに 1 つ（nextest の形でない行・読めない file は 0 件）。
+pub(crate) fn tooth_sites(line: &str, name: &str, base: &Base<'_>) -> Vec<(String, String)> {
+    let Some((krate, _, scope, _)) = nextest_read(line, base.core_crate) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for source in base.sources.iter().filter(|source| in_crate(base.roots, &source.path, krate) && in_scope(base.roots, &source.path, krate, scope)) {
+        let Ok(text) = source.body.as_deref() else {
+            continue;
+        };
+        let region = test_region(&source.path, text);
+        let count = test_fns(region).iter().filter(|found| **found == name).count();
+        found.extend(std::iter::repeat_n((source.path.clone(), fn_body(region, name).to_owned()), count));
+    }
+    found
+}
+
 /// nextest 行の scope（§28・閉じた 3 値・宣言順 = 旗なし / `--lib` / `--test <name>`）＝その行が走らせる target。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scope<'l> {

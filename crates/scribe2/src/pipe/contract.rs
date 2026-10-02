@@ -567,6 +567,7 @@ mod tests {
             opens: Vec::new(),
             targets: Vec::new(),
             growth: Vec::new(),
+            done_teeth: Vec::new(),
             goal: String::new(),
         }
     }

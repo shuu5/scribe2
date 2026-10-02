@@ -49,6 +49,7 @@ pub fn check_table(doc: &str, rows: &[ContractRow], ids: &[&str], ctx: &Context<
         found.extend(unresolved.map(|id| Finding::table(TableError::DependsUnresolved { line: row.line, id: id.clone() })));
         found.extend(write_set_findings(row, ctx));
         found.extend(growth_findings(row));
+        found.extend(super::done_teeth_findings(row));
         // 閉包・外形 pin・名指しは `.rs` / `.snap` の本文を読む。1 本でも読めなければ行ごとに 1 件で名指し、
         // 測れない検査は撃たない（読めなさを「足りない file なし」に読み替えない・NFR4）。
         match unreadable_input(ctx) {
@@ -804,6 +805,7 @@ mod tests {
             opens: Vec::new(),
             targets: Vec::new(),
             growth: Vec::new(),
+            done_teeth: Vec::new(),
             goal: String::new(),
         }
     }
