@@ -1269,6 +1269,16 @@ size = "M"
 growth = ["crates/scribe2/src/pipe/cli/intake.rs:14", "crates/scribe2/src/pipe/table.rs:25", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs:90", "crates/scribe2-boundary/tests/e2e/pipe/review.rs:2"]
 depends = ["cb"]
 done = "(1) 受付の生成は pointer の path が受付の材料の宣言の置き場（design_docs に path 1 つと項目を掛けて空でないか）に入らない契約を、doc を読む前に、表の検査の findings の行の形（contracts: <pointer の path>:0 contract-table:place-outside: <理由> の 1 行・rc 1）で断って run dir と event を作らず（findings の 1 件を組む Finding の table を pub(crate) に上げて撃つ）、生成を呼ぶ preflight は stderr の同じ 1 行と末尾の判定行 preflight: refused n=1 で断る（宣言を読めない repo は今どおり材料の読みが宣言の断りで先に止まる）〔intake_place_outside_ の (a): key の無い toy に contracts/t.toml（goal を持つ行 a・ほかの欄は toy の行と同じ形）を commit し、--design contracts/t.toml#a の受付が rc 1・stderr の 1 行が contracts: contracts/t.toml:0 contract-table:place-outside: で始まり・run dir と event は撃つ前と同数、同じ pointer の preflight は stderr に同じ 1 行・stdout の末尾が preflight: refused n=1 で rc 1、HEAD に無い contracts/none.toml#a の受付も読めない断りでなく同じ形の place-outside で断る〕 (2) 受付の材料が HEAD の宣言の置き場を材料の読みの 1 本の中で 1 周に 1 回読み、key で名乗った置き場の pointer は通す〔(b): (a) の toy に key で contracts/ を名乗る commit を足すと同じ受付が rc 0 で run を作る・材料の字面を持つ既存の helper short_of_room に欄を 1 つ足し（retroactive の札）それを使う contract_closure_ext_survivor_a_cap_shortfall_recounts_without_the_unresolved_items が緑〕 (3) 語は TableError の variant 1 つ（宣言順の末尾・在り処は宣言 file の名 1 本の file の列）で、名の列の pin と在り処の pin の母集団を 1 つ伸ばす〔直す既存の歯 table_error_names_are_pinned_in_declaration_order_and_carry_their_line と pipe_table_evidence_is_decided_once_for_ で始まる 1 本（retroactive の札）〕 (4) 既定の置き場の pointer は今どおり通り、置き場の外を指していた既存の歯は toy の宣言に key で docs/design/ を名乗る 1 行を足す形に直す〔(c): (a) の toy の docs/design/toy.md の行の受付が rc 0・直す既存の歯 pipe_review_contract_whole_goal_reads_the_goal_from_a_derived_toml（derive_repo_with の files に宣言の上書きを 1 つ足し、ほかの assert は変えない・retroactive の札）〕 (5) 器の repo の contracts check は findings 0 のまま〔verify の最終行の contracts check が便の木で findings 0〕 歯: intake_place_outside_（e2e・(a)〜(c)）が base で RED（機能不在: base の受付は置き場を照らさず (a) の受付と preflight を通す）。接頭辞の後ろの名に pipe_intake_ と contract_ を含めない"
+[[contract]]
+id = "ch"
+title = "焼き直しの門の teeth-outside-write-set の物差しは at の項目の § の尾も剥がし、剥がした file が契約の設計 doc なら write-set でなく節の本文の変化で測り、ほかの設計 doc の § を指す項目は測れない側に置く（§70・§68 の限界の側）"
+req = ["FR49", "NFR4"]
+section = "70"
+write-set = ["crates/scribe2/src/pipe/review/judgement.rs", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_repeat_"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/review/judgement.rs:25", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs:90"]
+done = "(1) at の空白を持たない項目は最初の # か最初の § のうち先に現れた方から後ろと末尾の : と行の番号を剥がした字面を file とし、at が src/other.rs と設計 doc の path の直後に § と番号を付けた項目の後、write-set に src/other.rs を足し節の本文を変えた契約が受付を通る〔pipe_intake_repeat_design_item_ の (a)〕 (2) 剥がした file が契約 file の設計 pointer の doc と同じ項目は write-set でなく節の本文で測り、節の本文を変えない契約は finding-unaddressed で断られて理由は § を剥がした設計 doc の path を名指し § と番号の付いた字面を持たず、設計 doc の pointer（# と行 id）の項目の後も節の本文を変えた契約は通り、契約 file を読めないか pointer でない周は従来の測りに落とす〔(b)(c)〕 (3) § を持つ項目のうち剥がした file が自分の設計 doc でないものは測れない側に置き、at が src/other.rs と別の設計 doc の § の項目の後、write-set に src/other.rs を足した契約は節の本文を変えずに通る〔(d)〕 (4) covered・normalize・path_shaped の読み・literal-mismatch と section-material-missing の物差し・同型 N 回の門・lens の雛形・FindingKind の 7 語・Rework の欄は変わらない〔変わらない既存の歯 pipe_intake_repeat_ の残り（§68 の 3 本を含む）〕 歯: e2e の pipe_intake_repeat_design_item_（intake.rs・既存の failed_runs と Again と assert_refused と write_set_contract と commit_changed_section の型）の (a) § の付いた自分の設計 doc の項目と src/other.rs の後に file を足し節を変えた契約が通る (b) 同じ at の後に節を変えない契約が剥がした doc の path を名指して断られ § の付いた字面を持たない (c) 自分の設計 doc の pointer の項目と src/other.rs の後に file を足し節を変えた契約が通る (d) 別の設計 doc の § の項目と src/other.rs の後に file を足した契約が節を変えずに通る、base は § を剥がさず設計 doc を file として write-set と照らすので (a)〜(d) が RED"
 <!-- contracts:end -->
 
 
@@ -2611,3 +2621,24 @@ done = "(1) 受付の生成は pointer の path が受付の材料の宣言の�
 - 各行の write-set と verify と done は区間の行 cb〜cg（起票の前に `pipe preflight` で受付の断りと閉包と余地を測って確定する）。
 - 同じ file を触る未着地の行（§66 の行 bw・by: check.rs・table.rs・declaration.rs・optional_keys.rs・intake.rs）が先に着地すると、本節の行の余地の見込みと TableError の母集団の数が動く。done は数を「n 増やす」の相対で書いた。
 - 歯の接頭辞は crates/ に 0 件で、着地済みと未着地の行の verify の filter 語（1030 語）を部分に含まないことを main a6d4234c で確かめた（`contract_`・`pipe_intake_`・`hook_live_row_`・`ledger_form_`・`lifecycle_mark_` を含む名を避けた）。接頭辞の後ろに付ける名にも、これらの語を入れない。
+
+## 70. 焼き直しの門の teeth-outside-write-set の物差しは、at の項目が契約の設計 doc を指す周を節の本文の変化で測り、§ の尾も剥がす（契約表の行 ch・§68 の限界の側・便 `s2-07l.736.33.21.7`）
+
+やさしく言うと: 審査役が「この歯は write-set の外にある」と指すとき、直す先として設計 doc の § を `<doc>§16` の形で並べることがある。器はそれを file の名と読み、write-set に入っていないので「直していない」と判じ、受付が永遠に断る。設計 doc は write-set に入らない（直すのは § の本文）ので、契約の設計 doc を指す項目は § の本文が変わったかで測り、ほかの設計 doc の § を指す項目は測れない側に置く。
+
+- 何が起きているか（orchestrator の実測 2026-10-02・便 `s2-07l.736.33.21.7` の 2 回目の契約の審査 FAIL の後の preflight・verified）: lens が teeth-outside-write-set の at に 4 項目を書いた。base.rs の行の番号つきの path・歯の名・outside.rs の行の番号つきの path・設計 doc の path の直後に空白なしで § と番号を付けた項目（`docs/design/reverse-index.md§16`）。docs で base.rs を write-set に足し § の本文を直しても、`pipe preflight` は finding-unaddressed で断り、理由は § の付いた項目をそのまま名指して「測った 3 件・測れない 1 件」と数えた。
+- 現物（main c9071cec・verified）: `crates/scribe2/src/pipe/review/judgement.rs` の `teeth_file` は # の後ろと末尾の行の番号だけを剥がし、§ の尾は剥がさない。`path_shaped` は / を含む字面を path と読むので、§ の付いた設計 doc の項目は測る側に入り、`covered` はどんな write-set でも当たらない。§68 の限界に書いた「空白を持たない設計 doc の pointer は file として測るので、契約の write-set に設計 doc が無ければ断りは残る」も同じ型で、契約の行は設計 doc を write-set に持たないので、§ の無い pointer の項目（`<doc>#<行 id>`）も永遠に断る。
+- 形（番号は行 ch の done と 1:1）:
+  1. **剥がし**: 空白を持たない項目は、最初の # か最初の § のうち先に現れた方から後ろを剥がし、続けて末尾の「: と数字」を剥がす（§68 形 1 の剥がしに § を足す）。空白を持つ項目は従来どおり測れない側。
+  2. **自分の設計 doc**: 剥がした file が契約 file の設計 pointer の doc（契約 file の字面を契約の読み手で読み、pointer の読み手で path を取る）と同じ項目は、write-set でなく節の本文で測る: 今回の節の本文が直前の便の design.txt と違えば対応済み、同じなら未対応で、理由は剥がした doc の path を名指す。契約 file を読めないか pointer でない周は、この形を使わず従来の測りに落とす。
+  3. **ほかの設計 doc の §**: § を持つ項目のうち、剥がした file が自分の設計 doc でないものは測れない側に置く（ほかの設計の § の指摘は write-set でも自分の節でも直せない・判断を要する側・C10 は「測れない n 件」の数で出す）。§ を持たない項目の測りは §68 のまま。
+  4. **変えない**: `covered` と `normalize`・`path_shaped` の読み・literal-mismatch と section-material-missing の物差し・同型 N 回の門・lens の雛形・`FindingKind` の 7 語・`Rework` の欄。読みは teeth-outside-write-set の物差しの中だけに置く。
+- 歯（e2e・`crates/scribe2-boundary/tests/e2e/pipe/intake.rs`・接頭辞 pipe_intake_repeat_design_item_・既存の `failed_runs` / `Again` / `assert_refused` / `write_set_contract` / `commit_changed_section` の型）:
+  - (a) done (1)(2): at が src/other.rs と、fixture の設計 doc の path の直後に § と番号を付けた項目の 2 つの後、write-set に src/other.rs を足し節の本文を変えた契約は受付を通る。base は § の付いた項目を path と読んで断る → RED。
+  - (b) done (2): 同じ at の後、write-set に src/other.rs を足しても節の本文を変えない契約は finding-unaddressed で断られ、理由は § を剥がした設計 doc の path を名指し、§ と番号の付いた字面を持たない。base は § の付いた字面のまま名指す → RED。
+  - (c) done (2): at が src/other.rs と、fixture の設計 doc の pointer（path の後ろに # と行 id）の 2 つの後、write-set に src/other.rs を足し節の本文を変えた契約は通る。base は剥がした設計 doc を path として測り write-set に無いので断る → RED。
+  - (d) done (3): at が src/other.rs と、別の設計 doc の path の直後に § と番号を付けた項目の 2 つの後、write-set に src/other.rs を足した契約は節の本文を変えずに通る。base は断る → RED。
+  - done (4) は、既存の e2e の pipe_intake_repeat_ の歯（§68 の 3 本を含む）が本文を変えずに緑であることで測る。
+- 却下: lens の雛形に「at に設計 doc を書かない」と書く（過去の便の at は書き換わらず、`s2-07l.736.33.21.7` が止まったまま・lens が字を守る保証も無い）／`Rework` に設計 doc の path の欄を足す（審査の歯の `Rework` の構築点〔`crates/scribe2/src/pipe/review.rs` の tests〕が未着地の行の write-set に在り、行を交差させる）／設計 doc の項目を全部測れない側に置く（自分の節を直さない焼き直しも通ってしまう・§23 (3) の物差しの意図に反する）。
+- 限界: ほかの設計 doc の § を指す項目は測らずに通す（測れない n 件の数にだけ出る）。§ も # も持たない設計 doc の path だけの項目は、自分の設計 doc なら形 2 で測り、ほかの設計 doc なら §68 のまま file として測る。
+- ADR: 書かない（物差しの読みの直し・§68 の延長）。
