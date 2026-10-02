@@ -1014,9 +1014,9 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 
 ## 48. 憲法の置き場を vessel 宣言の任意 key `constitution` が名乗り、lens は名乗った file の列を §47 の測りで 1 本ずつ測って、頼みの文の憲法の path の句をその列に差し替える — 憲法の正本が folio v1 の生成 file の形でない消費側の置き場（契約表の行 as・memo `s2-07l.738.42.9`・[ADR-0110](../../design-intent/decisions/ADR-0110-the-constitution-place-is-declared-by-the-vessel-key-and-replaces-the-default.html)）
 
-やさしく言うと: §47 で、審査役（lens）を起こす前に器が `docs/constitution.md` の有無を測るようにした。けれども、この path は器が自分の repo の作り方（folio v1 が憲法から生成する写し）を決め打ちしたものである。憲法の正本を md でない別の形の file で持つ置き場では、正本の写しをもう 1 つ作らないと審査が通らない。そこで、その repo が「憲法はこの file」と vessel 宣言に書けるようにする。書いた repo では、器は書かれた file を測り、審査役への頼みの文の「憲法はどこか」の句をその file に差し替える。書かない repo は今と 1 字も変わらない。
+やさしく言うと: §47 で、審査役（lens）を起こす前に器が `docs/constitution.md` の有無を測るようにした。けれども、この path は器が自分の repo の作り方（folio v1 が憲法から生成する写し）を決め打ちしたものである。憲法の正本を md でない別の形の file で持つ置き場では、正本の写しをもう 1 つ作らないと審査が通らない。そこで、その repo が「憲法はこの file」と vessel 宣言に書けるようにする。書いた repo では、器は書かれた file を測り、審査役への頼みの文の「憲法はどこか」の句をその file に差し替える。書かない repo の頼みの文は今と 1 字も変わらない。
 
-- 出所（memo `s2-07l.738.42.9` の 2026-10-02T02:3xZ の判断・verified）: 器の憲法の正本は `design-intent/spec/constitution.html` の機械層で、`docs/constitution.md` は `cargo xtask gen-claude-md` の生成物である。消費側の置き場には、正本を md でない別の形の file で持ち md の写しを作らない repo が在る。§47 の却下の「別の path を要る消費側が現れたら ADR を立てて足す」の条件が満ちた。消費側が正本から `docs/constitution.md` を生成する手は、統合の向きと逆で写しが 1 つ増えるので採らない。
+- 出所（memo `s2-07l.738.42.9` の 2026-10-02T02:3xZ の判断・verified）: 器の憲法の正本は `design-intent/spec/constitution.html` の機械層で、`docs/constitution.md` は `cargo xtask gen-claude-md` の生成物である。消費側の置き場には、正本を md でない別の形の file で持ち md の写しを作らない repo が在る。§47 の却下の「別の path を要る消費側が現れたら ADR を立てて足す」の条件が満ちた。消費側が正本から `docs/constitution.md` を作る手（生成した写し・正本を名指す数行・symlink のどれでも）は、木に決め打ちの path が残り、頼みの文が正本を名指さないので採らない。
 - 現物（verified・main e02b1c68）: `crates/scribe2/src/headless/lens.rs` は const `CONSTITUTION_FILE` に `docs/constitution.md` を持ち、private な 1 本（§47 形 1）が `--worktree` の木のその path を在る・無い・読めないに測り、diff の審査の腕（`prompt_of` の材料の無い腕・cap の後）だけが測る。`crates/scribe2/src/headless/lens.txt` の観点の行は「憲法（起動 cwd の生成 file `docs/constitution.md`）の条項に反する面。」と書く。vessel 宣言の任意 key は `crates/scribe2/src/pipe/declaration/optional_keys.rs` の頭の決まり（key の名・読み手・2 つの key の列に 1 行ずつと外へ渡す口を optional_keys.rs へ、`Declared` の欄と parse の読みの 1 行を親へ）で足す。rev を名指して宣言を読む閉じた 3 値の先例は `TablePlaces`（contract-source.md §69 形 4）。
 - 形（番号は done と 1:1）:
   1. **key**: vessel 宣言の任意 key `constitution` を 1 つ足す。値は repo 相対の file の path の配列（書いた順）。key の行番号を名指す宣言の不備は、配列でない値・空か空白だけの項目・絶対 path・home の短縮記号・`..` の段・末尾 `/`（dir は名乗れない）・英数字と `.` `_` `/` `-` のほかの字を持つ項目（頼みの文に差し込むので、字を閉じて穴の字や backtick を入れさせない）。書いた空配列は既存の配列の層が断る。同じ path の重複は不備にしない（測りと差し込みは 1 度）。schema は 1 のまま。key の列（宣言順）の末尾（`contract-tables` の後）に置く。
@@ -1039,11 +1039,11 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 触らない: `lens.txt`・`lens-contract.txt`・`lens-memo.txt`・runner の雛形・gate の判定と §29 の撃ち直し・`verdict.json` の key 列・`--print-version` の key 列と値・契約表の置き場の key と列挙・器の repo の宣言。
 - 却下:
   - **既定に足す（contract-tables と同じ向き）**: 足す形では既定の写しを持たない置き場が審査を通れず、写しを作らせることになる（統合の向きと逆）。
-  - **消費側が正本から `docs/constitution.md` を生成する**: 写しが 1 つ増え、正本と写しの食い違いを見張る面が増える。
+  - **消費側が正本から `docs/constitution.md` を作る**（生成した写し・正本を名指す数行・symlink のどれでも）: 消費側の木に器の決め打ちの path の file が 1 つ増えて残り、頼みの文は今も「起動 cwd の生成 file」と呼んで正本を名指さない。写しで作る形では、正本と写しの食い違いを見張る面も増える。
   - **雛形に穴 `{constitution}` を足す**: `lens.txt` の hash が変わり、binary の入れ替えの後に全部の行の審査の記録が撃ち直しになる。句の差し替えなら key の無い repo の prompt と hash は 1 byte も変わらない。
   - **dir や glob を名乗れるようにする**: 測りの 3 値が file 1 本ごとに決まらなくなる。正本が複数 file なら列で名乗る。
   - **憲法の本文を器が prompt に差し込む**（§47 の却下と同じ）: cap を食い、lens が木を読めるのに写しを重ねる。
-- 限界: 中身は読まないので、名乗った file が憲法かは置いた席が負う。木の外の file は名乗れない（repo 相対だけ）。宣言を持つ置き場は key の有無によらず、宣言を壊すと直すまで diff の審査の gate が全部 INCONCLUSIVE で止まる（evidence が `.vessel.toml` を名指す・受付は宣言の不備を先に断るので、壊れるのは便の差分が宣言を壊した周だけ）。repo でない dir を repo の中に置くと、git が上へ辿って囲いの repo の宣言を読む（測りは HEAD の宣言を読む 1 本のまま・歯の tmp は repo の外か存在しない path に置く）。
+- 限界: 中身は読まないので、名乗った file が憲法かは置いた席が負う。木の外の file は名乗れない（repo 相対だけ）。宣言を持つ置き場は key の有無によらず、宣言を壊すと直すまで diff の審査の gate が全部 INCONCLUSIVE で止まる（evidence が `.vessel.toml` を名指す・受付は宣言の不備を先に断るので、壊れるのは便の差分が宣言を壊した周だけ）。repo でない dir を repo の中に置くと、git が上へ辿って囲いの repo の宣言を読む（測りは HEAD の宣言を読む 1 本のまま・歯の tmp は repo の外か存在しない path に置く）。`git show` が理由によらず落ちる周（repo でない dir のほか、git の無い環境・safe.directory の拒否・HEAD の無い repo）は Fixed で、名乗った key があっても既定を測る（repo でない dir と区別しない・TablePlaces と同じ読み）。gate の木は器が git で作った worktree なので、そこで git が落ちる周は gate のほかの行も落ちる。
 - 着地の後: binary の入れ替えの後に、消費側の置き場の席へ「vessel 宣言に `constitution = [正本の path]` を書けば `docs/constitution.md` の写しは要らない」を 1 行で知らせ、memo `s2-07l.738.42.9` を昇格済みで閉じる。
 
 <!-- contracts:begin -->
