@@ -962,6 +962,35 @@ fn pr_retire_refuses_with_one_closed_word_and_writes_nothing() {
     }
 }
 
+/// (k) 先端の読みを 3 値に割った後の回帰（設計 pipeline.md §69 形 2）: main の無い remote と、dir の名を変えた remote の 2 つの脚で、
+/// 照合は今と同じ `unmeasured` の語 1 行で断り、event も台帳も書かない。
+// flip-check: retroactive s2-07l.736.31.2.3
+#[test]
+fn pr_retire_remote_without_main_or_unreachable_refuses_as_unmeasured() {
+    type Break = fn(&PrTools);
+    let legs: [(&str, Break); 2] = [
+        ("no-main", |t| {
+            git(&t.remote, &["update-ref", "-d", "refs/heads/main"]);
+        }),
+        ("renamed-dir", |t| {
+            fs::rename(&t.remote, t.state.join("remote-moved.git")).expect("偽 remote の dir の名を変えられる");
+        }),
+    ];
+    for (name, breakage) in legs {
+        let tools = pr_tools(true);
+        breakage(&tools);
+        let (events_before, ledger_before) = (event_count(&tools.state), tools.ledger());
+        let out = tools.retire(&[]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{name}: rc 1: {} / {}", stdout_of(&out), stderr_of(&out));
+        assert_eq!(stdout_of(&out).trim_end(), tools.refusal_line("unmeasured"), "{name}: 今と同じ unmeasured の語");
+        assert!(worktree_of(&tools.repo, &tools.id).exists() && !tools.retired().exists(), "{name}: 畳まない");
+        assert_eq!(event_count(&tools.state), events_before, "{name}: event を書かない");
+        assert_eq!(tools.ledger(), ledger_before, "{name}: 台帳の JSON は不変");
+        assert!(tools.lines("close-log").is_empty(), "{name}: close は撃たない");
+        clean(&[&tools.repo, &tools.state]);
+    }
+}
+
 /// worktree を汚す。
 #[expect(
     clippy::expect_used,

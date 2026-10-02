@@ -245,23 +245,38 @@ fn prove(entry: &Retire<'_>) -> Result<Proof, Refusal> {
     }
 }
 
-/// remote の main の先端の commit id を読み、object を取る（落ちた周・先端の object が無い周は `unmeasured`）。
-fn remote_tip(repo: &Path, remote: &str) -> Result<String, Refusal> {
-    let listed = git_bytes(repo, &["ls-remote", remote, MAIN_REF]).ok_or(Refusal::Unmeasured)?;
+/// remote の main の先端の読み（**閉じた 3 値**・照合と着地の前の取り込みが同じ 1 本を通る・設計 pipeline.md §69 形 2）。
+pub(in crate::pipe) enum RemoteTip {
+    /// 先端の commit id（object は取った後）。
+    Found(String),
+    /// remote に main が無い（初めての push の前）。
+    NoMain,
+    /// 読めない・取れない（ls-remote・fetch・先端の object のどれかが落ちた周）。
+    Unread,
+}
+
+/// remote の main の先端を読み、object を取る（ls-remote → fetch → `cat-file -e` の 3 手）。
+pub(in crate::pipe) fn read_tip(repo: &Path, remote: &str) -> RemoteTip {
+    let Some(listed) = git_bytes(repo, &["ls-remote", remote, MAIN_REF]) else {
+        return RemoteTip::Unread;
+    };
     let text = String::from_utf8_lossy(&listed);
-    let tip = text
-        .lines()
-        .filter_map(|line| line.split_once(char::is_whitespace))
-        .find(|(_, name)| name.trim() == MAIN_REF)
-        .map(|(id, _)| id.to_owned())
-        .filter(|id| is_oid(id))
-        .ok_or(Refusal::Unmeasured)?;
-    if !git_ok(repo, &["fetch", "--no-tags", "--no-write-fetch-head", remote, MAIN_REF]) {
-        return Err(Refusal::Unmeasured);
+    let found = text.lines().filter_map(|line| line.split_once(char::is_whitespace)).find(|(_, name)| name.trim() == MAIN_REF);
+    let Some((tip, _)) = found else {
+        return RemoteTip::NoMain;
+    };
+    let fetch = ["fetch", "--no-tags", "--no-write-fetch-head", remote, MAIN_REF];
+    if !is_oid(tip) || !git_ok(repo, &fetch) || !git_ok(repo, &["cat-file", "-e", &format!("{tip}^{{commit}}")]) {
+        return RemoteTip::Unread;
     }
-    match git_ok(repo, &["cat-file", "-e", &format!("{tip}^{{commit}}")]) {
-        true => Ok(tip),
-        false => Err(Refusal::Unmeasured),
+    RemoteTip::Found(tip.to_owned())
+}
+
+/// [`read_tip`] を照合の戻りに写す（無い周と読めない周は同じ `unmeasured`）。
+fn remote_tip(repo: &Path, remote: &str) -> Result<String, Refusal> {
+    match read_tip(repo, remote) {
+        RemoteTip::Found(tip) => Ok(tip),
+        RemoteTip::NoMain | RemoteTip::Unread => Err(Refusal::Unmeasured),
     }
 }
 
