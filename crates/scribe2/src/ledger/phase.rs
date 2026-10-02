@@ -115,6 +115,20 @@ pub fn close_due(memo: &Issue, issues: &[Issue], prefix: Option<&str>, unjudged:
     !unjudged.contains(&memo.id) && settled(memo, issues, prefix, None)
 }
 
+/// 器が閉じる memo と close の理由（**純関数**・台帳の順・§21 約束 1）: §2 の種類で memo に当たり閉じていない bead のうち [`close_due`] が真のものを
+/// (memo の id・理由の字) で返す。理由は `昇格済み` の後に最後の昇格の行の契約 id の列を行の順のまま半角の空白 1 つで繋いだ字。`prefix` が解けない周は空。
+pub fn due_closes(issues: &[Issue], prefix: Option<&str>, unjudged: &[String]) -> Vec<(String, String)> {
+    let Some(found) = prefix else { return Vec::new() };
+    issues
+        .iter()
+        .filter(|memo| kind_of(memo) == Kind::Memo && !is_closed(memo) && close_due(memo, issues, prefix, unjudged))
+        .filter_map(|memo| match promotion::read(&memo.notes, found)? {
+            promotion::Line::Readable(line) => Some((memo.id.clone(), format!("{} {}", Head::Promoted.as_str(), line.ids.join(" ")))),
+            promotion::Line::Unreadable { .. } => None,
+        })
+        .collect()
+}
+
 /// FR93 の条件のうち判定を除く 4 つ（(1)〜(4)）。`at` が在れば、その時刻の状態で測る（閉じた時点・[`Misfit::PromotedUnmet`]）。
 fn settled(memo: &Issue, issues: &[Issue], prefix: Option<&str>, at: Option<u64>) -> bool {
     let Some(prefix) = prefix else { return false };

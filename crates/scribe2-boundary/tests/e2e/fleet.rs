@@ -3745,3 +3745,183 @@ fn anchor_census_names_the_many_anchor_place_in_the_unmeasured_list() {
     assert_eq!(single.named(), Vec::<(String, String)>::new(), "Life の repo だけの登録");
     super::pipe::clean(&[&life.repo, &life.state, &single.repo, &single.state, &other, &away]);
 }
+
+// ───── memo の自動の close（設計 docs/design/ledger-form.md §21・接頭辞 `memo_autoclose_`） ─────
+
+/// 器が memo toy-m9 に撃つ close の 1 行（`close <bead> --reason <理由>` の argv）。
+const MEMO_CLOSE: &str = "close toy-m9 --reason 昇格済み toy-c9";
+
+/// 昇格の行 `line` を持つ開いた memo（引き金の行を持つ・id と status は隣り合う）。
+fn memo_autoclose_memo(id: &str, line: &str) -> String {
+    format!(
+        "{{\"id\":\"{id}\",\"status\":\"open\",\"priority\":2,\"labels\":[\"intake:memo\"],\"acceptance_criteria\":\"\",\"dependencies\":[],\"description\":\"### 出所\\n### 観測\\n### 候補\\n### 昇格条件\\n- 引き金: 期日 2099-01-01T00:00Z\\n\",\"notes\":\"昇格: {line}\",\"created_at\":\"2026-09-01T00:00:00Z\"}}"
+    )
+}
+
+/// memo `memo` への discovered-from を持つ、着地の形で閉じた契約。
+fn memo_autoclose_landed(id: &str, memo: &str) -> String {
+    format!(
+        "{{\"id\":\"{id}\",\"status\":\"closed\",\"priority\":2,\"labels\":[],\"acceptance_criteria\":\"\",\"close_reason\":\"landed 0123456789abcdef0123456789abcdef01234567 ci=success\",\"dependencies\":[{{\"issue_id\":\"{id}\",\"depends_on_id\":\"{memo}\",\"type\":\"discovered-from\"}}]}}"
+    )
+}
+
+/// close で台帳の file の status を closed に替える偽 bd の本体（`Life` の既定は close を記録するだけ）。
+const MEMO_BD_WRITES: &str = "d='DIR'\nif [ \"$1\" = close ]; then\n  echo \"$*\" >> \"$d/close-log\"\n  sed -i \"s/\\\"id\\\":\\\"$2\\\",\\\"status\\\":\\\"open\\\"/\\\"id\\\":\\\"$2\\\",\\\"status\\\":\\\"closed\\\"/\" \"$d/ledger\"\n  exit 0\nfi\ncat \"$d/ledger\"\nexit \"$(cat \"$d/list-rc\")\"\n";
+
+/// close の 2 つ目の語が toy-m9 の周だけ rc 3 で返る偽 bd の本体。
+const MEMO_BD_REFUSES: &str = "d='DIR'\nif [ \"$1\" = close ]; then\n  echo \"$*\" >> \"$d/close-log\"\n  [ \"$2\" = toy-m9 ] && exit 3\n  exit 0\nfi\ncat \"$d/ledger\"\nexit \"$(cat \"$d/list-rc\")\"\n";
+
+impl Life {
+    /// 5 つの条件を満たす memo toy-m9（最後の昇格の行が全部で toy-c9）と着地の形で閉じた契約 toy-c9、最後の昇格の行が一部の memo toy-m8 と契約 toy-c8 を足す。
+    #[expect(
+        clippy::expect_used,
+        reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+    )]
+    fn with_memos(&self) {
+        let waiting = fs::read_to_string(self.dir.join("ledger")).expect("台帳を読める");
+        let items = [
+            memo_autoclose_memo("toy-m9", "全部 toy-c9"),
+            memo_autoclose_landed("toy-c9", "toy-m9"),
+            memo_autoclose_memo("toy-m8", "一部 toy-c8"),
+            memo_autoclose_landed("toy-c8", "toy-m8"),
+        ];
+        self.put("ledger", &format!("{},{}]\n", waiting.trim_end().trim_end_matches(']'), items.join(",")));
+    }
+
+    /// 偽 bd の本体を替える（`DIR` は置き場の dir）。
+    #[expect(
+        clippy::expect_used,
+        reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+    )]
+    fn rebody(&self, body: &str) {
+        fs::write(&self.bd, format!("#!/bin/sh\n{}", body.replace("DIR", &self.dir.display().to_string()))).expect("偽 bd を書き直せる");
+    }
+
+    /// 偽 bd の close の記録の行（撃たれた順・無ければ空）。
+    fn close_log(&self) -> Vec<String> {
+        fs::read_to_string(self.dir.join("close-log")).unwrap_or_default().lines().map(str::to_owned).collect()
+    }
+}
+
+/// 字から 40 字の 16 進の字（commit id）を伏せる。
+fn memo_masked(text: &str) -> String {
+    let (mut out, mut run) = (String::new(), String::new());
+    for ch in text.chars().chain(std::iter::once(' ')) {
+        if ch.is_ascii_digit() || ('a'..='f').contains(&ch) {
+            run.push(ch);
+            continue;
+        }
+        out.push_str(if run.len() == 40 { "<sha>" } else { &run });
+        run.clear();
+        out.push(ch);
+    }
+    out.pop();
+    out
+}
+
+/// 契機 (d) の 3 経路（`body` 着地の本体・`terminal` 1 周目の close を落とした後の `--terminal-only`・`retire`）の 1 本を撃つ（`memo` が偽なら memo を足さない `Life`）。
+fn memo_autoclose_path(path: &str, memo: bool) -> (Life, String, Output) {
+    let life = Life::new();
+    if memo {
+        life.with_memos();
+    }
+    let id = life.gated();
+    let out = match path {
+        "retire" => {
+            let place = life.prepared_pr(&id);
+            life.retire(&id, &place, &[])
+        }
+        "terminal" => {
+            life.put("close-rc", "3\n");
+            life.land(&id, &[]);
+            life.put("close-rc", "0\n");
+            life.land(&id, &["--terminal-only"])
+        }
+        _ => life.land(&id, &[]),
+    };
+    (life, id, out)
+}
+
+/// 呼び手の rc と stdout（repo の path と便の id と commit id を伏せた字）。
+fn memo_told(out: &Output, life: &Life, id: &str) -> (Option<i32>, String) {
+    let (rc, text) = life_told(out, life, id);
+    (rc, memo_masked(&text))
+}
+
+/// 3 経路の close の記録の最後の行が memo の close で、その前に land の close が在り toy-m8 の close は無い。呼び手の rc と stdout は memo を足さない周と等しく、
+/// 出力が書かれ、stderr に `memo-close=` が無い（同じ歯の中の対: memo を足さない周に memo の close は無い）。
+#[test]
+fn memo_autoclose_terminal_paths_close_the_due_memo_after_the_land_close() {
+    for path in ["body", "terminal", "retire"] {
+        let ((life, id, out), (plain, plain_id, plain_out)) = (memo_autoclose_path(path, true), memo_autoclose_path(path, false));
+        let (err, log) = (super::pipe::stderr_of(&out), life.close_log());
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{path}: rc 0: {err}");
+        assert_eq!(log.last().map(String::as_str), Some(MEMO_CLOSE), "{path}: 最後の行が memo の close: {log:?}");
+        assert!(log.len() >= 2 && log.iter().rev().nth(1).is_some_and(|line| line.starts_with("close ") && !line.contains("昇格済み")), "{path}: 前に land の close: {log:?}");
+        assert!(!log.iter().any(|line| line.contains("toy-m8")), "{path}: 一部の行の memo は閉じない: {log:?}");
+        assert_eq!(memo_told(&out, &life, &id), memo_told(&plain_out, &plain, &plain_id), "{path}: 呼び手の rc と stdout は memo を足さない周と等しい");
+        assert!(life.generated().is_some() && !err.contains("memo-close="), "{path}: 出力を書き stderr に memo-close= は無い: {err}");
+        assert!(!plain.close_log().iter().any(|line| line.contains("昇格済み")), "{path}: memo を足さない周に memo の close は無い");
+        super::pipe::clean(&[&life.repo, &life.state, &plain.repo, &plain.state]);
+    }
+}
+
+/// `dispatch ls` と `fleet lifecycle write` の後は memo の close が 0 行で（toy-m9 は close-due のまま）、続く `pipe dispatch` の後に 1 行になり、
+/// 閉じた周の書き直しが台帳を読み直して toy-m9 は close-due でなくなる（close で台帳の file の status を替える偽 bd）。
+#[test]
+fn memo_autoclose_dispatch_closes_and_ls_and_the_write_mouth_do_not() {
+    let life = Life::new();
+    life.with_memos();
+    life.rebody(MEMO_BD_WRITES);
+    let due = Some(("memo-promoting".to_owned(), "vessel".to_owned(), Some("close-due".to_owned())));
+    assert_eq!(life.ls().status.code(), Some(i32::from(RC_OK)));
+    assert_eq!(life.write(&[]).status.code(), Some(i32::from(RC_OK)));
+    assert!(life.close_log().is_empty(), "ls と口は memo を閉じない: {:?}", life.close_log());
+    assert_eq!(life.shape("toy-m9"), due, "前提: 口の後の出力で toy-m9 は close-due");
+    let round = life.dispatch(&[]);
+    assert_eq!(round.status.code(), Some(i32::from(RC_OK)), "dispatch は rc 0: {}", super::pipe::stderr_of(&round));
+    assert_eq!(life.close_log(), [MEMO_CLOSE], "dispatch の周が memo を 1 回閉じる");
+    assert_ne!(life.shape("toy-m9"), due, "閉じた周の書き直しは台帳を読み直す");
+    super::pipe::clean(&[&life.repo, &life.state]);
+}
+
+/// 台帳を読めない周（list が rc 1）の `--terminal-only` は rc 0 で land の close だけを撃ち、memo は閉じず stderr に `memo-close=unmeasured:ledger`。
+/// list を戻した `pipe dispatch` の後に memo の close が 1 行（読めない周は閉じず次の契機の周に閉じる）。
+#[test]
+fn memo_autoclose_unreadable_ledger_closes_nothing_until_the_next_round() {
+    let life = Life::new();
+    life.with_memos();
+    let id = life.gated();
+    life.put("close-rc", "3\n");
+    assert_eq!(life.land(&id, &[]).status.code(), Some(i32::from(RC_REFUSED)), "前提: 1 周目の close は落ちる");
+    life.put("close-rc", "0\n");
+    life.put("list-rc", "1\n");
+    let out = life.land(&id, &["--terminal-only"]);
+    let err = super::pipe::stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {err}");
+    assert_eq!(life.close_log().len(), 2, "落ちた 1 周目と 2 周目の land の close だけ: {:?}", life.close_log());
+    assert!(!life.close_log().iter().any(|line| line.contains("昇格済み")), "memo は閉じない");
+    assert_eq!(err.lines().filter(|line| line.starts_with("memo-close=")).collect::<Vec<_>>(), ["memo-close=unmeasured:ledger"], "stderr: {err}");
+    life.put("list-rc", "0\n");
+    let round = life.dispatch(&[]);
+    assert_eq!(round.status.code(), Some(i32::from(RC_OK)), "dispatch は rc 0: {}", super::pipe::stderr_of(&round));
+    assert_eq!(life.close_log().iter().filter(|line| line.as_str() == MEMO_CLOSE).count(), 1, "次の周に memo を閉じる: {:?}", life.close_log());
+    super::pipe::clean(&[&life.repo, &life.state]);
+}
+
+/// memo の close が rc 3 で断られる周の land は rc と stdout が (c) の着地の本体と等しく、stderr に `memo-close=failed:toy-m9` の 1 行。
+#[test]
+fn memo_autoclose_a_refused_memo_close_names_the_memo_on_stderr_only() {
+    let (plain, plain_id, plain_out) = memo_autoclose_path("body", false);
+    let life = Life::new();
+    life.with_memos();
+    life.rebody(MEMO_BD_REFUSES);
+    let id = life.gated();
+    let out = life.land(&id, &[]);
+    let err = super::pipe::stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {err}");
+    assert_eq!(life.close_log().last().map(String::as_str), Some(MEMO_CLOSE), "memo の close は撃たれた");
+    assert_eq!(err.lines().filter(|line| line.starts_with("memo-close=")).collect::<Vec<_>>(), ["memo-close=failed:toy-m9"], "stderr: {err}");
+    assert_eq!(memo_told(&out, &life, &id), memo_told(&plain_out, &plain, &plain_id), "rc と stdout は等しい");
+    super::pipe::clean(&[&life.repo, &life.state, &plain.repo, &plain.state]);
+}
