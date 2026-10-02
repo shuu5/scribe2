@@ -848,10 +848,10 @@ fn rules_floor_timeout_row_precedes_the_drafts_cap_rows() {
     assert_eq!(manifest.rows().iter().filter(|found| found.kind == kind).count(), 1, "kind の行は 1 本");
     // 後ろの 2 kind・14 行は局面の出力（`lifecycle.closed_window_h` の 1 行と `lifecycle.age_h.<語>` の 13 行・`.738.38.7`）。
     // 行の予約の期限の 1 kind・1 行（`pipe.reserve_h`・`.736.33.17`）が直後に挟まる。
-    // さらに後ろに memo の 3 kind・3 行（`.738.39.3`）と索引の 2 kind・2 行（`.736.33.21.2`）が続く。
-    let kinds: Vec<&RuleKind> = ALL.iter().rev().skip(7).take(4).collect();
+    // さらに後ろに管理 tick の下限の 1 kind・1 行（`.738.42.6`）・memo の 3 kind・3 行（`.738.39.3`）と索引の 2 kind・2 行（`.736.33.21.2`）が続く。
+    let kinds: Vec<&RuleKind> = ALL.iter().rev().skip(8).take(4).collect();
     assert_eq!(kinds, [&RuleKind::SeatDraftsBusyS, &RuleKind::SeatDraftsCapMb, &RuleKind::PipeReserveH, &kind], "kind は ALL の末尾の 2 つの前から 4 つ目（母集団 {} 種）", ALL.len());
-    let rows: Vec<&str> = manifest.rows().iter().rev().skip(19).take(4).map(|found| found.id.as_str()).collect();
+    let rows: Vec<&str> = manifest.rows().iter().rev().skip(20).take(4).map(|found| found.id.as_str()).collect();
     assert_eq!(rows, ["seat.drafts_busy_s", "seat.drafts_cap_mb", "pipe.reserve_h", id], "行は manifest の末尾の 14 行の前から 4 つ目（母集団 {} 行）", manifest.rows().len());
     let errors = rejected(&one_row(kind, "\"ten\"")).expect("文字列の値の fixture が受理された");
     assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
@@ -904,10 +904,10 @@ fn rules_drafts_cap_rows_are_the_last_two_kinds_and_rows() {
         assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
     }
     // 後ろの 2 kind・14 行は局面の出力（`.738.38.7`）。起草の置き場の 2 つはその直前に並ぶ。
-    // さらに後ろに memo の 3 kind・3 行（`.738.39.3`）と索引の 2 kind・2 行（`.736.33.21.2`）が続く。
-    let tail: Vec<&RuleKind> = ALL.iter().rev().skip(7).take(2).rev().collect();
+    // さらに後ろに管理 tick の下限の 1 kind・1 行（`.738.42.6`）・memo の 3 kind・3 行（`.738.39.3`）と索引の 2 kind・2 行（`.736.33.21.2`）が続く。
+    let tail: Vec<&RuleKind> = ALL.iter().rev().skip(8).take(2).rev().collect();
     assert_eq!(tail, [&RuleKind::SeatDraftsCapMb, &RuleKind::SeatDraftsBusyS], "kind は ALL の末尾の 2 つの前の 2 つ・この順（母集団 {} 種）", ALL.len());
-    let rows: Vec<&str> = manifest.rows().iter().rev().skip(19).take(2).rev().map(|found| found.id.as_str()).collect();
+    let rows: Vec<&str> = manifest.rows().iter().rev().skip(20).take(2).rev().map(|found| found.id.as_str()).collect();
     assert_eq!(rows, ["seat.drafts_cap_mb", "seat.drafts_busy_s"], "行は manifest の末尾の 14 行の前の 2 行・この順（母集団 {} 行）", manifest.rows().len());
 }
 
@@ -981,13 +981,38 @@ fn rules_lifecycle_rows_carry_the_ruled_values_and_the_lifecycle_ruling() {
     assert_ne!(floor.ruling, LIFECYCLE_RULING, "base の行の裁定 id を使い回さない（new-row-reuses-ruling）");
     assert_eq!(RuleKind::parse("LifecycleClosedWindowH"), Some(RuleKind::LifecycleClosedWindowH), "字面から引ける");
     assert_eq!(RuleKind::parse("LifecycleAgeH"), Some(RuleKind::LifecycleAgeH), "字面から引ける");
-    // 後ろに memo の 3 kind・3 行（`.738.39.3`）と索引の 2 kind・2 行（`.736.33.21.2`）が続く。
-    let kinds: Vec<&RuleKind> = ALL.iter().rev().skip(5).take(2).rev().collect();
+    // 後ろに管理 tick の下限の 1 kind・1 行（`.738.42.6`）・memo の 3 kind・3 行（`.738.39.3`）と索引の 2 kind・2 行（`.736.33.21.2`）が続く。
+    let kinds: Vec<&RuleKind> = ALL.iter().rev().skip(6).take(2).rev().collect();
     assert_eq!(kinds, [&RuleKind::LifecycleClosedWindowH, &RuleKind::LifecycleAgeH], "kind は ALL の末尾の 5 つの前の 2 つ・この順（母集団 {} 種）", ALL.len());
-    let rows: Vec<&str> = manifest.rows().iter().rev().skip(5).take(14).rev().map(|found| found.id.as_str()).collect();
+    let rows: Vec<&str> = manifest.rows().iter().rev().skip(6).take(14).rev().map(|found| found.id.as_str()).collect();
     let want: Vec<&str> = expected.iter().map(|(id, _, _)| id.as_str()).collect();
     assert_eq!(rows, want, "行は manifest の末尾 14 行・この順（母集団 {} 行）", manifest.rows().len());
     assert_eq!(manifest.rows().iter().filter(|found| found.kind == RuleKind::LifecycleAgeH).count(), 13, "年齢の行は 13 本");
+}
+
+/// 管理 tick の全部の書き直しの下限の行（設計 case-lifecycle.md §19 約束 1・`s2-07l.738.42.6`）が埋め込み manifest に id / kind / 形 Int / 値 300 /
+/// enabled / 裁定の字 `user 2026-10-01T15:27Z`（base の行 `floor.timeout_s` の字と別）/ 裁定日 2026-10-01 で 1 本在り、行は
+/// `lifecycle.age_h.epic-closable` の直後で `memo.notes_max_bytes` の前・kind は `ALL` の `LifecycleAgeH` の直後で `MemoNotesMaxBytes` の前、
+/// 字面から引け、形は Int だけ（base では行も kind も無い ＝ RED）。
+#[test]
+fn rules_lifecycle_full_min_s_row_follows_the_age_rows() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let id = "lifecycle.full_min_s";
+    let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+    let kind = RuleKind::parse("LifecycleFullMinS").expect("字面から引ける");
+    assert_eq!((kind.as_str(), kind.shape()), ("LifecycleFullMinS", ValueShape::Int), "kind の字面と形");
+    assert_eq!((row.kind, &row.value, row.enabled), (kind, &RuleValue::Int(300), true), "{id} の kind と値と enabled");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-10-01T15:27Z", "2026-10-01"), "{id} の裁定の字と裁定日");
+    assert_ne!(row.ruling, manifest.get("floor.timeout_s").expect("floor.timeout_s の行が在る").ruling, "base の行の裁定の字を使い回さない（new-row-reuses-ruling）");
+    assert_eq!(int_row(&manifest, id), Ok(300), "{id} を整数の読み手で引ける");
+    assert_eq!(manifest.rows().iter().filter(|found| found.kind == kind).count(), 1, "kind の行は 1 本");
+    let at = ALL.iter().position(|found| *found == RuleKind::LifecycleAgeH).expect("LifecycleAgeH は ALL に在る");
+    assert_eq!(ALL.get(at + 1..at + 3), Some(&[kind, RuleKind::MemoNotesMaxBytes][..]), "kind は LifecycleAgeH の直後で MemoNotesMaxBytes の前（母集団 {} 種）", ALL.len());
+    let rows: Vec<&str> = manifest.rows().iter().map(|found| found.id.as_str()).collect();
+    let epic = rows.iter().position(|found| *found == "lifecycle.age_h.epic-closable").expect("epic-closable の行が在る");
+    assert_eq!(rows.get(epic + 1..epic + 3), Some(&[id, "memo.notes_max_bytes"][..]), "行は epic-closable の直後で memo.notes_max_bytes の前（母集団 {} 行）", rows.len());
+    let errors = rejected(&one_row(kind, "\"five\"")).expect("文字列の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
 }
 
 /// `lifecycle.age_h.<語>` は id の後ろが手番 seat の局面の語のときだけ受理され（行の無い seat の語 `run-asking` は受理・手番が seat でない
@@ -1247,8 +1272,8 @@ fn class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id() {
     assert_eq!((row.kind, row.kind.shape()), (RuleKind::RunnerClassCommands, ValueShape::List), "kind と形");
     // `.696` が末尾に公開の見張りの kind を足し、`.738.37.1` が床の検査の待ちの上限の kind を足した（その 2 つ前が RunnerClassCommands）。
     // 後ろに局面の出力の 2 kind（`.738.38.7`）が続く。
-    // さらに後ろに memo の 3 kind（`.738.39.3`）と索引の 2 kind（`.736.33.21.2`）が続く。
-    let tail: Vec<&RuleKind> = ALL.iter().rev().skip(7).take(6).collect();
+    // さらに後ろに管理 tick の下限の 1 kind（`.738.42.6`）・memo の 3 kind（`.738.39.3`）と索引の 2 kind（`.736.33.21.2`）が続く。
+    let tail: Vec<&RuleKind> = ALL.iter().rev().skip(8).take(6).collect();
     assert_eq!(
         tail,
         [&RuleKind::SeatDraftsBusyS, &RuleKind::SeatDraftsCapMb, &RuleKind::PipeReserveH, &RuleKind::FloorTimeoutS, &RuleKind::HostGuardPublish, &RuleKind::RunnerClassCommands],

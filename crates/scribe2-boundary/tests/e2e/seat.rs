@@ -237,7 +237,7 @@ const PROMPT_WAIT: Duration = Duration::from_secs(60);
 // 出せるのが 2 便）。面を触る契約だけがその面の file に当たる形にする（pipe の外形と同じ割り方）。
 
 /// 使い方の 1 行の tick の口（設計 seat-heartbeat.md §2 形 7・席の口で `--rules` を受けるのはこの口だけ）。
-const TICK_USAGE: &str = "tick --state-dir S --target S:W [--rules F]";
+const TICK_USAGE: &str = "tick --state-dir S --target S:W [--rules F] [--bd B]";
 
 /// tick の口が**在る**ことを測る（不在の歯 3 本の共有の 1 本・`s2-07l.582`）: 使い方の 1 行に口が在り、登録 row の無い空の
 /// 置き場へ撃つと自分の口として判定行 1 行（`reason=no-row`・梯子の手前ゆえ `pointer=- step=-`）を stdout に出して rc 0。
@@ -1219,17 +1219,22 @@ impl TickPlace {
 
 /// 置き場を 1 つ作る（`registered` なら登録 row を `seat register` で積む・pane は空の入力欄）。
 fn tick_place(registered: bool) -> TickPlace {
+    tick_place_at(registered.then_some("/repo"))
+}
+
+/// [`tick_place`] の本体（`anchor` が在れば登録 row をその anchor で積む）。
+fn tick_place_at(anchor: Option<&str>) -> TickPlace {
     let dir = tmp();
     let state = dir.join("state");
     let seat = seat_dir_of(&state, TICK_SEAT);
     fs::create_dir_all(&seat).ok();
     fs::write(state_file(&seat), format!("{}\n", stamp_line("idle", "SessionStart", unix_now(), "sid-tick"))).ok();
-    if registered {
+    if let Some(anchor) = anchor {
         let launch = fixture(&dir, "launch.txt", "claude\n");
         let path = state.display().to_string();
         let out = run_seat(&[
             "register", "--state-dir", &path, "--target", TICK_TARGET, "--role", "orchestrator", "--account", TICK_ACCOUNT,
-            "--launch", &launch, "--anchor", "/repo",
+            "--launch", &launch, "--anchor", anchor,
         ]);
         assert_eq!(rc_of(&out), i32::from(RC_OK), "登録 row を積める: {}", stderr_of(&out));
     }

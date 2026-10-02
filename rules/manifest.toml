@@ -1005,6 +1005,17 @@ enabled = true
 ruling = "user 2026-09-30T04:25Z 項 lifecycle"
 ruled_at = "2026-09-30"
 
+# 管理 tick の全部の書き直しの下限（秒・設計 case-lifecycle.md §19 約束 1）。前の全部の書き直しと tick の撃った記録の新しい方から
+# この秒数以上後の周だけ、台帳か main の印が出力と違う時に全部を書き直す。
+
+[[rule]]
+id = "lifecycle.full_min_s"
+kind = "LifecycleFullMinS"
+value = 300
+enabled = true
+ruling = "user 2026-10-01T15:27Z"
+ruled_at = "2026-10-01"
+
 [[rule]]
 id = "memo.notes_max_bytes"
 kind = "MemoNotesMaxBytes"

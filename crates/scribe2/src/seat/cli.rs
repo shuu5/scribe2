@@ -19,7 +19,7 @@ use std::process::Stdio;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling bind --repo R --state-dir S --question ID --utterance TS [--bd B]|ruling answer --repo R --state-dir S --question ID [--bd B] (stdin: WORDS)|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat default --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|deliver --state-dir S --target S:W --ruling ID|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling bind --repo R --state-dir S --question ID --utterance TS [--bd B]|ruling answer --repo R --state-dir S --question ID [--bd B] (stdin: WORDS)|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F] [--bd B]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat default --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|deliver --state-dir S --target S:W --ruling ID|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
@@ -117,6 +117,7 @@ const ALLOWED_TICK: &[cli_args::Allowed] = &[
     value("--state-dir"),
     value("--target"),
     value("--rules"),
+    value("--bd"),
     value("--tmux-socket"),
     value("--capture-file"),
 ];
@@ -312,14 +313,14 @@ fn tick_of(args: &[String]) -> Outcome {
         return tick_status_of(args.get(1..).unwrap_or_default());
     }
     let [state_dir, target] = ["--state-dir", "--target"].map(|name| required_nonempty(args, name));
-    let [socket, capture, rules] = ["--tmux-socket", "--capture-file", "--rules"].map(|name| nonempty(args, name));
-    let (Ok(state_dir), Ok(target), Ok(socket), Ok(capture), Ok(_)) = (state_dir, target, socket, capture, rules) else {
+    let [socket, capture, rules, bd] = ["--tmux-socket", "--capture-file", "--rules", "--bd"].map(|name| nonempty(args, name));
+    let (Ok(state_dir), Ok(target), Ok(socket), Ok(capture), Ok(_), Ok(bd)) = (state_dir, target, socket, capture, rules, bd) else {
         return refused_usage();
     };
     if !target_well_formed(target) {
         return refused_usage();
     }
-    let flags = super::tick::Flags { state_dir, target, socket, capture };
+    let flags = super::tick::Flags { state_dir, target, socket, capture, bd };
     super::tick::run(&flags, crate::rules::cli::open(args))
 }
 

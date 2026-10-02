@@ -3160,9 +3160,9 @@ fn life_bd_body(dir: &Path) -> String {
 const LIFE_TASK: &str = "{\"id\":\"toy-c1\",\"status\":\"open\",\"priority\":2,\"labels\":[],\"acceptance_criteria\":\"\",\"dependencies\":[]}";
 
 /// 局面の出力の歯が 1 本ごとに持つ置き場（`pipe` の toy repo に台帳の files の形と origin/main の ref を足す）。
-struct Life {
-    repo: PathBuf,
-    state: PathBuf,
+pub(crate) struct Life {
+    pub(crate) repo: PathBuf,
+    pub(crate) state: PathBuf,
     dir: PathBuf,
     bd: String,
     design: String,
@@ -3170,11 +3170,12 @@ struct Life {
 
 impl Life {
     /// 台帳は `toy-c1`（開いた task）を `toy-c2`（契約の行を指す開いた契約）が blocks で待つ形（依存待ちの契約が出力に出る）。
+    /// 管理 tick の全部の書き直しの歯（`seat/tick.rs`・`seat_tick_full_lifecycle_`）も toy repo としてこの 1 本を開いて使う。
     #[expect(
         clippy::expect_used,
         reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
     )]
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let (repo, state) = super::pipe::repo_with_state();
         let design = super::pipe::write_contract(&repo, &[], &[]);
         let pointer = super::pipe::design_pointer();
