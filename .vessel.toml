@@ -24,3 +24,5 @@ row-review = true
 # `index-roles`: 1 行ごとに構文の役（§5 の 9 語）の一致を stdout に 1 行 1 件の JSON で出す（ast-grep 0.45.3・規則は .config/index-roles.yml・穴は `{tree}`）。
 index-scip = ["rust-analyzer scip {tree} --output {out}"]
 index-roles = ["ast-grep scan --rule .config/index-roles.yml --json=stream {tree}"]
+# 歯の欄の要否（設計 contract-source.md §66 形 3・ADR-0104）。`contracts check --base <sha>` の周（CI の PR の job）に、base から足された行と done の字が変わった行へ、番号つきの項目と欄 done-teeth を求める。
+teeth-check = true

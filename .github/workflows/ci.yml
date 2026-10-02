@@ -64,6 +64,11 @@ jobs:
       # 1 便あたりの直接依存の増分の門（設計 rules-manifest.md §4・憲法 C13 / C13.5）。rc は deny の面
       # （added ≤ R-C13-1.per-pr・total ≤ R-C13-1）だけで決まり、check-delta-ms は判定行に残る検出線。
       - run: cargo xtask deps-delta --base '${{ github.event.pull_request.base.sha }}'
+      # 契約表の検査を PR の base 付きで撃つ（設計 contract-source.md §66 形 3）。base から足された行と done の字が変わった行に、
+      # 宣言 `teeth-check` が求める番号つきの項目と欄 done-teeth を測る（器の binary を PR の木で組んで撃つ）。block scalar で書くのは、
+      # `run: cargo …` の 1 行形が CLAUDE.md の done の区間へ写されるため（done の定義を 1 行増やさない）。
+      - run: |
+          cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo . --base '${{ github.event.pull_request.base.sha }}'
 
   # push(main) の入口の出所（設計 docs/design/pipeline.md §7 約束 3・§60・`s2-07l.170`）。main の HEAD が `pipe land`
   # の trailer（`run: <run id>`）か、PR の squash（件名の末尾 `(#N)`）と発端の trailer（文法の正本は

@@ -34,6 +34,7 @@ use crate::polarity::{OnFailure, Polarity, Timing};
 use std::collections::BTreeSet;
 use std::path::Path;
 
+mod changed;
 mod check;
 mod parse;
 mod teeth;
@@ -406,6 +407,17 @@ pub enum TableError {
         /// 外れの理由。
         reason: String,
     },
+    /// 変わった行（base から足された行・done の字が変わった行）の done が番号つきの項目を 1 つも持たない（宣言 `teeth-check` が true の
+    /// repo で `--base` を渡した周だけ・行の見出しの行・設計 contract-source.md §66 形 3・行 by）。
+    DoneUnnumbered {
+        /// 行番号。
+        line: u64,
+    },
+    /// 変わった行が欄 `done-teeth` を持たない（宣言 `teeth-check` が true の repo で `--base` を渡した周だけ・行の見出しの行・形 3・行 by）。
+    DoneTeethMissing {
+        /// 行番号。
+        line: u64,
+    },
 }
 
 impl TableError {
@@ -431,7 +443,9 @@ impl TableError {
             | Self::ClassUndeclared { line, .. }
             | Self::PlaceEmpty { line, .. }
             | Self::DocIdDuplicate { line, .. }
-            | Self::DoneTeeth { line, .. } => line,
+            | Self::DoneTeeth { line, .. }
+            | Self::DoneUnnumbered { line }
+            | Self::DoneTeethMissing { line } => line,
         }
     }
 
@@ -458,6 +472,8 @@ impl TableError {
             Self::PlaceEmpty { .. } => "place-empty",
             Self::DocIdDuplicate { .. } => "doc-id-duplicate",
             Self::DoneTeeth { .. } => "done-teeth",
+            Self::DoneUnnumbered { .. } => "done-unnumbered",
+            Self::DoneTeethMissing { .. } => "done-teeth-missing",
         }
     }
 
@@ -505,6 +521,8 @@ impl TableError {
                 format!("{doc} の file 名の stem が {other} と重なる（doc id は一意でなければならない）")
             }
             Self::DoneTeeth { ref element, ref reason, .. } => format!("done-teeth {element:?} が外れている: {reason}"),
+            Self::DoneUnnumbered { .. } => DONE_UNNUMBERED.to_owned(),
+            Self::DoneTeethMissing { .. } => DONE_TEETH_MISSING.to_owned(),
         }
     }
 
@@ -538,7 +556,9 @@ impl TableError {
             | Self::PromiseNumber { .. }
             | Self::TargetForm { .. }
             | Self::GrowthForm { .. }
-            | Self::ClassUndeclared { .. } => Evidence::Row,
+            | Self::ClassUndeclared { .. }
+            | Self::DoneUnnumbered { .. }
+            | Self::DoneTeethMissing { .. } => Evidence::Row,
         }
     }
 }
@@ -560,6 +580,12 @@ fn done_teeth_wrapped(line: u64, misses: Vec<teeth::Miss>) -> Vec<Finding> {
     let error = |miss: teeth::Miss| TableError::DoneTeeth { line, element: miss.element, reason: miss.reason };
     misses.into_iter().map(|miss| Finding::table(error(miss))).collect()
 }
+
+/// 変わった行の done が番号つきの項目を持たない断りの理由（[`TableError::DoneUnnumbered`]）。
+const DONE_UNNUMBERED: &str = "変わった行（base から足された行か done の字が変わった行）の done は番号つきの項目 (1) を 1 つ以上持つ（宣言 teeth-check）";
+
+/// 変わった行が欄 done-teeth を持たない断りの理由（[`TableError::DoneTeethMissing`]）。
+const DONE_TEETH_MISSING: &str = "変わった行（base から足された行か done の字が変わった行）は done の番号つきの項目ごとの歯を欄 done-teeth で名指す（宣言 teeth-check）";
 
 /// 置き場の項目 `item` が path を含むか（末尾 `/` は dir の直下で `form_of` が読める path・ほかは等しい path）。契約表の doc の
 /// 列（[`design_docs`]）と置き場の検査（[`place_defects`]）が同じこの 1 本で測る。
@@ -697,6 +723,7 @@ pub fn render_schema() -> Vec<String> {
 mod tests {
     // flip-check: moved s2-07l.374
 
+    use super::changed::{changed, gaps, Gap};
     use super::teeth::{done_teeth_located, done_teeth_misses, Given};
     use super::{
         declared_files, design_docs, read_rows, read_table, render_schema, tracked_files, Base, Class, Need, Shape, Source,
@@ -781,6 +808,8 @@ mod tests {
         "place-empty",
         "doc-id-duplicate",
         "done-teeth",
+        "done-unnumbered",
+        "done-teeth-missing",
     ];
 
     /// 宣言順に 1 つずつ組んだ全 variant（行番号は 1 から順）。
@@ -807,6 +836,8 @@ mod tests {
             TableError::PlaceEmpty { line: 18, item: text("tables/none.toml") },
             TableError::DocIdDuplicate { line: 19, doc: text("docs/design/toy.md"), other: text("contracts/toy.toml") },
             TableError::DoneTeeth { line: 20, element: text("2:x_tooth"), reason: text("r") },
+            TableError::DoneUnnumbered { line: 21 },
+            TableError::DoneTeethMissing { line: 22 },
         ]
     }
 
@@ -816,7 +847,7 @@ mod tests {
         let found = samples();
         let names: Vec<&str> = found.iter().map(TableError::as_str).collect();
         assert_eq!(names, TABLE_ERRORS, "名前の slice は宣言順（母集団 {} 値）", TABLE_ERRORS.len());
-        assert_eq!(TABLE_ERRORS.len(), 20, "母集団は 20 値");
+        assert_eq!(TABLE_ERRORS.len(), 22, "母集団は 22 値");
         for (index, error) in found.iter().enumerate() {
             assert_eq!(error.line(), index as u64 + 1, "{} は行番号を持つ", error.as_str());
             assert!(!error.reason().is_empty() && !error.reason().contains('\n'), "{} の理由は 1 行", error.as_str());
@@ -847,15 +878,16 @@ mod tests {
         assert!(twice.contains("docs/design/toy.md") && twice.contains("contracts/toy.toml"), "重なった 2 本の doc を名乗る: {twice}");
     }
 
-    /// 在り処は全 variant の母集団（20）で 1 つずつ決まり（設計 dispatcher.md §27 形 3・宣言順）、契約表の欠陥の断りは同じ値を
+    /// 在り処は全 variant の母集団（22）で 1 つずつ決まり（設計 dispatcher.md §27 形 3・宣言順）、契約表の欠陥の断りは同じ値を
     /// 受付の側（`Refuse::ContractTable`）へ渡す。本文の読み手が解くのは外形の名と歯の置き場と欄 done-teeth の在りかの 3 つ・読めない周は測れない。
+    /// 変わった行の要否の 2 語（done-unnumbered・done-teeth-missing）は行の字だけで決まる。
     #[test]
     fn pipe_table_evidence_is_decided_once_for_every_variant() {
         use crate::pipe::refuse::Refuse;
         let found: Vec<&str> = samples().iter().map(|error| error.evidence().as_str()).collect();
         let want = [
             "row", "row", "place", "row", "row", "row", "row", "row", "row", "row", "name", "row", "row", "row", "name", "row",
-            "row", "files", "files", "name",
+            "row", "files", "files", "name", "row", "row",
         ];
         assert_eq!(found, want, "母集団 {} variant の在り処（宣言順）", TABLE_ERRORS.len());
         assert_eq!(found.len(), TABLE_ERRORS.len(), "全 variant に 1 つ");
@@ -1133,5 +1165,34 @@ mod tests {
         assert_eq!(narrowed, ["2:=tooth_gone"], "--lib は src の 1 か所だけを数える");
         let blind = teeth_misses("(1) a (2) b (3) c (4) d (5) e (6) f", &[TOOTH_LINE], &[], &[], &["1:=tooth_once", "2:=tooth_gone", "3:=tooth_twice", "4:tooth_twice", "5:tooth_fresh", "6:tooth_once"]);
         assert!(blind.is_empty(), "base を渡さない口は在りかを名指さない: {blind:?}");
+    }
+
+    /// (2) 変わった行の読み（§66 形 3）: base の同じ doc に同じ id の行が無い行（足された行）と、在って done の字が違う行だけを数える。done が同じ行
+    /// （表の読みの後の値）は write-set などの欄を変えても数えず、base に doc が無い周は全行が足された行。
+    #[test]
+    fn done_teeth_base_changed_counts_added_rows_and_done_changes_only() {
+        let before: Vec<(String, String)> = [("a", "(1) x"), ("b", "(1) y"), ("c", "(1) z")].iter().map(|(id, done)| ((*id).to_owned(), (*done).to_owned())).collect();
+        let now = [("a", "(1) x"), ("b", "(1) y が変わる"), ("d", "(1) 足した"), ("c", "(1) z")];
+        assert_eq!(changed(&now, Some(&before)), [1, 2], "done の字が変わった b と足された d だけ");
+        assert_eq!(changed(&now, None), [0, 1, 2, 3], "base に doc が無ければ全行が足された行");
+        assert!(changed(&[], Some(&before)).is_empty(), "行の無い doc は変わった行を持たない（消した行は数えない）");
+        let row = |over: &[(&str, &str)]| read_rows("t.toml", &full_row(over)).map(|rows| rows.into_iter().map(|row| (row.id, row.done)).collect::<Vec<_>>());
+        let (plain, moved) = (row(&[]), row(&[("write-set", "[\"w.rs\"]"), ("verify", "[\"git status\"]"), ("done-teeth", "[\"1:t\"]")]));
+        let (plain, moved) = (plain.unwrap_or_default(), moved.unwrap_or_default());
+        let borrowed: Vec<(&str, &str)> = moved.iter().map(|(id, done)| (id.as_str(), done.as_str())).collect();
+        assert!(changed(&borrowed, Some(&plain)).is_empty(), "done 以外の欄だけを変えた行は数えない: {plain:?} {moved:?}");
+    }
+
+    /// (3) 要否（§66 形 3）: 変わった行の done が番号つきの項目を持たなければ done-unnumbered、欄を持たなければ done-teeth-missing（1 行が両方を持つ
+    /// こともある）。done を持たない行（約束の行を持つ行）には求めず、全角の番号は項目と読まない。
+    #[test]
+    fn done_teeth_base_gaps_name_unnumbered_and_missing_rows() {
+        let teeth = own(&["1:tooth_a"]);
+        assert!(gaps("(1) a (2) b", &own(&["1:tooth_a", "2:tooth_b"])).is_empty(), "番号つきの項目と欄が揃えば外れ 0");
+        assert_eq!(gaps("(1) a", &[]), [Gap::Missing], "欄が無い");
+        assert_eq!(gaps("番号の無い done", &teeth), [Gap::Unnumbered], "番号が無い");
+        assert_eq!(gaps("番号の無い done", &[]), [Gap::Unnumbered, Gap::Missing], "両方");
+        assert_eq!(gaps("（１）全角の番号", &[]), [Gap::Unnumbered, Gap::Missing], "全角の番号は項目でない");
+        assert!(gaps("", &[]).is_empty(), "done を持たない行（Promised）には求めない");
     }
 }

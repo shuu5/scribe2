@@ -1959,3 +1959,175 @@ fn class_derive_undeclared_row_is_named_by_check_and_refused_at_intake_with_the_
     assert_eq!(accepted.status.code(), Some(i32::from(RC_OK)), "受付も通る: {}", stderr_of(&accepted));
     clean(&[&repo, &state]);
 }
+
+// ───── 契約表の検査の --base（設計 docs/design/contract-source.md §66 形 3・行 by・接頭辞 `done_teeth_base_`） ─────
+
+/// `contracts check --repo R --base SHA` を binary で 1 回撃つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn contracts_check_from(repo: &Path, base: &str) -> Output {
+    bin_cmd().args(["contracts", "check", "--repo"]).arg(repo).args(["--base", base]).output().expect("binary を起動できる")
+}
+
+/// 2 commit の toy repo: 1 つ目（base）は `base_doc` と宣言 `vessel`、2 つ目（HEAD）は設計 doc だけ `head_doc` に替えた commit。歯の file と
+/// `tint.rs` を持つ。返りは repo と base の sha。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn based_repo(vessel: &str, base_doc: &str, head_doc: &str) -> (PathBuf, String) {
+    let mut files = vec![(".vessel.toml", vessel), ("crates/toy/src/tint.rs", TABLE_TINT)];
+    files.extend(TEETH_FILES.iter().copied());
+    let repo = table_repo(base_doc, &files);
+    let base = git(&repo, &["rev-parse", "HEAD"]);
+    fs::write(repo.join("docs/design/toy.md"), head_doc).expect("設計 doc を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "head"]);
+    (repo, base)
+}
+
+/// 判定行の `findings=` の値。
+fn findings_count(out: &Output) -> Option<u64> {
+    let last = stdout_of(out).lines().last().map(str::to_owned).unwrap_or_default();
+    last.split_whitespace().find_map(|token| token.strip_prefix("findings=")?.parse().ok())
+}
+
+/// (1)(8) base の commit を読めない周は理由の 1 行で rc 2（stdout は空）・値の無い `--base` は rc 1・`-` で始まる字も旗に読ませず rc 2。使い方の
+/// 行は `--base SHA` を載せる。`--base` の無い周は今のまま（findings 0・rc 0・判定行は変わらない）。base は `--base` を知らず使い方で断る（RED）。
+#[test]
+fn done_teeth_base_unreadable_base_is_rc_two_and_usage_names_the_flag() {
+    let doc = table_doc(&table_region(&[table_row("a", &[])]));
+    let repo = table_repo(&doc, &[]);
+    for base in ["0123456789abcdef0123456789abcdef01234567", "no-such-ref", "-x"] {
+        let out = contracts_check_from(&repo, base);
+        let err = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{base}: 読めない base は rc 2: {err}");
+        assert!(out.stdout.is_empty(), "{base}: stdout は空: {}", stdout_of(&out));
+        assert!(err.contains("--base") && err.contains(base) && err.contains("読めない"), "{base}: 理由の 1 行: {err}");
+        assert_eq!(err.lines().count(), 1, "{base}: 理由は 1 行: {err}");
+    }
+    let bare = bin_cmd().args(["contracts", "check", "--repo"]).arg(&repo).arg("--base").output().expect("binary を起動できる");
+    assert_eq!(bare.status.code(), Some(i32::from(RC_REFUSED)), "値の無い --base は rc 1: {}", stderr_of(&bare));
+    assert!(stderr_of(&bare).contains("--base に値が無い"), "{}", stderr_of(&bare));
+    let usage = bin_cmd().arg("contracts").output().expect("binary を起動できる");
+    assert!(stderr_of(&usage).contains("[--base SHA]"), "使い方の行に --base を載せる: {}", stderr_of(&usage));
+    let plain = contracts_check(&repo);
+    assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "--base の無い周は今のまま: {}", stdout_of(&plain));
+    assert_eq!(stdout_of(&plain).lines().collect::<Vec<&str>>(), ["contracts check: docs=1 rows=1 untracked=0 findings=0 place-out=0/1"]);
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let same = contracts_check_from(&repo, &head);
+    assert_eq!(stdout_of(&same), stdout_of(&plain), "HEAD を base に渡しても（変わった行 0）判定は同じ字");
+    clean(&[&repo]);
+}
+
+/// (4)(5) AC77 の base を渡す側: 行 bw の 7 行の fixture（適合の `ok` だけを持つ commit を base にし、7 行を足した HEAD）に `--base` を渡すと、変わった行
+/// （足された 6 行）に在りかの照らしが撃たれ、base の歯の区間に無い既存の歯を名指す `gone` が 6 本目に加わって 6 行を名指して rc 1・findings=6。
+/// base を渡さない周は 5 行（`gone` を名指さない）。7 行が base に既に在り write-set と § の散文だけを変えた HEAD は、変わった行が 0 なので
+/// `gone` を名指さず 5 件のまま。
+#[test]
+fn done_teeth_base_acceptance_names_six_rows_against_a_base_and_leaves_unchanged_rows() {
+    let all: Vec<&str> = TEETH_ROWS.iter().map(|(id, _)| *id).collect();
+    let (full, doc) = (teeth_doc(&all), teeth_doc(&["ok"]));
+    let (repo, base) = based_repo(CARGO_VESSEL, &doc, &full);
+    let out = contracts_check_from(&repo, &base);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "外れは rc 1: {text}{}", stderr_of(&out));
+    assert_eq!(found.len(), 6, "6 行を名指す（1 行 1 件）: {text}");
+    for id in ["shape", "gap", "past", "unsel", "gone", "place"] {
+        let head = format!("contracts: docs/design/toy.md:{} contract-table:done-teeth: ", table_line(&full, id));
+        assert!(found.iter().any(|line| line.starts_with(&head)), "{id} を行の見出しの行で名指す: {text}");
+    }
+    assert!(found.iter().any(|line| line.contains("tooth_gone") && line.contains("無い歯")), "base に無い既存の歯を名指す: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=7 untracked=0 findings=6 place-out=0/7"), "判定行: {text}");
+    let without = contracts_check(&repo);
+    assert_eq!(findings_count(&without), Some(5), "base を渡さない周は 5 行（在りかを照らさない）: {}", stdout_of(&without));
+    clean(&[&repo]);
+    let moved = full.replace("\"crates/toy/tests/teeth.rs\"]", "\"crates/toy/tests/teeth.rs\", \"src/show.rs\"]").replacen("本文。", "本文を足した。", 1);
+    let (kept, base) = based_repo(CARGO_VESSEL, &full, &moved);
+    let quiet = contracts_check_from(&kept, &base);
+    assert_eq!(findings_count(&quiet), Some(5), "変わった行が 0（write-set と § の散文だけ）なら在りかを照らさない: {}", stdout_of(&quiet));
+    assert!(findings_of(&quiet).iter().all(|line| !line.contains("tooth_gone")), "gone を名指さない: {}", stdout_of(&quiet));
+    clean(&[&kept]);
+}
+
+/// (3)(5) 宣言 `teeth-check` の 3 通り（true・false・key 無し）と `--base` の有無: true で `--base` を渡した周だけ、変わった行（足された `fresh`・`bare`・done の字が変わり
+/// 欄を落とした `edit`）に欄の欠け（done-teeth-missing）と番号の欠け（done-unnumbered・`bare` は両方）を求めて 4 件・rc 1。変わらない行（write-set だけを
+/// 変えた `keep`・`walk`）は欄が無くても名指さない。false・key 無し・`--base` 無しの周は 2 語を出さず rc 0。
+#[test]
+fn done_teeth_base_teeth_check_names_changed_rows_only_when_true_with_a_base() {
+    let field = ("done-teeth", "[\"1:@1\"]");
+    let moved = ("write-set", "[\"src/tint.rs\", \"src/show.rs\"]");
+    let base_doc = table_doc(&table_region(&[
+        table_row("keep", &[("done", "\"(1) k\""), field]),
+        table_row("edit", &[("done", "\"(1) e\""), field]),
+        table_row("walk", &[("done", "\"w の done\"")]),
+    ]));
+    let head_doc = table_doc(&table_region(&[
+        table_row("keep", &[("done", "\"(1) k\""), field, moved]),
+        table_row("edit", &[("done", "\"(1) e2\"")]),
+        table_row("walk", &[("done", "\"w の done\""), moved]),
+        table_row("fresh", &[("done", "\"(1) f\"")]),
+        table_row("bare", &[("done", "\"b の done\"")]),
+    ]));
+    let wants = [("edit", "done-teeth-missing"), ("fresh", "done-teeth-missing"), ("bare", "done-unnumbered"), ("bare", "done-teeth-missing")];
+    let on = format!("{TABLE_VESSEL}teeth-check = true\n");
+    let (repo, base) = based_repo(&on, &base_doc, &head_doc);
+    let out = contracts_check_from(&repo, &base);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "true で --base を渡した周は rc 1: {text}{}", stderr_of(&out));
+    assert_eq!(found.len(), wants.len(), "4 件ちょうど: {text}");
+    for (id, label) in wants {
+        let head = format!("contracts: docs/design/toy.md:{} contract-table:{label}: ", table_line(&head_doc, id));
+        assert!(found.iter().any(|line| line.starts_with(&head)), "{id} を {label} で行の見出しの行に名指す: {text}");
+    }
+    for id in ["keep", "walk"] {
+        let head = format!("contracts: docs/design/toy.md:{} ", table_line(&head_doc, id));
+        assert!(found.iter().all(|line| !line.starts_with(&head)), "変わらない行 {id} は名指さない: {text}");
+    }
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=5 untracked=0 findings=4 place-out=0/5"), "判定行: {text}");
+    let plain = contracts_check(&repo);
+    assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "--base の無い周は 2 語を出さない: {}", stdout_of(&plain));
+    assert_eq!(findings_count(&plain), Some(0), "{}", stdout_of(&plain));
+    clean(&[&repo]);
+    for vessel in [format!("{TABLE_VESSEL}teeth-check = false\n"), TABLE_VESSEL.to_owned()] {
+        let (other, base) = based_repo(&vessel, &base_doc, &head_doc);
+        let quiet = contracts_check_from(&other, &base);
+        assert_eq!(quiet.status.code(), Some(i32::from(RC_OK)), "false と key 無しは --base を渡しても 2 語を出さない: {}", stdout_of(&quiet));
+        assert_eq!(findings_count(&quiet), Some(0), "{}", stdout_of(&quiet));
+        clean(&[&other]);
+    }
+}
+
+/// (6) CI の flip-check の job（PR のときだけ）に、PR の base の sha を `--base` に渡して契約表の検査を撃つ step が 1 本在り、block scalar（`run: |`）で書く
+/// （`run: cargo …` の 1 行形は CLAUDE.md の done の区間へ写される）。契約表の検査を撃つ行はほかに無い。
+#[test]
+fn done_teeth_base_ci_flip_check_job_runs_the_contracts_check_with_the_pr_base() {
+    let text = declared_text(".github/workflows/ci.yml");
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.iter().position(|line| *line == "  flip-check:").unwrap_or(lines.len());
+    let header = |line: &&str| line.strip_prefix("  ").is_some_and(|rest| rest.chars().next().is_some_and(char::is_alphabetic));
+    let job: Vec<&str> = lines.iter().skip(start + 1).take_while(|line| !header(line)).copied().collect();
+    assert!(start < lines.len() && job.iter().any(|line| line.trim() == "if: github.event_name == 'pull_request'"), "flip-check は PR のときだけ");
+    let at = job.iter().position(|line| line.trim() == "- run: |");
+    let step = at.and_then(|index| job.get(index + 1)).map(|line| line.trim()).unwrap_or_default();
+    let want = "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo . --base '${{ github.event.pull_request.base.sha }}'";
+    assert_eq!(step, want, "block scalar の step が PR の base を渡す: {job:?}");
+    let live: Vec<&str> = lines.iter().filter(|line| !line.trim_start().starts_with('#')).copied().collect();
+    assert_eq!(live.iter().filter(|line| line.contains("contracts check")).count(), 1, "契約表の検査を撃つ行は 1 本だけ");
+    assert!(live.iter().all(|line| !(line.contains("run: cargo") && line.contains("contracts check"))), "1 行形にしない");
+}
+
+/// (7) 本 repo の宣言を宣言の読み手で読むと `teeth-check` は true で、key は索引の 2 key の後ろの末尾に在る。
+#[test]
+fn done_teeth_base_real_declaration_reads_teeth_check_true_at_the_end() {
+    crate::install_spawner();
+    let found = vessel::pipe::declaration::teeth_check_at(&declared_root(), "HEAD");
+    assert!(matches!(found, Ok(true)), "本 repo の宣言は teeth-check = true: {found:?}");
+    let text = declared_text(".vessel.toml");
+    let keys: Vec<&str> = text.lines().filter(|line| !line.starts_with('#') && !line.trim().is_empty()).collect();
+    assert_eq!(keys.last().copied(), Some("teeth-check = true"), "末尾の key");
+    let roles = keys.iter().position(|line| line.starts_with("index-roles = "));
+    assert_eq!(roles.map(|at| at + 2), Some(keys.len()), "index-roles の直後");
+}

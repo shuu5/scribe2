@@ -36,7 +36,8 @@ pub(super) const DECLARED_KEYS: &[&str] = &[
     CONSTITUTION_KEY,
 ];
 
-/// **歯の検査を撃つか**の key（任意・設計 contract-source.md §67）。真偽だけを読んで値は捨てる。
+/// **歯の検査を撃つか**の key（任意・設計 contract-source.md §66 形 3・§67）。真偽だけを受け、`contracts check --base` の周に
+/// 変わった行へ番号つきの項目と欄 done-teeth を求める（無ければ false と同じ）。
 const TEETH_CHECK_KEY: &str = "teeth-check";
 
 /// **索引の SCIP の列**の key（任意・設計 contract-source.md §67・reverse-index.md §4 形 1）。文字列の配列を [`IndexKeys`] に持つ。
@@ -59,10 +60,9 @@ const CONSTITUTION_KEY: &str = "constitution";
 /// 憲法の file の既定 path（宣言 `constitution` が無い周・lens が測る 1 本）。
 pub const DEFAULT_CONSTITUTION: &str = "docs/constitution.md";
 
-/// 読んで値を捨てる key（`teeth-check` は真偽）の形だけを確かめる（`Declared` にも便の写しにも field を持たない）。
-/// 型違いは key と行番号を名指す不備。
-pub(super) fn read_only_keys_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) {
-    bool_key(found, TEETH_CHECK_KEY, errors);
+/// 歯の検査を撃つか（任意・[`bool_key`] と同じ読み・型違いは key と行番号を名指す不備）。
+pub(super) fn teeth_check_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<bool> {
+    bool_key(found, TEETH_CHECK_KEY, errors)
 }
 
 /// 索引の宣言の 2 key（`index-scip`・`index-roles`）の値と書かれていた行（無い key は `None`・設計 reverse-index.md §4 形 1）。
@@ -382,6 +382,16 @@ pub fn row_review_at(repo: &Path, rev: &str) -> Result<bool, Vec<DeclError>> {
     }
 }
 
+/// 名指した rev の tree の宣言の `teeth-check`（`git show <rev>:.vessel.toml`・作業ツリーは読まない）。宣言 file が無い周と key の無い宣言は
+/// false、在って読めない周は `Err`（key の行の不備を含む）。
+pub fn teeth_check_at(repo: &Path, rev: &str) -> Result<bool, Vec<DeclError>> {
+    let spec = format!("{rev}:{}", super::DECL_FILE);
+    match super::super::git_bytes(repo, &["show", &spec]) {
+        None => Ok(false),
+        Some(bytes) => Declared::parse(&String::from_utf8_lossy(&bytes)).map(|declared| declared.teeth_check == Some(true)),
+    }
+}
+
 /// 引用の見本の一覧（任意）。文字列の一覧だけを受ける（文字列・整数・真偽は key と行番号を名指す不備・要素の型違いは値の読みが積む）。
 pub(super) fn ruling_fixtures_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<Vec<String>> {
     let (_, value, line) = found.iter().find(|(seen, _, _)| seen == RULING_FIXTURES_KEY)?;
@@ -557,6 +567,8 @@ pub struct TableFacts {
     pub requirements: String,
     /// crate の根の列（固定の根 `crates/` に宣言 `crate-roots` を足した列・設計 contract-source.md §62）。
     pub crate_roots: Vec<String>,
+    /// 歯の検査を撃つか（宣言 `teeth-check`・無ければ false・設計 contract-source.md §66 形 3）。
+    pub teeth_check: bool,
 }
 
 /// HEAD の宣言を読み、上限と突き合わせて契約表の検査の事実にする（intake と同じ読み口・作業ツリーは読まない）。
@@ -573,8 +585,10 @@ pub fn table_facts_named(
     let requirements = sourced.declared.requirements.clone().unwrap_or_else(|| DEFAULT_REQUIREMENTS.to_owned());
     let entrance = sourced.declared.entrance_flip;
     let crate_roots = crate_roots::with_fixed(&sourced.declared.crate_roots);
+    let teeth_check = sourced.declared.teeth_check == Some(true);
     let effective = sourced.measure(ceiling, &[])?;
-    Ok((TableFacts { allowed: effective.allowed, denied: ceiling.denied.to_vec(), requirements, crate_roots }, entrance))
+    let denied = ceiling.denied.to_vec();
+    Ok((TableFacts { allowed: effective.allowed, denied, requirements, crate_roots, teeth_check }, entrance))
 }
 
 /// land の終端が読む宣言の事実（設計 contract-source.md §5・push 先と CI の行）。
