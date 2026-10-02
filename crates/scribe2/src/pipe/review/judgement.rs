@@ -10,8 +10,10 @@
 
 use super::{json_lite, FindingKind, Verdict, REVIEW_DIR, REVIEW_FILE};
 use crate::pipe::closure::{unresolved_names, ClosureError, Source};
+use crate::pipe::contract::Contract;
 use crate::pipe::refuse::covered;
 use crate::pipe::run_dir;
+use crate::pipe::table::parse_pointer;
 use std::path::{Path, PathBuf};
 
 /// 便の `review.json`。
@@ -111,35 +113,49 @@ fn sorted(mut found: Vec<String>) -> Vec<String> {
     found
 }
 
-/// teeth-outside-write-set: `at` のうち path の形の項目（[`path_shaped`]・`#` の後ろと末尾の行の番号を剥がした file の
-/// 字面 [`teeth_file`]）で今回の write-set に無いもの（dir 項目は配下を含む・剥がした字面で辞書順・重複なし）。path でない項目（歯の接頭辞・§ の番号）は**測れない**＝照合しない（§35・どんな契約でも covered に
+/// teeth-outside-write-set: `at` のうち path の形の項目（[`path_shaped`]・`#` か `§` の後ろと末尾の行の番号を剥がした file の
+/// 字面 [`teeth_file`]）で今回の write-set に無いもの（dir 項目は配下を含む・剥がした字面で辞書順・重複なし）。剥がした file が
+/// 契約の設計 doc（[`own_design`]）なら write-set でなく節の本文が直前の便から変わったかで測り（§70）、`§` を持つほかの設計 doc の
+/// 項目は**測れない**側に置く。path でない項目（歯の接頭辞・§ の番号）も測れない＝照合しない（§35・どんな契約でも covered に
 /// ならない項目で永遠に断らない）。未対応が在り、かつ測れない項目も在る周は、列の末尾に母集団の 1 項目
 /// 「測った n 件・測れない m 件」（どちらも重複なしの件数）を足す（理由の文に測らなかった分を出す・C10）。path の項目が
 /// 0 か全部対応済みの周は空＝通す。
 fn teeth_unaddressed(at: &[String], rework: &Rework<'_>) -> Vec<String> {
-    let mut paths = Vec::new();
-    let mut others = Vec::new();
+    let own = own_design(rework.contract);
+    let (mut paths, mut docs, mut others) = (Vec::new(), Vec::new(), Vec::new());
     for item in at {
         match teeth_file(item).filter(|file| path_shaped(file, rework.tracked)) {
+            Some(file) if own.as_deref() == Some(file) => docs.push(file.to_owned()),
+            Some(_) if item.contains('§') => others.push(item.clone()),
             Some(file) => paths.push(file.to_owned()),
             None => others.push(item.clone()),
         }
     }
-    let (paths, others) = (sorted(paths), sorted(others));
+    let (paths, docs, others) = (sorted(paths), sorted(docs), sorted(others));
     let mut found: Vec<String> = paths.iter().filter(|path| !covered(rework.write_set, path)).cloned().collect();
+    if rework.design == rework.previous_design {
+        found.extend(docs.iter().cloned());
+    }
+    let mut found = sorted(found);
     if !found.is_empty() && !others.is_empty() {
-        found.push(format!("測った {} 件・測れない {} 件", paths.len(), others.len()));
+        found.push(format!("測った {} 件・測れない {} 件", paths.len().saturating_add(docs.len()), others.len()));
     }
     found
 }
 
-/// `at` の項目の file の字面（§68）: 空白を持つ項目は測れない（`None`）。持たない項目は最初の `#` から後ろを剥がし、
-/// 続けて末尾の `:` と数字・`:`・`-` だけの形（行と列と行の範囲）を剥がす。剥がした字面が空なら `None`。
+/// 契約 file の設計 pointer の doc の path（契約 file を読めないか pointer でない周は `None`＝従来の測りに落とす）。
+fn own_design(contract: &str) -> Option<String> {
+    let found = Contract::parse(contract).ok()?;
+    parse_pointer(&found.design).ok().map(|pointer| pointer.path)
+}
+
+/// `at` の項目の file の字面（§68・§70）: 空白を持つ項目は測れない（`None`）。持たない項目は最初の `#` か `§` のうち先に現れた方から
+/// 後ろを剥がし、続けて末尾の `:` と数字・`:`・`-` だけの形（行と列と行の範囲）を剥がす。剥がした字面が空なら `None`。
 fn teeth_file(item: &str) -> Option<&str> {
     if item.contains(char::is_whitespace) {
         return None;
     }
-    let file = item.split_once('#').map_or(item, |(file, _)| file);
+    let file = item.split(['#', '§']).next().unwrap_or(item);
     let file = file
         .match_indices(':')
         .find(|(at, _)| {

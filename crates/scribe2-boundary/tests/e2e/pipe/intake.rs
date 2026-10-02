@@ -1467,6 +1467,74 @@ fn pipe_intake_repeat_teeth_outside_write_set_at_stripped_items_are_named_by_fil
     clean(&[&repo, &state]);
 }
 
+/// write-set に src/other.rs を足した契約を commit し（`changed` なら節の本文も書き換えて commit し）、pointer を返す。行 id は
+/// 前の便の `first` のまま（材料の頭に pointer の id が入るので、id を替えると節の本文が変わって見える）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn widened_contract(repo: &Path, changed: bool) -> String {
+    let design = write_set_contract(repo, "first", &["src/lib.rs", "src/other.rs"]);
+    if changed {
+        let path = repo.join(DESIGN_FILE);
+        let doc = fs::read_to_string(&path).expect("設計 doc を読める");
+        let edited = doc.replace("節の本文。", "節の本文を改めた。");
+        assert_ne!(edited, doc, "節の本文が変わる");
+        fs::write(&path, edited).expect("設計 doc を書ける");
+        git(repo, &["add", "-A"]);
+        git(repo, &["commit", "-q", "-m", "section-changed"]);
+    }
+    design
+}
+
+/// (5'''') §70 (a)(c): `at` が src/other.rs と自分の設計 doc の項目（`<doc>§16`・`<doc>#<行 id>`）の後、write-set に src/other.rs を
+/// 足し節の本文を変えた契約は通る（自分の設計 doc は write-set でなく節の本文で測る）。
+#[test]
+fn pipe_intake_repeat_design_item_own_doc_passes_when_the_section_changed() {
+    for (label, doc_item) in [("section", format!("{DESIGN_FILE}§16")), ("pointer", format!("{DESIGN_FILE}#first"))] {
+        let (repo, state) = repo_with_state();
+        let design = write_set_contract(&repo, "first", &["src/lib.rs"]);
+        let at = format!("src/other.rs, {doc_item}");
+        failed_runs(&repo, &state, "s2-dsa", &design, &[(Some("teeth-outside-write-set"), Some(&at))]);
+        let widened = widened_contract(&repo, true);
+        let before = run_dirs(&state).len();
+        let out = repeat_intake(&repo, &state, "s2-dsa", &widened, &lens_verdict("PASS"));
+        accepted(&out, &state, before);
+        assert!(!stderr_of(&out).contains("対応する差分"), "{label}: {}", stderr_of(&out));
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (5'''') §70 (b): 同じ at の後、write-set に src/other.rs を足しても節の本文を変えない契約は断られ、理由は § を剥がした設計 doc の
+/// path を名指し、§ と番号の付いた字面を持たない。
+#[test]
+fn pipe_intake_repeat_design_item_own_doc_with_the_section_unchanged_is_named_by_path() {
+    let (repo, state) = repo_with_state();
+    let design = write_set_contract(&repo, "first", &["src/lib.rs"]);
+    let at = format!("src/other.rs, {DESIGN_FILE}§16");
+    failed_runs(&repo, &state, "s2-dsb", &design, &[(Some("teeth-outside-write-set"), Some(&at))]);
+    let widened = widened_contract(&repo, false);
+    let again = Again { repo: &repo, state: &state, bead: "s2-dsb", design: &widened };
+    let err = assert_refused(&again, "finding-unaddressed", &["teeth-outside-write-set", DESIGN_FILE]);
+    assert!(!err.contains("§16") && !err.contains("src/other.rs"), "§ の付いた字面も対応済みの file も名指さない: {err}");
+    clean(&[&repo, &state]);
+}
+
+/// (5'''') §70 (d): `at` が src/other.rs とほかの設計 doc の § の項目の後、write-set に src/other.rs を足した契約は節の本文を変えずに
+/// 通る（ほかの設計 doc の § は測れない側）。
+#[test]
+fn pipe_intake_repeat_design_item_other_doc_section_is_not_measured() {
+    let (repo, state) = repo_with_state();
+    let design = write_set_contract(&repo, "first", &["src/lib.rs"]);
+    failed_runs(&repo, &state, "s2-dsd", &design, &[(Some("teeth-outside-write-set"), Some("src/other.rs, docs/design/other.md§3"))]);
+    let widened = widened_contract(&repo, false);
+    let before = run_dirs(&state).len();
+    let out = repeat_intake(&repo, &state, "s2-dsd", &widened, &lens_verdict("PASS"));
+    accepted(&out, &state, before);
+    assert!(!stderr_of(&out).contains("対応する差分"), "{}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
 /// (6) literal-mismatch の指摘 `at=<識別子>` の後、識別子（`Nope::Thing`）を `done` に書いたままで base に無い契約は
 /// 断られ、識別子を消した契約も、base に `Nope::Thing` を足した後の同じ契約も通る（解けるかは名指しの読み手と同じ 1 本）。
 #[test]
