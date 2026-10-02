@@ -11,6 +11,8 @@
 //! `overlap=<live run>:<file,…>`（突き合わせた live な run ごと・交差 0 は `-`・置き場が無ければ `overlap=unmeasured`）/
 //! `entrance=green-on-base:<本数>/<行数>[ unmeasurable:<本数>]`（宣言が `detect` / `deny` を名乗る周だけ・契約の検証行を base
 //! の木で撃った結果・木は置き場の直下の一時の worktree で撃ち終えたら畳む・設計 pipeline.md §56）/
+//! `widen=<項目>@<doc>#<行 id>:<file,…>`（自分の行の § の本文が語として名指す型形の項目をほかの行が touches に持ち、その行の write-set が
+//! 自分の write-set の .rs の候補を覆わない組・項目の辞書順・読めない周は `widen=unmeasured:<理由>` の 1 行・rc と判定は変えない）/
 //! `refuse=<名>:<理由>`（judge の断り・全部・名は [`crate::pipe::refuse::Refuse::as_str`]）/ 末尾に
 //! `preflight: <ok|refused n=<件数>|broken>`。rc = 0（断り 0）/ 1（断り ≥ 1）/ 2（読めない = `RC_BROKEN` の周）。
 //! `--state-dir` が無く git 設定からも解けない周は `overlap=unmeasured` を出し、rc は他の断りで決める（測れないを 0 に
@@ -20,11 +22,19 @@ use super::base_run::BaseRun;
 use super::intake::{ceiling_of, early, generated, judge, read_args, Denial, Judged, Material, Materials};
 use super::{flag, refused, state_dir_of};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
+use crate::pipe::refuse::covered;
+use crate::pipe::review::section_text;
+use crate::pipe::spawn::table_rows;
+use crate::pipe::{show_head, table};
 use crate::rules::manifest::Manifest;
 use crate::seat::ledger::DEFAULT_BD;
+use std::path::Path;
 
 /// 末尾の判定行の書き出し。
 const TAIL: &str = "preflight:";
+
+/// 閉包の広がりの予想の行の書き出し。
+const WIDEN: &str = "widen=";
 
 /// 置き場が無く交差を測れなかった周の行。
 const UNMEASURED: &str = "overlap=unmeasured";
@@ -76,7 +86,62 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
         early: Some(&early),
     };
     let entrance = early.base.as_ref().map(BaseRun::fact);
-    render(&judge(&material), state_dir.is_some(), entrance)
+    let judged = judge(&material);
+    let widen = widen_lines(&repo, &sha, &pointer, &contract.write_set);
+    render(&judged, state_dir.is_some(), entrance, widen)
+}
+
+/// `widen=<項目>@<doc>#<行 id>:<file,…>`（設計 reverse-index.md の閉包の広がりの予想）: 自分の行の § の本文が語として名指す型形の項目を
+/// touches に持つほかの行で、write-set が自分の write-set の .rs の候補〔接頭辞が無いか `+`・`+` は剥がす〕を覆わない組。HEAD の木の
+/// 契約表を読めない周は `widen=unmeasured:<理由>` の 1 行（理由は「ほかの行の touches」節と同じ字）。
+fn widen_lines(repo: &Path, sha: &str, pointer: &table::Pointer, own: &[String]) -> Vec<String> {
+    let unmeasured = |reason: String| vec![format!("{WIDEN}unmeasured:{reason}")];
+    let rows = match table_rows(repo, sha) {
+        Ok(found) => found,
+        Err(reason) => return unmeasured(reason),
+    };
+    let body = show_head(repo, &pointer.path)
+        .and_then(|text| table::find_row(&pointer.path, &text, &pointer.id).ok().map(|row| section_text(&text, &row.section)));
+    let Some(body) = body else {
+        return unmeasured(format!("{} の節を base から読めない", pointer.path));
+    };
+    let candidates: Vec<&str> = own.iter().filter_map(|item| rs_candidate(item)).collect();
+    let mut found: Vec<(&str, String)> = Vec::new();
+    let own_pointer = format!("{}#{}", pointer.path, pointer.id);
+    for (row, touches, write_set) in rows.iter().filter(|(row, _, write_set)| *row != own_pointer && !write_set.is_empty()) {
+        let missing: Vec<&str> = candidates.iter().copied().filter(|file| !covered(write_set, file)).collect();
+        if missing.is_empty() {
+            continue;
+        }
+        for item in touches.iter().filter(|item| names_type(item, &body)) {
+            let line = format!("{WIDEN}{item}@{row}:{}", missing.join(","));
+            if !found.iter().any(|(_, seen)| *seen == line) {
+                found.push((item.as_str(), line));
+            }
+        }
+    }
+    found.sort_by(|left, right| left.0.cmp(right.0));
+    found.into_iter().map(|(_, line)| line).collect()
+}
+
+/// write-set の項目が .rs の候補か（接頭辞が無いか `+`・`+` は剥がす・dir と .rs でない file は候補でない）。
+fn rs_candidate(item: &str) -> Option<&str> {
+    let file = item.strip_prefix('+').unwrap_or(item);
+    (file.ends_with(".rs") && !file.starts_with(['-', '~', '=', '+'])).then_some(file)
+}
+
+/// touches の項目が型形（末尾の段が大文字始まり）で、その末尾の段が `body` に語の境界で在るか。
+fn names_type(item: &str, body: &str) -> bool {
+    let name = item.rsplit("::").next().unwrap_or_default();
+    if !name.starts_with(char::is_uppercase) {
+        return false;
+    }
+    let is_word = |found: Option<char>| found.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+    body.match_indices(name).any(|(at, _)| {
+        let before = body.get(..at).and_then(|head| head.chars().next_back());
+        let after = body.get(at + name.len()..).and_then(|tail| tail.chars().next());
+        !is_word(before) && !is_word(after)
+    })
 }
 
 /// 判定の対象が揃わなかった周の断りに**末尾の判定行**を積む（judge を撃てないので事実の行は無い）。
@@ -90,7 +155,7 @@ fn tailed(denial: Denial) -> Outcome {
 }
 
 /// judge の結果を 1 行 1 事実に描く。`measured` は置き場が在った（交差を撃った）か。`entrance` は base の木で撃った周の欄。
-fn render(judged: &Judged, measured: bool, entrance: Option<String>) -> Outcome {
+fn render(judged: &Judged, measured: bool, entrance: Option<String>, widen: Vec<String>) -> Outcome {
     let mut out: Vec<String> = Vec::new();
     if let Some((design, section)) = &judged.design {
         out.push(format!("design={design} section={section}"));
@@ -111,6 +176,7 @@ fn render(judged: &Judged, measured: bool, entrance: Option<String>) -> Outcome 
         out.extend(found.runs.iter().map(|(run, files)| format!("overlap={run}:{}", listed(files))));
     }
     out.extend(entrance);
+    out.extend(widen);
     out.extend(judged.denials.iter().map(refuse_line));
     let broken = judged.denials.iter().any(|denial| denial.outcome.rc == RC_BROKEN);
     let (rc, tail) = match (judged.denials.len(), broken) {

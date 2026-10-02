@@ -835,6 +835,15 @@ fn touches_section(launch: &Launch<'_>, base: &str) -> String {
 /// 便の base の木の契約表の行ごとの（pointer `<doc>#<id>`・touches の列）。doc の順と行の順（読めない周は doc の path を
 /// 持つ理由）。
 fn touches_rows(repo: &Path, base: &str) -> Result<Vec<(String, Vec<String>)>, String> {
+    Ok(table_rows(repo, base)?.into_iter().map(|(pointer, touches, _)| (pointer, touches)).collect())
+}
+
+/// 行ごとの（pointer `<doc>#<id>`・touches の列・write-set の列）。
+pub(crate) type RowFacts = (String, Vec<String>, Vec<String>);
+
+/// [`touches_rows`] の読みに write-set の列を足したもの（行ごとの pointer・touches・write-set・pipe preflight の閉包の広がりの予想が
+/// 同じ 1 本の読みを借りる）。
+pub(crate) fn table_rows(repo: &Path, base: &str) -> Result<Vec<RowFacts>, String> {
     let listed = git_bytes(repo, &["ls-tree", "-r", "-z", "--name-only", base])
         .ok_or_else(|| format!("base {base} の木を読めない"))?;
     let tracked: Vec<String> =
@@ -850,7 +859,7 @@ fn touches_rows(repo: &Path, base: &str) -> Result<Vec<(String, Vec<String>)>, S
             let first = errors.first().map(|error| error.reason()).unwrap_or_default();
             format!("{doc} の区間を読めない: {first}")
         })?;
-        rows.extend(found.into_iter().map(|row| (format!("{doc}#{}", row.id), row.touches)));
+        rows.extend(found.into_iter().map(|row| (format!("{doc}#{}", row.id), row.touches, row.write_set)));
     }
     Ok(rows)
 }

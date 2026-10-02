@@ -2244,6 +2244,172 @@ fn runner_touches_section_lines_skip_own_row_and_bundle_pointers() {
     assert_eq!(vessel::pipe::spawn::touches_lines(rows.get(..1).unwrap_or_default(), "d#a"), "なし\n", "自分の行だけなら項目 0");
 }
 
+// ───── pipe preflight の閉包の広がりの予想（設計 contract-source.md §71・接頭辞 `preflight_widen_`） ─────
+//
+// 自分の行 a の § 2 の本文が語として名指す型形の項目をほかの行が touches に持ち、その行の write-set が a の .rs の候補を覆わない組を
+// `widen=<項目>@<doc>#<行 id>:<file,…>` の行で出す。HEAD の木の契約表を読めない周は `widen=unmeasured:<理由>`・rc と末尾の判定行は変えない。
+
+/// § 2 の本文（語 Tint と語 show を持ち、語 Tin は長い名 Tint / Tinted の部分の字としてだけ在る）。
+const WIDEN_SECTION: &str = "Tint を show で描く。Tinted は別の名。";
+
+/// 行 a の write-set: 候補は + の paint.rs と接頭辞の無い other.rs（この順）・候補でない 5 形（`-` `~` `=` と dir と .rs でない file）を 1 つずつ。
+const WIDEN_OWN: &str = r#"["+crates/toy/src/paint.rs", "crates/toy/src/other.rs", "-crates/toy/tests/e2e.rs", "~crates/toy/tests/helper.rs", "=crates/toy/src/show.rs", "docs/", "rules/manifest.toml"]"#;
+
+/// 設計 doc（§ 2 の本文は [`WIDEN_SECTION`]）の末尾に `rows` の表を置く。
+fn widen_doc(rows: &[String]) -> String {
+    format!("# 設計: toy\n\n## 1. 何を解くか\n\n本文。\n\n## 2. 型\n\n{WIDEN_SECTION}\n\n## 3. 空の節\n\n{}", table_region(rows))
+}
+
+/// 自分の行 a（§ 2・write-set は [`WIDEN_OWN`]・`extra` は足す欄）。
+fn widen_own(extra: &[(&str, &str)]) -> String {
+    let mut over = vec![("section", "\"2\""), ("write-set", WIDEN_OWN)];
+    over.extend_from_slice(extra);
+    table_row("a", &over)
+}
+
+/// ほかの行（§ 1・touches と write-set を持つ）。
+fn widen_other(id: &str, touches: &str, write_set: &str) -> String {
+    table_row(id, &[("touches", touches), ("write-set", write_set)])
+}
+
+/// 行 h（write-set は tint.rs と show.rs）。
+fn widen_h() -> String {
+    widen_other("h", r#"["crate::tint::Tint"]"#, r#"["crates/toy/src/tint.rs", "crates/toy/src/show.rs"]"#)
+}
+
+/// 行 a の preflight を 1 回撃つ。
+fn widen_preflight(repo: &Path, state: &Path) -> Output {
+    run_pipe(&[
+        "preflight", "--design", "docs/design/toy.md#a", "--bead", "s2-a",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(state),
+    ])
+}
+
+/// HEAD の doc の § 2 の本文が語 Tint を持つ前提（撃つ前に歯の中で assert する）。
+fn assert_head_names_tint(repo: &Path) {
+    let head = git(repo, &["show", "HEAD:docs/design/toy.md"]);
+    let body = head.split("## 2. ").nth(1).and_then(|rest| rest.split("\n## ").next()).unwrap_or_default();
+    assert!(body.split(|c: char| !c.is_ascii_alphanumeric()).any(|word| word == "Tint"), "HEAD の § 2 が語 Tint を持つ: {body}");
+}
+
+/// stdout の `widen=` の行。
+fn widen_of(out: &Output) -> Vec<String> {
+    stdout_of(out).lines().filter(|line| line.starts_with("widen=")).map(str::to_owned).collect()
+}
+
+/// 行 h だけが出る周の期待（h は paint.rs と other.rs・a の write-set の順）。
+fn widen_h_line() -> String {
+    "widen=crate::tint::Tint@docs/design/toy.md#h:crates/toy/src/paint.rs,crates/toy/src/other.rs".to_owned()
+}
+
+/// (1) 行 h と行 k2 の 2 本がこの順・h は paint.rs と other.rs・k2 は paint.rs だけ。候補でない形の項目は並ばず、作業木だけの行 z は並ばない。
+/// 2 本の直後が末尾の判定行で、rc 0・`preflight: ok`・refuse の行 0。
+#[test]
+fn preflight_widen_names_the_row_and_its_missing_files() {
+    let k2 = widen_other("k2", r#"["crate::tint::Tint"]"#, r#"["crates/toy/src/other.rs"]"#);
+    let (repo, state) = derive_repo_with(&widen_doc(&[widen_own(&[]), widen_h(), k2]), &[]);
+    let dirty = widen_other("z", r#"["crate::tint::Tint"]"#, r#"["crates/toy/src/tint.rs"]"#);
+    fs::write(repo.join("docs/design/dirty.md"), widen_doc(&[dirty])).unwrap_or_default();
+    assert_head_names_tint(&repo);
+    let out = widen_preflight(&repo, &state);
+    let stdout = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {stdout} {}", stderr_of(&out));
+    let want = [widen_h_line(), "widen=crate::tint::Tint@docs/design/toy.md#k2:crates/toy/src/paint.rs".to_owned()];
+    assert_eq!(widen_of(&out), want, "2 本がこの順: {stdout}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    let tail = lines.len().saturating_sub(3);
+    assert_eq!(lines.get(tail..), Some(&[want[0].as_str(), want[1].as_str(), "preflight: ok"][..]), "2 本の直後が末尾: {stdout}");
+    assert!(!stdout.contains("refuse="), "refuse の行 0: {stdout}");
+    clean(&[&repo, &state]);
+}
+
+/// (2) write-set が候補を全部覆う行（dir の項目は配下を覆う）は出さない: h の 1 本だけ。
+#[test]
+fn preflight_widen_skips_a_row_whose_write_set_covers_the_files() {
+    let covering = widen_other("c", r#"["crate::tint::Tint"]"#, r#"["crates/toy/src/"]"#);
+    let (repo, state) = derive_repo_with(&widen_doc(&[widen_own(&[]), widen_h(), covering]), &[]);
+    assert_head_names_tint(&repo);
+    let out = widen_preflight(&repo, &state);
+    assert_eq!(widen_of(&out), [widen_h_line()], "h の 1 本だけ: {}", stdout_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (3) write-set の欄を持たない行は出さない: h の 1 本だけ。
+#[test]
+fn preflight_widen_skips_a_row_without_a_declared_write_set() {
+    let derived = derive_row("d", &[("touches", r#"["crate::tint::Tint"]"#)]);
+    let (repo, state) = derive_repo_with(&widen_doc(&[widen_own(&[]), widen_h(), derived]), &[]);
+    assert_head_names_tint(&repo);
+    let out = widen_preflight(&repo, &state);
+    assert_eq!(widen_of(&out), [widen_h_line()], "h の 1 本だけ: {}", stdout_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (4) fn 形（末尾の段が小文字始まり）の項目は § の本文に語として在っても照らさない: h の 1 本だけ。
+#[test]
+fn preflight_widen_reads_only_type_form_items() {
+    let fn_form = widen_other("f", r#"["crate::tint::show"]"#, r#"["crates/toy/src/other.rs"]"#);
+    let (repo, state) = derive_repo_with(&widen_doc(&[widen_own(&[]), widen_h(), fn_form]), &[]);
+    assert_head_names_tint(&repo);
+    let out = widen_preflight(&repo, &state);
+    assert_eq!(widen_of(&out), [widen_h_line()], "h の 1 本だけ: {}", stdout_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (5) 項目の末尾の段が § の本文に語の境界で無く長い名の部分の字としてだけ在る行（語 Tin は Tint / Tinted の中）は出さない: h の 1 本だけ。
+#[test]
+fn preflight_widen_needs_the_name_as_a_word_in_the_section() {
+    let part = widen_other("p", r#"["crate::tint::Tin"]"#, r#"["crates/toy/src/other.rs"]"#);
+    let (repo, state) = derive_repo_with(&widen_doc(&[widen_own(&[]), widen_h(), part]), &[]);
+    assert_head_names_tint(&repo);
+    let out = widen_preflight(&repo, &state);
+    assert_eq!(widen_of(&out), [widen_h_line()], "h の 1 本だけ: {}", stdout_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (6) HEAD の別の doc（other.md）の区間が壊れ、作業木の同じ path は壊れていない toy は `widen=unmeasured:<理由>` の 1 行（理由は doc の path
+/// を持つ）で、rc 0 と末尾の判定行は変わらない。
+#[test]
+fn preflight_widen_says_unmeasured_when_the_head_table_is_unreadable() {
+    let broken = format!("# 壊れた doc\n\n{}\nこれは表ではない\n{}\n", vessel::pipe::table::BEGIN, vessel::pipe::table::END);
+    let (repo, state) = derive_repo_with(&widen_doc(&[widen_own(&[]), widen_h()]), &[("docs/design/other.md", &broken)]);
+    fs::write(repo.join("docs/design/other.md"), "# 壊れていない doc\n").unwrap_or_default();
+    assert!(git(&repo, &["show", "HEAD:docs/design/other.md"]).contains("これは表ではない"), "HEAD の other.md が壊れた区間を持つ");
+    assert!(!fs::read_to_string(repo.join("docs/design/other.md")).unwrap_or_default().contains("これは表ではない"), "作業木の other.md は持たない");
+    assert_head_names_tint(&repo);
+    let out = widen_preflight(&repo, &state);
+    let stdout = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc は変わらない: {stdout} {}", stderr_of(&out));
+    let found = widen_of(&out);
+    assert!(
+        matches!(found.as_slice(), [line] if line.starts_with("widen=unmeasured:") && line.contains("docs/design/other.md")),
+        "doc の path を持つ理由の 1 行: {stdout}"
+    );
+    assert_eq!(stdout.lines().next_back(), Some("preflight: ok"), "末尾の判定行は変わらない: {stdout}");
+    clean(&[&repo, &state]);
+}
+
+/// (7) 行 a の growth が other.rs の上限の余地を越える toy は rc 1・refuse の行は cap-headroom の 1 本・末尾 `preflight: refused n=1`。
+/// widen の行（h の 1 本）はその refuse の行の直前に在り、件数に数えない。
+#[test]
+fn preflight_widen_stays_out_of_the_refusal_count() {
+    let own = widen_own(&[("growth", r#"["crates/toy/src/other.rs:5000"]"#)]);
+    let (repo, state) = derive_repo_with(&widen_doc(&[own, widen_h()]), &[]);
+    assert_head_names_tint(&repo);
+    let out = widen_preflight(&repo, &state);
+    let stdout = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "rc 1: {stdout} {}", stderr_of(&out));
+    let refuse: Vec<&str> = stdout.lines().filter(|line| line.starts_with("refuse=")).collect();
+    assert!(matches!(refuse.as_slice(), [line] if line.starts_with("refuse=cap-headroom:")), "refuse の行は cap-headroom の 1 本: {stdout}");
+    assert_eq!(stdout.lines().next_back(), Some("preflight: refused n=1"), "末尾: {stdout}");
+    let lines: Vec<&str> = stdout.lines().collect();
+    let at = lines.iter().position(|line| line.starts_with("refuse=")).unwrap_or_default();
+    assert_eq!(widen_of(&out), [widen_h_line()], "h の 1 本: {stdout}");
+    assert_eq!(lines.get(at.saturating_sub(1)).copied(), Some(widen_h_line().as_str()), "h の 1 本が refuse の行の直前: {stdout}");
+    clean(&[&repo, &state]);
+}
+
 // ───── runner の終わりの門（設計 pipeline.md §66・行 bj・接頭辞 `end_gate_`） ─────
 //
 // runner が rc 0 で commit を作って終わった周に、器が gate と同じ行を便の worktree へ撃つ。赤なら同じ worktree で runner を
