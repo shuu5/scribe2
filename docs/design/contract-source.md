@@ -1179,7 +1179,7 @@ id = "bz"
 title = "gate の write-set を照らす段が契約 file の key done-teeth の名の歯と既存の歯を便の HEAD の木で照らし（書かれていない歯・動いていない歯・消えた既存の歯を名指して落とす）、審査の材料 items.txt が項目ごとに宣言の歯を添えて lens の表の歯を宣言の歯の内に閉じる（§66 行 (3)）"
 req = ["FR106", "FR8", "FR49"]
 section = "66"
-write-set = ["crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/pipe/review/items.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "crates/scribe2-boundary/tests/e2e/pipe/review.rs"]
+write-set = ["crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/pipe/review/items.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "crates/scribe2-boundary/tests/e2e/pipe/review.rs", "=crates/scribe2-boundary/tests/e2e/pipe/spawn.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail done_teeth_gate_", "cargo nextest run -p scribe2 --lib --no-tests=fail done_teeth_review_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail done_teeth_review_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail done_teeth_place_only_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_gate_write_set_prefixed_items_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
 size = "M"
 growth = ["crates/scribe2/src/pipe/gate/verify.rs:70", "crates/scribe2/src/pipe/review.rs:12", "crates/scribe2/src/pipe/review/items.rs:40", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs:260", "crates/scribe2-boundary/tests/e2e/pipe/review.rs:110"]
