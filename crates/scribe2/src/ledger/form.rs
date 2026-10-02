@@ -12,6 +12,7 @@
 //! 増えない**（書きは親 module の `close` の 1 種のまま・C15）。読めない周は件数 0 に倒さず測れていない形の行を
 //! 出す（[`render_unreadable`]・C10 / NFR4）。極性は増やさない（doctor は読むだけで判定しない）。
 
+use crate::pipe::declaration::TablePlaces;
 use crate::pipe::table;
 use crate::rules::manifest::Manifest;
 use crate::seat::ledger::{self, Issue, LedgerError};
@@ -280,16 +281,16 @@ fn measure(repo: &Path, rules: Option<&str>) -> Result<Report, &'static str> {
     Ok(judge(&issues, &docs))
 }
 
-/// 設計 doc の直下の `*.md` か（`contracts check` と同じ母集団）。
-fn is_design_doc(path: &str) -> bool {
-    path.strip_prefix(table::DESIGN_DIR).is_some_and(|rest| !rest.contains('/') && rest.ends_with(".md"))
-}
-
-/// 台帳の外の入力を読む（tracked を読めない・契約表を読めない周は理由の語）。
+/// 台帳の外の入力を読む（tracked を読めない・HEAD の宣言を読めない・契約表を読めない周は理由の語）。契約表の母集団は
+/// `contracts check` と同じ [`table::design_docs`] の 1 本（既定の置き場と HEAD の宣言の `contract-tables` の項目）。
 fn docs_of(repo: &Path, issues: &[Issue]) -> Result<Docs, &'static str> {
-    let tracked: BTreeSet<String> = table::tracked_files(repo).ok_or("tracked-unreadable")?.into_iter().collect();
+    let listed = table::tracked_files(repo).ok_or("tracked-unreadable")?;
+    let places = TablePlaces::at(repo, "HEAD");
+    let items = places.items().ok_or("declaration-unreadable")?;
+    let tracked: BTreeSet<String> = listed.into_iter().collect();
+    let tracked_list: Vec<String> = tracked.iter().cloned().collect();
     let mut rows = Vec::new();
-    for doc in tracked.iter().filter(|path| is_design_doc(path)) {
+    for doc in table::design_docs(&tracked_list, items) {
         let text = table::read(repo, doc).map_err(|_| "table-unreadable")?;
         let found = table::read_rows(doc, &text).map_err(|_| "table-unreadable")?;
         rows.extend(found.into_iter().map(|row| Row {
@@ -348,7 +349,7 @@ fn section_number(title: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{judge, names, section_text, Docs, Issue, MEMO_LABEL, QUESTION_LABEL};
+    use super::{docs_of, judge, names, render, render_unreadable, section_text, Docs, Issue, MEMO_LABEL, QUESTION_LABEL};
 
     /// 型 task の open の bead（label と acceptance だけを与える）。
     fn open_task(id: &str, labels: &[&str], acceptance: &str) -> Issue {
@@ -367,6 +368,38 @@ mod tests {
         let fields = [&report.both, &report.neither, &report.undiscovered, &report.drift, &report.settled];
         let named: Vec<&String> = report.missing.iter().chain(fields).flatten().collect();
         assert!(!named.iter().any(|id| id.as_str() == "q-question"), "問いの id が欄に出た: {named:?}");
+    }
+
+    /// HEAD の宣言の契約表の置き場を読む: (a) key で `contracts/` を名乗り `contracts/t.toml` の未着地の行 a を置いた commit は
+    /// unlanded=1 と drift=1:t#a、(b) key を消した commit は unlanded=0、(c) key の値を壊した commit は declaration-unreadable
+    /// （件数を 1 つも出さない 1 行）。
+    #[test]
+    fn ledger_shape_tables_reads_the_declared_places_at_head() {
+        let repo = crate::pipe::fixture::scratch("ledger-shape-tables");
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.name", "t"], &["config", "user.email", "t@example.invalid"], &["config", "commit.gpgsign", "false"]] {
+            assert!(crate::pipe::git_ok(&repo, args), "{args:?}");
+        }
+        let table = "schema = 1\n\n[[contract]]\nid = \"a\"\ntitle = \"t\"\nreq = [\"FR1\"]\nsection = \"1\"\nverify = [\"git status\"]\nsize = \"S\"\ndone = \"d\"\nwrite-set = [\"+src/new.rs\"]\ngoal = \"g\"\n";
+        let head = "schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git diff --quiet\"]\n";
+        let commit = |declaration: &str| {
+            assert!(std::fs::create_dir_all(repo.join("contracts")).is_ok());
+            assert!(std::fs::write(repo.join("contracts/t.toml"), table).is_ok());
+            assert!(std::fs::write(repo.join(".vessel.toml"), format!("{head}{declaration}")).is_ok());
+            assert!(crate::pipe::git_ok(&repo, &["add", "-A"]) && crate::pipe::git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "c"]));
+        };
+        let line = |repo: &std::path::Path| match docs_of(repo, &[]) {
+            Ok(docs) => render(&judge(&[], &docs)),
+            Err(reason) => render_unreadable(reason),
+        };
+        commit("contract-tables = [\"contracts/\"]\n");
+        let declared = line(&repo);
+        assert!(declared.contains("unlanded=1") && declared.contains("drift=1:t#a"), "(a) 宣言した置き場の行: {declared}");
+        commit("");
+        let fixed = line(&repo);
+        assert!(fixed.contains("unlanded=0") && fixed.contains("drift=0"), "(b) key の無い宣言: {fixed}");
+        commit("contract-tables = \"contracts/\"\n");
+        assert_eq!(docs_of(&repo, &[]).err(), Some("declaration-unreadable"), "(c) key の値を壊した commit");
+        assert_eq!(line(&repo), "ledger-form: unreadable reason=declaration-unreadable");
     }
 
     /// 名指しは id の字面の境界で測る（`s2-x.7` は `s2-x.70` にも `s2-x.7.1` にも当たらず、文末の `.` には当たる）。
