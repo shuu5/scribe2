@@ -269,8 +269,6 @@ fn typed_promise(raw: &RawPromise, errors: &mut Vec<TableError>) -> Option<Promi
 /// 読めた 1 行を欄の形（[`super::FIELDS`] の `shape`）で型付けする。形の違いは欄の行番号で積む。
 fn typed(raw: &TableRow, offset: u64, errors: &mut Vec<TableError>) -> Option<ContractRow> {
     let before = errors.len();
-    // 欄 `code-facts`（§67）は形だけ確かめて値を捨てる（`ContractRow` に field を持たない）。
-    list_of(raw, "code-facts", offset, errors);
     let row = ContractRow {
         line: shift(offset, raw.line()),
         id: text_of(raw, "id", offset, errors),
@@ -292,9 +290,60 @@ fn typed(raw: &TableRow, offset: u64, errors: &mut Vec<TableError>) -> Option<Co
         targets: targets_of(raw, offset, errors),
         growth: list_of(raw, "growth", offset, errors),
         done_teeth: list_of(raw, "done-teeth", offset, errors),
+        code_facts: list_of(raw, "code-facts", offset, errors),
         goal: text_of(raw, DERIVED_GOAL, offset, errors),
     };
     (errors.len() == before).then_some(row)
+}
+
+/// 欄 `code-facts` の列の閉じた 7 語（設計 reverse-index.md §7 (c)・FR47・§6 の 7 列の rows の代わりに files）。
+pub(crate) const FACT_COLUMNS: [&str; 7] = ["refs", "files", "callers", "literals", "patterns", "teeth", "vis"];
+
+/// 欄 `code-facts` の要素 1 つの名乗りの値（件数か、vis の可視性の字）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Claim {
+    /// 10 進の件数。
+    Count(u64),
+    /// 可視性の字（`pub`・`pub(crate)`・`pub(super)`・`pub(in <path>)`・`private`）。
+    Vis(String),
+}
+
+/// 欄 `code-facts` の要素 1 つの読み（`<列>:<項目>=<値>`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodeFact {
+    /// 列の語（[`FACT_COLUMNS`] のどれか）。
+    pub column: &'static str,
+    /// 項目（`crate::` で始まり `::` で結んだ識別子の列）。
+    pub item: String,
+    /// 名乗りの値。
+    pub claim: Claim,
+}
+
+/// 識別子の形（先頭は英字か `_`・続きは英数字か `_`）。
+fn is_ident(word: &str) -> bool {
+    let mut chars = word.chars();
+    chars.next().is_some_and(|first| first.is_ascii_alphabetic() || first == '_') && chars.all(|next| next.is_ascii_alphanumeric() || next == '_')
+}
+
+/// 欄 `code-facts` の要素 1 つを読む（設計 reverse-index.md §7 (c)・表の検査の `code-facts-form` と受付の測りが同じこの 1 本を撃つ・
+/// 外れは理由の字面）。
+pub(crate) fn code_fact(element: &str) -> Result<CodeFact, String> {
+    let (column, rest) = element.split_once(':').ok_or("<列>:<項目>=<値> の形でない（: が無い）")?;
+    let column = FACT_COLUMNS.iter().find(|word| **word == column).ok_or_else(|| format!("列 {column:?} が {} の外", FACT_COLUMNS.join("・")))?;
+    let (item, value) = rest.split_once('=').ok_or("<列>:<項目>=<値> の形でない（= が無い）")?;
+    let named = item.strip_prefix("crate::").is_some_and(|tail| tail.split("::").all(is_ident));
+    if !named {
+        return Err(format!("項目 {item:?} が crate:: で始まり :: で結んだ識別子の列でない"));
+    }
+    let claim = if *column == "vis" {
+        let inside = value.strip_prefix("pub(in ").and_then(|tail| tail.strip_suffix(')'));
+        let known = ["pub", "pub(crate)", "pub(super)", "private"].contains(&value) || inside.is_some_and(|path| path.split("::").all(is_ident));
+        known.then(|| Claim::Vis(value.to_owned())).ok_or_else(|| format!("vis の値 {value:?} が pub・pub(crate)・pub(super)・pub(in <path>)・private の外"))?
+    } else {
+        let digits = !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit());
+        digits.then(|| value.parse().ok().map(Claim::Count)).flatten().ok_or_else(|| format!("値 {value:?} が 10 進でない"))?
+    };
+    Ok(CodeFact { column, item: item.to_owned(), claim })
 }
 
 /// 的の欄（`targets`・設計 gate-cost.md §16）: 配列の形は [`list_of`] と同じに読み、各値の形は契約 file の読みと同じ

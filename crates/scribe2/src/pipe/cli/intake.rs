@@ -64,6 +64,9 @@ use ruling::Ruled;
 /// 索引の状態の扱いと閉包の判定（設計 reverse-index.md §7 (b)・契約表の行 d）。断りの組み立ては [`exclude_unindexed`] が書く。
 mod index;
 
+/// 欄 `code-facts` の照らしと測り（設計 reverse-index.md §7 (c)・契約表の行 e）。断りの組み立ては [`exclude_unmeasured`] が書く。
+mod code_facts;
+
 /// host で同時に走る便（live な便）の本数の最大値を持つ rules 行（設計 gate-cost.md §24・値は読むだけ・C1）。
 const ROW_MAX_LIVE: &str = "pipe.max_live";
 
@@ -266,6 +269,8 @@ pub(in crate::pipe) struct Materials {
     /// base の commit の索引の状態（state dir を持つ呼び手だけが [`Self::indexed`] で載せる・`None` = 状態なし＝字面の閉包だけで判じ
     /// 尾も足さない・表は大きいので借りて持つ）。
     index: Option<Arc<Status>>,
+    /// 索引の状態を読んだ commit の sha（[`Self::indexed`] が状態と一緒に載せる・欄 `code-facts` の測りが数える commit）。
+    index_at: Option<String>,
 }
 
 impl Materials {
@@ -298,12 +303,13 @@ impl Materials {
             classes: ceiling.classes.to_vec(),
             ruling: ruling::Rulings::new(bd),
             index: None,
+            index_at: None,
         })
     }
 
     /// base（`sha`）の commit の索引の状態を載せる（行 a2 の状態の読み・読むだけで撃たず待たない・設計 reverse-index.md §7 (b)）。
     pub(in crate::pipe) fn indexed(self, state_dir: &Path, repo: &Path, sha: &str) -> Self {
-        Self { index: Some(Arc::new(index_status(state_dir, repo, sha))), ..self }
+        Self { index: Some(Arc::new(index_status(state_dir, repo, sha))), index_at: Some(sha.to_owned()), ..self }
     }
 
     /// 索引を作れない周の結果の行の尾（[`index::tail`]・`touches` は契約の touches）。
@@ -334,7 +340,7 @@ impl Materials {
         let mut tracked: Vec<String> = self.tracked.iter().filter(|path| !remove.contains(path)).chain(add).cloned().collect();
         tracked.sort();
         tracked.dedup();
-        Self { tracked, sources: swap(&self.sources, ".rs"), snapshots: swap(&self.snapshots, ".snap"), index: None, ..self.clone() }
+        Self { tracked, sources: swap(&self.sources, ".rs"), snapshots: swap(&self.snapshots, ".snap"), index: None, index_at: None, ..self.clone() }
     }
 
     /// 閉包を測る base（`.rs` / `.snap` / tracked の 3 面を 1 つに束ねた借り）。
@@ -435,6 +441,7 @@ pub(in crate::pipe) fn generated(
     if !findings.is_empty() {
         return Err(finding_denial(&pointer.path, &findings));
     }
+    exclude_unmeasured(&row, materials, repo)?;
     exclude_unindexed(&row, materials)?;
     let design = format!("{}#{}", pointer.path, pointer.id);
     // 行が `write-set` を持たない周（Derived の行・§3「write-set の導出」）は**導出値**を写しに書く。
@@ -481,6 +488,27 @@ fn exclude_unindexed(row: &ContractRow, materials: &Materials) -> Result<(), Den
         index::Indexed::Building(state) => Err(refuse(&Refuse::IndexBuilding { state: state.to_owned() }, &[])),
         index::Indexed::Half(lines) => Err(denied(DENIAL_DECLARATION, Outcome::failed(RC_REFUSED, lines))),
         index::Indexed::Missing(missing) => Err(refuse(&Refuse::WriteSetIncomplete { missing }, &[])),
+    }
+}
+
+/// 欄 `code-facts` を持つ行を base の索引の状態と列の数えで断る（設計 reverse-index.md §7 (c)・[`exclude_unindexed`] の前に撃つ・欄の無い行は通す）。
+/// 判定は [`code_facts::judge`]、ここは断りを組むだけ: 測れない周は `code-facts-unmeasured`・half は `declaration`・違いは `code-facts`（先頭の要素が
+/// 断りの 1 行・残りは後ろの行）。ready で通れば続く [`exclude_unindexed`] が touches の型の索引の閉包も撃つ。
+fn exclude_unmeasured(row: &ContractRow, materials: &Materials, repo: &Path) -> Result<(), Denial> {
+    if row.code_facts.is_empty() {
+        return Ok(());
+    }
+    let at = materials.index_at.as_deref().map(|sha| (repo, sha));
+    match code_facts::judge(&row.code_facts, materials.index.as_deref(), at) {
+        code_facts::Facts::Clear => Ok(()),
+        code_facts::Facts::Unmeasured { element, state } => Err(refuse(&Refuse::CodeFactsUnmeasured { element, state }, &[])),
+        code_facts::Facts::Half(lines) => Err(denied(DENIAL_DECLARATION, Outcome::failed(RC_REFUSED, lines))),
+        code_facts::Facts::Differ(found) => {
+            let mut all = found.into_iter().map(|one| Refuse::CodeFacts(Box::new(one)));
+            let Some(first) = all.next() else { return Ok(()) };
+            let rest: Vec<String> = all.map(|more| format!("pipe: {}", more.reason())).collect();
+            Err(refuse(&first, &rest))
+        }
     }
 }
 
@@ -1286,9 +1314,10 @@ mod tests {
     // flip-check: retroactive s2-07l.736.28
     use super::ruling::Rulings;
     use super::{
-        exclude_cap_shortfall, int_row, with_write_set, Entrance, Materials, WriteSet, ENTRANCE_LOCK, ROW_FILE_LINES,
-        ROW_SIZE_S, WRITE_SETS,
+        exclude_cap_shortfall, exclude_unmeasured, int_row, with_write_set, ContractRow, Entrance, Materials, WriteSet,
+        ENTRANCE_LOCK, ROW_FILE_LINES, ROW_SIZE_S, WRITE_SETS,
     };
+    use std::path::Path;
     use crate::fleet::store::LockPolicy;
     use crate::order::is_declaration_order;
     use crate::pipe::closure::Source;
@@ -1373,8 +1402,36 @@ mod tests {
             classes: Vec::new(),
             ruling: Rulings::new("bd"),
             index: None,
+            index_at: None,
         };
         (contract, materials)
+    }
+
+    /// 欄 `code-facts` を 1 要素だけ持つ行（欄は最小）。
+    fn fielded_row() -> ContractRow {
+        ContractRow { id: "a".to_owned(), code_facts: vec!["refs:crate::x::Y=1".to_owned()], ..ContractRow::default() }
+    }
+
+    /// (i) 欄 `code-facts` を持つ行の判定は、ready を載せた材料の forecast の写しと状態を載せない材料では `code-facts-unmeasured` と語 `none`、元の ready の
+    /// 材料では列の数えへ進む（索引が空で実測 0 件・名乗り 1 と違う `code-facts`）。
+    #[test]
+    fn pipe_intake_code_facts_stateless_copy_and_missing_state_name_none_while_ready_goes_on_to_count() {
+        let (_, materials) = short_of_room(1);
+        let repo = Path::new("/nonexistent-repo-for-code-facts");
+        let row = fielded_row();
+        let ready = Materials { index: Some(Arc::new(Status::Ready(Vec::new()))), index_at: Some("deadbeef".to_owned()), ..materials.clone() };
+        for (label, stateless) in [("forecast の写し", ready.forecast(&[], &[], &[])), ("状態を載せない材料", materials)] {
+            let denied = exclude_unmeasured(&row, &stateless, repo).err();
+            assert_eq!(denied.as_ref().map(|found| found.name), Some("code-facts-unmeasured"), "{label}: 測れない");
+            let line = denied.map(|found| found.outcome.err.join("\n")).unwrap_or_default();
+            assert!(line.contains("refs:crate::x::Y=1") && line.contains("none"), "{label}: 要素と語 none を名指す: {line}");
+        }
+        let went_on = exclude_unmeasured(&row, &ready, repo).err();
+        assert_eq!(went_on.as_ref().map(|found| found.name), Some("code-facts"), "元の ready の材料は列の数えへ進む");
+        let line = went_on.map(|found| found.outcome.err.join("\n")).unwrap_or_default();
+        assert!(line.contains("名乗り 1") && line.contains("実測 0"), "名乗りと実測を名指す: {line}");
+        let plain = ContractRow { code_facts: Vec::new(), ..row };
+        assert!(exclude_unmeasured(&plain, &ready, repo).is_ok(), "欄を持たない行はこの判定の外");
     }
 
     /// (h) 予想の base の写し（`forecast`）は base の索引の状態を持ち越さず状態なしで、元の材料の状態は変わらない（状態を載せる

@@ -3068,6 +3068,11 @@ pub(super) const IXC_FILES: [(&str, &str); 4] = [
 
 /// fixture の SCIP（variant の symbol は rust-analyzer の形＝型の symbol の後ろに variant の名と `#`・欄は `.` で終わる字）。
 fn ixc_scip() -> Vec<u8> {
+    scip_index(&ixc_documents(), &[])
+}
+
+/// fixture の SCIP の document（4 file）。
+fn ixc_documents() -> Vec<Vec<u8>> {
     let sym = |name: &str| format!("{IXC_PKG}{name}");
     let (swatch, shade) = (sym("swatch/Swatch#"), sym("swatch/Shade#"));
     let (light, dark, label) = (sym("swatch/Shade#Light#"), sym("swatch/Shade#Dark#"), sym("swatch/Shade#label."));
@@ -3099,15 +3104,12 @@ fn ixc_scip() -> Vec<u8> {
         scip_occ(&at(sf, "&Shade", "Shade"), &shade, false, &[]),
         scip_occ(&at(sf, "shade.label", "label"), &label, false, &[]),
     ];
-    scip_index(
-        &[
-            scip_document(IXC_FILES[0].0, 1, &sw_occs, &[]),
-            scip_document(IXC_FILES[1].0, 1, &al_occs, &[]),
-            scip_document(IXC_FILES[2].0, 1, &su_occs, &[]),
-            scip_document(IXC_FILES[3].0, 1, &sf_occs, &[]),
-        ],
-        &[],
-    )
+    vec![
+        scip_document(IXC_FILES[0].0, 1, &sw_occs, &[]),
+        scip_document(IXC_FILES[1].0, 1, &al_occs, &[]),
+        scip_document(IXC_FILES[2].0, 1, &su_occs, &[]),
+        scip_document(IXC_FILES[3].0, 1, &sf_occs, &[]),
+    ]
 }
 
 /// fixture の役の一致（別名の literal と取り込み・variant の構築の call）。
@@ -3302,6 +3304,252 @@ fn pipe_intake_index_closure_refuses_while_the_index_is_absent_or_building_and_n
         assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "{word}: 型を持たない行は通る: {}", stderr_of(&plain));
         stop_run_ok(&place.state, &run_id_of(&plain));
     }
+    clean(&[&place.repo, &place.state]);
+}
+
+// ───── 欄 code-facts の照らしと測り（設計 reverse-index.md §7 (c)・契約表の行 e・接頭辞 `pipe_intake_code_facts_`） ─────
+//
+// 偽の宣言と SCIP の書き手は行 d の fixture（`ixc_place`）に、型 `crate::swatch::Swatch` を別名 `Sw` で取り込み literal を組む file を足す:
+// 元の 2 file（alias.rs・twin.rs）が literal の site を 1 つずつ（実測 literals=2・refs=6・refs の file 2・vis=pub）、(c) の commit が足す
+// more.rs が literal の site を 2 つ（実測 literals=4・refs=10）。
+
+/// 別名で取り込み literal を 1 つ組む 2 つ目の file。
+const CF_TWIN: (&str, &str) =
+    ("crates/toy/src/twin.rs", "use crate::swatch::Swatch as Sw;\n\npub fn twin() -> Sw {\n    Sw { hue: 2 }\n}\n");
+
+/// (c) の commit が足す file（literal の site を別の行に 2 つ）。
+const CF_MORE: (&str, &str) = (
+    "crates/toy/src/more.rs",
+    "use crate::swatch::Swatch as Sw;\n\npub fn more() -> [Sw; 2] {\n    [\n        Sw { hue: 3 },\n        Sw { hue: 4 },\n    ]\n}\n",
+);
+
+/// 欄の項目（型 `Swatch`）。
+pub(super) const CF_ITEM: &str = "crate::swatch::Swatch";
+
+/// 実測と等しい名乗り 4 要素（refs・files・literals・vis）。
+pub(super) const CF_EQUAL: [&str; 4] = [
+    "refs:crate::swatch::Swatch=6",
+    "files:crate::swatch::Swatch=2",
+    "literals:crate::swatch::Swatch=2",
+    "vis:crate::swatch::Swatch=pub",
+];
+
+/// 実測と違う名乗り（refs は 6）。
+pub(super) const CF_WRONG: &str = "refs:crate::swatch::Swatch=5";
+
+/// Swatch を別名 `Sw` で取り込み、関数 `name`（戻りの型の字は `ret`）の中で literal を組む file の SCIP の document。
+fn cf_document((path, body): (&str, &str), name: &str, ret: &str, literals: &[&str]) -> Vec<u8> {
+    let sym = |tail: &str| format!("{IXC_PKG}{tail}");
+    let swatch = sym("swatch/Swatch#");
+    let at = |context: &str, inner: &str| scip_range(body, span_in(body, context, inner), false);
+    let stem = path.rsplit('/').next().and_then(|file| file.strip_suffix(".rs")).unwrap_or_default();
+    let whole = body.get(body.find("pub fn").unwrap_or(0)..).unwrap_or_default().trim_end();
+    let mut occurrences = vec![
+        scip_occ(&at("swatch::Swatch", "Swatch"), &swatch, false, &[]),
+        scip_occ(&at(&format!("fn {name}"), name), &sym(&format!("{stem}/{name}().")), true, &scip_range(body, span_of(body, whole, 0), false)),
+        scip_occ(&at(ret, "Sw"), &swatch, false, &[]),
+    ];
+    occurrences.extend(literals.iter().map(|text| scip_occ(&at(text, "Sw"), &swatch, false, &[])));
+    scip_document(path, 1, &occurrences, &[])
+}
+
+/// 偽の宣言が返す SCIP（`more` は (c) の commit の後）。
+fn cf_scip(more: bool) -> Vec<u8> {
+    let mut documents = ixc_documents();
+    documents.push(cf_document(CF_TWIN, "twin", "-> Sw", &["Sw { hue: 2 }"]));
+    if more {
+        documents.push(cf_document(CF_MORE, "more", "[Sw; 2]", &["Sw { hue: 3 }", "Sw { hue: 4 }"]));
+    }
+    scip_index(&documents, &[])
+}
+
+/// 偽の宣言が返す役の一致（行 d の物に、2 つ目の file の取り込みと literal と、型の定義の可視性 `pub` を足す）。
+fn cf_roles(more: bool) -> String {
+    let line = |rule: &str, (path, body): (&str, &str), needle: &str, name: Option<&str>| idx_role_line(rule, path, span_of(body, needle, 0), name);
+    let mut lines = vec![
+        ixc_roles().trim_end().to_owned(),
+        line("use", CF_TWIN, "use crate::swatch::Swatch as Sw;", None),
+        line("literal", CF_TWIN, "Sw { hue: 2 }", Some("Sw")),
+        line("vis", IXC_FILES[0], "pub struct Swatch", Some("pub")),
+    ];
+    if more {
+        lines.extend([
+            line("use", CF_MORE, "use crate::swatch::Swatch as Sw;", None),
+            line("literal", CF_MORE, "Sw { hue: 3 }", Some("Sw")),
+            line("literal", CF_MORE, "Sw { hue: 4 }", Some("Sw")),
+        ]);
+    }
+    lines.join("\n") + "\n"
+}
+
+/// 偽の宣言の SCIP と役の一致を `more` の形に書き換える（偽の command は呼ばれるたびにこの file を返す）。
+fn cf_feed(place: &IdxPlace, more: bool) {
+    assert!(fs::write(place.state.join("idx.scip"), cf_scip(more)).is_ok(), "SCIP の fixture を書ける");
+    assert!(fs::write(place.state.join("idx.roles"), cf_roles(more)).is_ok(), "一致の fixture を書ける");
+}
+
+/// 欄 code-facts の toy（行は `rows`・宣言は `decl`）。行 d の fixture に 2 つ目の file を足して commit し、偽の宣言の中身を差し替える。
+pub(super) fn cf_place(rows: &[String], decl: &str) -> IdxPlace {
+    let place = ixc_place(rows, decl);
+    let (path, body) = CF_TWIN;
+    assert!(fs::write(place.repo.join(path), body).is_ok(), "2 つ目の file を書ける");
+    git(&place.repo, &["add", "-A"]);
+    git(&place.repo, &["commit", "-q", "-m", "twin"]);
+    cf_feed(&place, false);
+    place
+}
+
+/// 欄 code-facts を持つ行（write-set は型を宣言する file・`touches` は型を持つ行だけ）。
+pub(super) fn cf_row(id: &str, claims: &[&str], touches: Option<&str>) -> String {
+    let list = format!("[{}]", claims.iter().map(|claim| format!("\"{claim}\"")).collect::<Vec<_>>().join(", "));
+    let typed = touches.map(|item| format!("[\"{item}\"]"));
+    let mut over = vec![("write-set", "[\"crates/toy/src/swatch.rs\"]"), ("code-facts", list.as_str())];
+    over.extend(typed.as_deref().map(|value| ("touches", value)));
+    table_row(id, &over)
+}
+
+/// (c) の commit: more.rs を足して commit し、偽の宣言の中身を差し替える（code の木の鍵が動く＝次の組み立ては新しい鍵）。
+fn cf_commit_more(place: &IdxPlace) {
+    let (path, body) = CF_MORE;
+    assert!(fs::write(place.repo.join(path), body).is_ok(), "more.rs を書ける");
+    git(&place.repo, &["add", "-A"]);
+    git(&place.repo, &["commit", "-q", "-m", "more"]);
+    cf_feed(place, true);
+}
+
+/// 結果の行から run id を引いて止める（受付が通った周の後始末）。
+fn cf_stop(place: &IdxPlace, out: &Output) {
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "通る周: {}", stderr_of(out));
+    stop_run_ok(&place.state, &run_id_of(out));
+}
+
+/// (b)(c)(j) 名乗りが実測と等しい行（refs・files・literals・vis）は受付と preflight を通り、受付が作った便の契約 file に code-facts の key が無い。
+/// 同じ名乗りで touches に型を持ち、その型の literal の site が write-set の外の file（alias.rs・twin.rs）に在る行は、ready の周に行 d の閉包の断りの
+/// 形（` (索引)` を添えた file）で rc 1。code に literal の site を 2 つ足した commit（索引を組み直す）の後は、literals の名乗り 2・実測 4 の行が
+/// `code-facts` で rc 1 になり、断りの 1 行が実測の site の先頭 3 つの path:行と残りの件数 1 と text= を名指し、4 つ目の site は載せない。
+/// 欄を持つ行を本行の子 module だけへ回す実装は閉包の断りを返さず (j) が落ち、base は欄を読み捨てて (c) の断りが無い。
+#[test]
+fn pipe_intake_code_facts_equal_claims_pass_and_a_changed_count_is_refused_with_sites() {
+    let (alias, twin) = (IXC_FILES[1].0, CF_TWIN.0);
+    let rows = [cf_row("a", &CF_EQUAL, None), cf_row("c", &["literals:crate::swatch::Swatch=2"], None), cf_row("t", &CF_EQUAL, Some(CF_ITEM))];
+    let place = cf_place(&rows, IDXB_DECL);
+    ixc_built(&place);
+    let taken = intake_raw(&place.repo, &place.state, &ixc_design("a"), "s2-cfa");
+    assert_eq!(taken.status.code(), Some(i32::from(RC_OK)), "名乗りが実測と等しい行は通る: {}", stderr_of(&taken));
+    let contract = fs::read_to_string(place.state.join("pipe").join(run_id_of(&taken)).join("contract.toml")).unwrap_or_default();
+    assert!(contract.contains("design = ") && !contract.contains("code-facts"), "便の契約 file に code-facts の key が無い: {contract}");
+    stop_run_ok(&place.state, &run_id_of(&taken));
+    let checked = preflight_raw(&place.repo, &place.state, &ixc_design("a"), "s2-cfp", true);
+    assert_eq!(checked.status.code(), Some(i32::from(RC_OK)), "preflight も通る: {}{}", stdout_of(&checked), stderr_of(&checked));
+    let (dirs, events) = (run_dirs(&place.state), event_count(&place.state));
+    let closed = intake_raw(&place.repo, &place.state, &ixc_design("t"), "s2-cft");
+    let err = stderr_of(&closed);
+    assert_eq!(closed.status.code(), Some(i32::from(RC_REFUSED)), "閉包の不足は rc 1: {err}");
+    assert!(err.starts_with("pipe: ") && err.contains(&format!("{alias} (索引)")) && err.contains(&format!("{twin} (索引)")), "行 d の閉包の断り: {err}");
+    assert!(!err.contains("code-facts"), "名乗りは実測と等しい: {err}");
+    assert_eq!((run_dirs(&place.state), event_count(&place.state)), (dirs.clone(), events), "断った周は run を作らない");
+    cf_commit_more(&place);
+    ixc_built(&place);
+    cf_assert_refused_with_sites(&place);
+    assert_eq!(run_dirs(&place.state), dirs, "run を作らない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (c) の断り: 行 c（literals の名乗り 2・実測 4）の受付が `code-facts` で rc 1・断りの 1 行が要素・名乗り・実測・site の先頭 3 つ（4 つ目は載せない）・
+/// 残りの件数・母集団を名指し、preflight も同じ断り。
+fn cf_assert_refused_with_sites(place: &IdxPlace) {
+    let (alias, twin, more) = (IXC_FILES[1].0, CF_TWIN.0, CF_MORE.0);
+    let refused = intake_raw(&place.repo, &place.state, &ixc_design("c"), "s2-cfc");
+    let err = stderr_of(&refused);
+    assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "違う名乗りは rc 1: {err}");
+    assert_eq!(err.trim_end().lines().count(), 1, "断りは 1 行: {err}");
+    let sites = format!("{alias}:4, {more}:5, {more}:6");
+    let wants = ["pipe: code-facts ", "literals:crate::swatch::Swatch=2", "名乗り 2", "実測 4", "残り 1 件", "text=8", sites.as_str()];
+    assert!(wants.iter().all(|want| err.contains(want)), "要素・名乗り・実測・site の先頭 3 つ・残り・母集団を名指す: {err}");
+    assert!(!err.contains(&format!("{twin}:4")), "4 つ目の site は載せない: {err}");
+    let listed = preflight_raw(&place.repo, &place.state, &ixc_design("c"), "s2-cfq", true);
+    assert_eq!(listed.status.code(), Some(i32::from(RC_REFUSED)), "preflight も同じ判定: {}", stdout_of(&listed));
+    assert!(stderr_of(&listed).contains(&sites), "preflight の断り: {}", stderr_of(&listed));
+}
+
+/// (d) 測れない周: absent・生きた印（building）・失敗の記録（failed:rc）・宣言の無い repo の 4 周で、欄を持つ行は rc 1 の `code-facts-unmeasured` で
+/// 語 absent・building・failed:rc・undeclared を名指し、preflight も同じ。touches の型も持つ同じ行も `index-building` にならない。欄の無い行は同じ
+/// 4 周で行 d のまま（touches の型を持つ行は absent と building で `index-building`・failed と宣言の無い周で通る／持たない行は 4 周とも通る）。
+#[test]
+fn pipe_intake_code_facts_unmeasured_states_name_their_word_and_leave_plain_rows_alone() {
+    let swatch = IXC_FILES[0].0;
+    let rows = [cf_row("a", &[CF_EQUAL[0]], None), cf_row("t", &[CF_EQUAL[0]], Some(CF_ITEM)), ixc_row("p", CF_ITEM, &[swatch]), ixc_plain_row("n")];
+    let place = cf_place(&rows, IDXB_DECL);
+    let key = ixc_built(&place);
+    ixc_unbuild(&place, &key);
+    let live = place.dir().join(format!("{key}.lock"));
+    for (stage, word) in ["absent", "building", "failed:rc", "undeclared"].into_iter().enumerate() {
+        cf_enter(&place, word, &live);
+        cf_assert_unmeasured(&place, word, stage);
+        let typed = intake_raw(&place.repo, &place.state, &ixc_design("p"), &format!("s2-cfx{stage}"));
+        if stage < 2 {
+            assert_eq!(typed.status.code(), Some(i32::from(RC_REFUSED)), "{word}: 欄の無い型の行は行 d のまま index-building: {}", stderr_of(&typed));
+            assert!(stderr_of(&typed).starts_with("pipe: index-building "), "{word}: {}", stderr_of(&typed));
+        } else {
+            cf_stop(&place, &typed);
+        }
+        let plain = intake_raw(&place.repo, &place.state, &ixc_design("n"), &format!("s2-cfn{stage}"));
+        cf_stop(&place, &plain);
+    }
+    clean(&[&place.repo, &place.state]);
+}
+
+/// 索引を `word` の状態にする（absent は組み立て済みの表を外した後のまま・building は生きた持ち主の印・failed:rc は失敗の記録・undeclared は宣言を外す commit）。
+fn cf_enter(place: &IdxPlace, word: &str, live: &Path) {
+    match word {
+        "building" => assert!(fs::write(live, format!("{}\n", std::process::id())).is_ok(), "生きた持ち主の印を置く"),
+        "failed:rc" => {
+            assert!(fs::remove_file(live).is_ok(), "印を外す");
+            idxb_script(place, (IDXB_SCIP, "scip"), "exit 1\n");
+            assert_eq!(idxb_word(&idxb_line(&place.build(None, &[]))), "failed:rc", "失敗の記録を置く");
+        }
+        "undeclared" => {
+            let vessel = fs::read_to_string(place.repo.join(".vessel.toml")).unwrap_or_default().replace(IDXB_DECL, "");
+            assert!(fs::write(place.repo.join(".vessel.toml"), vessel).is_ok(), "宣言を書き換えられる");
+            git(&place.repo, &["add", "-A"]);
+            git(&place.repo, &["commit", "-q", "-m", "undeclare"]);
+        }
+        _ => {}
+    }
+}
+
+/// 欄を持つ行 a と、touches の型も持つ同じ行 t の受付と preflight が `word` で `code-facts-unmeasured` に断り（`index-building` にならず）run を作らない。
+fn cf_assert_unmeasured(place: &IdxPlace, word: &str, stage: usize) {
+    let (dirs, events) = (run_dirs(&place.state), event_count(&place.state));
+    for id in ["a", "t"] {
+        let refused = intake_raw(&place.repo, &place.state, &ixc_design(id), &format!("s2-cf{id}{stage}"));
+        let err = stderr_of(&refused);
+        assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "{word}/{id}: 測れない周は rc 1: {err}");
+        assert!(err.starts_with("pipe: code-facts-unmeasured ") && err.contains(word) && err.contains(CF_EQUAL[0]), "{word}/{id}: 名と状態の語と要素: {err}");
+        let checked = preflight_raw(&place.repo, &place.state, &ixc_design(id), &format!("s2-cfp{id}{stage}"), true);
+        assert_eq!(checked.status.code(), Some(i32::from(RC_REFUSED)), "{word}/{id}: preflight も断る: {}", stdout_of(&checked));
+        assert!(stderr_of(&checked).contains("code-facts-unmeasured"), "{word}/{id}: preflight の断り: {}", stderr_of(&checked));
+    }
+    assert_eq!((run_dirs(&place.state), event_count(&place.state)), (dirs, events), "{word}: run を作らない");
+}
+
+/// (d) 片方の key だけを名乗る repo では、欄だけを持つ行（touches の型を持たない）の受付と preflight が宣言の不備（key の名と行番号）で断り、touches の型も持つ
+/// 同じ行も同じ断りで、欄の無い行は通る。
+#[test]
+fn pipe_intake_code_facts_half_declaration_refuses_a_fielded_row_with_the_declaration() {
+    let half = "index-scip = [\"index-fake-scip {tree} {out}\"]\n";
+    let place = cf_place(&[cf_row("a", &[CF_EQUAL[0]], None), cf_row("t", &[CF_EQUAL[0]], Some(CF_ITEM)), ixc_plain_row("n")], half);
+    for id in ["a", "t"] {
+        let refused = intake_raw(&place.repo, &place.state, &ixc_design(id), &format!("s2-cfh{id}"));
+        let err = stderr_of(&refused);
+        assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "{id}: 片方だけの宣言は欄を持つ行を断る: {err}");
+        assert!(err.contains("index-roles") && err.contains("line=4") && !err.contains("code-facts"), "{id}: key の名と行番号を名指す: {err}");
+        let checked = preflight_raw(&place.repo, &place.state, &ixc_design(id), &format!("s2-cfq{id}"), true);
+        assert_eq!(checked.status.code(), Some(i32::from(RC_REFUSED)), "{id}: preflight も断る: {}", stdout_of(&checked));
+        assert!(stderr_of(&checked).contains("index-roles"), "{id}: {}", stderr_of(&checked));
+    }
+    let plain = intake_raw(&place.repo, &place.state, &ixc_design("n"), "s2-cfhn");
+    cf_stop(&place, &plain);
     clean(&[&place.repo, &place.state]);
 }
 

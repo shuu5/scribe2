@@ -1069,23 +1069,56 @@ fn contract_growth_schema_lists_growth_as_an_optional_list() {
     assert_eq!(tracked.matches(block).count(), 1, "growth は任意の list で 1 回: {tracked}");
 }
 
-/// §67 の (a): 欄 `code-facts` を持つ行の doc と key 3 つ（`teeth-check` / `index-scip` / `index-roles`）を持つ
-/// 宣言の repo は、欄と 3 key を消した同じ repo と判定行が同じ字で rc 0・findings 0（読んで値を捨てる）。欄 `done-teeth` は行 bw が
-/// 照らすので、この fixture は持たない（番号つきの項目の無い done は欄を持てない）。
+/// §67 の (a): key 3 つ（`teeth-check` / `index-scip` / `index-roles`）を持つ宣言の repo は、3 key を消した同じ repo と判定行が同じ字で rc 0・
+/// findings 0（読んで値を捨てる）。欄 `done-teeth` は行 bw が、欄 `code-facts` は行 e が照らすので、この fixture は持たない（番号つきの項目の無い
+/// done は欄を持てず、要素は形に合う値だけを持てる）。
 // flip-check: retroactive s2-07l.736.33.20.2
+// flip-check: retroactive s2-07l.736.33.21.6
 #[test]
 fn contract_fields_read_only_fields_and_keys_leave_the_verdict_unchanged() {
-    let fielded = table_doc(&table_region(&[table_row("a", &[("code-facts", "[\"crate::x::Y\", \"z\"]")])]));
-    let plain = table_doc(&table_region(&[table_row("a", &[])]));
+    let doc = table_doc(&table_region(&[table_row("a", &[])]));
     let keyed = format!("{TABLE_VESSEL}teeth-check = true\nindex-scip = [\"a.scip\"]\nindex-roles = [\"def\", \"ref\"]\n");
-    let with = table_repo(&fielded, &[(".vessel.toml", &keyed)]);
-    let without = table_repo(&plain, &[]);
+    let with = table_repo(&doc, &[(".vessel.toml", &keyed)]);
+    let without = table_repo(&doc, &[]);
     let (kept, bare) = (contracts_check(&with), contracts_check(&without));
     assert_eq!(kept.status.code(), Some(i32::from(RC_OK)), "{}{}", stdout_of(&kept), stderr_of(&kept));
     assert_eq!(bare.status.code(), Some(i32::from(RC_OK)), "{}{}", stdout_of(&bare), stderr_of(&bare));
     assert!(findings_of(&kept).is_empty(), "findings 0: {}", stdout_of(&kept));
-    assert_eq!(stdout_of(&kept), stdout_of(&bare), "判定行は 2 欄と 3 key を消した同じ repo と同じ字");
+    assert_eq!(stdout_of(&kept), stdout_of(&bare), "判定行は 3 key を消した同じ repo と同じ字");
     clean(&[&with, &without]);
+}
+
+/// 欄 `code-facts` の形の照らし（設計 reverse-index.md §7 (c)・行 e・接頭辞 `contract_code_facts_`）: 列が 7 語の外・値が 10 進でない・vis の字が 5 形の外・項目が
+/// `crate::` の path の形でない・`=` が無い要素の 5 行は、`code-facts-form` の 5 件を各行の見出しの行番号で名指して rc 1・判定行の findings=5。
+/// 7 列を 1 つずつ持つ適合の行（`pub(in <path>)` の vis を含む）は findings 0・rc 0（索引は読まない＝宣言の無い toy repo で撃つ）。
+#[test]
+fn contract_code_facts_names_five_unfit_forms_with_their_row_line() {
+    let cases = [
+        ("col", "[\"pages:crate::tint::Tint=1\"]"),
+        ("num", "[\"refs:crate::tint::Tint=many\"]"),
+        ("vis", "[\"vis:crate::tint::Tint=public\"]"),
+        ("path", "[\"refs:tint::Tint=1\"]"),
+        ("eq", "[\"refs:crate::tint::Tint\"]"),
+    ];
+    let rows: Vec<String> = cases.iter().map(|(id, value)| table_row(id, &[("code-facts", value)])).collect();
+    let doc = table_doc(&table_region(&rows));
+    let repo = table_repo(&doc, &[]);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "外れは rc 1: {text}{}", stderr_of(&out));
+    assert_eq!(found.len(), cases.len(), "5 件ちょうど（1 行 1 件）: {text}");
+    for (id, value) in cases {
+        let head = format!("contracts: docs/design/toy.md:{} contract-table:code-facts-form: ", table_line(&doc, id));
+        let element = value.trim_start_matches("[\"").trim_end_matches("\"]");
+        assert!(found.iter().any(|line| line.starts_with(&head) && line.contains(element)), "{id} を行の見出しの行で名指す: {text}");
+    }
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=5 untracked=0 findings=5 place-out=0/5"), "判定行: {text}");
+    let fit = "[\"refs:crate::tint::Tint=3\", \"files:crate::tint::Tint=2\", \"callers:crate::tint::show=0\", \"literals:crate::tint::Tint=4\", \"patterns:crate::tint::Tint=1\", \"teeth:crate::tint::Tint=5\", \"vis:crate::tint::Tint=pub(in crate::pipe)\"]";
+    let good = table_repo(&table_doc(&table_region(&[table_row("ok", &[("code-facts", fit)])])), &[]);
+    let passed = contracts_check(&good);
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "適合の 7 列は rc 0: {}{}", stdout_of(&passed), stderr_of(&passed));
+    assert_eq!(stdout_of(&passed).lines().collect::<Vec<&str>>(), ["contracts check: docs=1 rows=1 untracked=0 findings=0 place-out=0/1"]);
+    clean(&[&repo, &good]);
 }
 
 /// 欄 done-teeth の toy の宣言（`cargo` を許す＝行の verify に nextest の行を書ける）。

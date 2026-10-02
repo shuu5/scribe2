@@ -15,7 +15,7 @@ use super::super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePol
 use super::super::refuse::{covered, Refuse, NEW_FILE};
 use super::changed::{self, BaseAt, Gap};
 use super::{
-    read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DERIVED_GOAL, DESIGN_DIR, END,
+    code_fact, read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DERIVED_GOAL, DESIGN_DIR, END,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
 use crate::hook::command::denied_in;
@@ -50,6 +50,7 @@ pub fn check_table(doc: &str, rows: &[ContractRow], ids: &[&str], ctx: &Context<
         found.extend(unresolved.map(|id| Finding::table(TableError::DependsUnresolved { line: row.line, id: id.clone() })));
         found.extend(write_set_findings(row, ctx));
         found.extend(growth_findings(row));
+        found.extend(code_facts_findings(row));
         found.extend(super::done_teeth_findings(row));
         // 閉包・外形 pin・名指しは `.rs` / `.snap` の本文を読む。1 本でも読めなければ行ごとに 1 件で名指し、
         // 測れない検査は撃たない（読めなさを「足りない file なし」に読み替えない・NFR4）。
@@ -275,6 +276,13 @@ fn growth_findings(row: &ContractRow) -> Vec<Finding> {
             .map(|(item, reason)| Finding::table(TableError::GrowthForm { line: row.line, item, reason }))
             .collect(),
     }
+}
+
+/// 欄 `code-facts` の要素の形（設計 reverse-index.md §7 (c)・読み手は受付の測りと同じ 1 本 [`code_fact`]）: 崩れた要素を 1 件ずつ
+/// [`TableError::CodeFactsForm`] で行の見出しに名指す（索引は読まない）。
+pub(super) fn code_facts_findings(row: &ContractRow) -> Vec<Finding> {
+    let unfit = row.code_facts.iter().filter_map(|element| code_fact(element).err().map(|reason| (element, reason)));
+    unfit.map(|(element, reason)| Finding::table(TableError::CodeFactsForm { line: row.line, element: element.clone(), reason })).collect()
 }
 
 /// 閉包の入力（`.rs` と `.snap`）のうち読めない 1 本の理由（全部読めれば `None`・行ごとに 1 件で名指す材料）。
@@ -847,6 +855,7 @@ mod tests {
             targets: Vec::new(),
             growth: Vec::new(),
             done_teeth: Vec::new(),
+            code_facts: Vec::new(),
             goal: String::new(),
         }
     }

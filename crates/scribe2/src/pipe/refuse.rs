@@ -14,6 +14,7 @@
 //! （ADR-0009 §2.1 の既知の穴はそのまま）。
 
 use super::closure::ClosureError;
+use super::declaration::DECL_FILE;
 use super::review::{FindingKind, ROW_SAME_KIND_STOP};
 use super::table::TableError;
 use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
@@ -66,11 +67,17 @@ pub(crate) const REFUSALS: &[&str] = &[
     "entrance-not-red",
     "ruling-unresolved",
     "index-building",
+    "code-facts",
+    "code-facts-unmeasured",
 ];
 
 /// 起動の列の起こす側の 1 周が、受付の理由にこの語で待つ候補が在るとき、HEAD の code の索引の組み立てを裏で起こす契機の語
-/// （設計 reverse-index.md §7 (b)・文字列の列で引く＝待ちの理由の型を名指さない・行 e が `code-facts-unmeasured` を足す）。
-pub(crate) const INDEX_BUILD_TRIGGERS: &[&str] = &["index-building"];
+/// （設計 reverse-index.md §7 (b)・文字列の列で引く＝待ちの理由の型を名指さない・行 d が `index-building` を置き、行 e が
+/// `code-facts-unmeasured` を足した）。
+pub(crate) const INDEX_BUILD_TRIGGERS: &[&str] = &["index-building", "code-facts-unmeasured"];
+
+/// 欄 `code-facts` を持つ行が測れない周の状態の語のうち、宣言が索引の 2 key を名乗らない周の語（在り処は vessel 宣言の file）。
+pub(crate) const STATE_UNDECLARED: &str = "undeclared";
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +260,34 @@ pub(crate) enum Refuse {
         /// 索引の状態の語（`absent` か `building`）。
         state: String,
     },
+    /// 欄 `code-facts` の要素の名乗りの値が、base の code の索引の実測と違う（設計 reverse-index.md §7 (c)・行 e・受付が撃つ・起動の列は
+    /// 受付の理由 `code-facts` で待たせる）。1 件は先頭の違う要素で、残りの要素は断りの行の後ろに並ぶ。
+    CodeFacts(Box<Difference>),
+    /// 欄 `code-facts` を持つ行が、code の索引を測れない（状態が absent・building・failed・状態なし・undeclared・設計 reverse-index.md §7 (c)・
+    /// 行 e・名乗った事実を測らずに起動しない）。起動の列は受付の理由 `code-facts-unmeasured` で待たせる。
+    CodeFactsUnmeasured {
+        /// 名乗りの先頭の要素の字面。
+        element: String,
+        /// 測れない理由の状態の語（`absent`・`building`・`failed:<失敗の語>`・`none`・`undeclared`）。
+        state: String,
+    },
+}
+
+/// 欄 `code-facts` の名乗りと実測が違う要素 1 つ（[`Refuse::CodeFacts`] の中身・断りの型を小さく保つために箱に入れる）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Difference {
+    /// 要素の字面（`<列>:<項目>=<値>`）。
+    pub element: String,
+    /// 名乗りの値の字。
+    pub claimed: String,
+    /// 実測の値の字。
+    pub measured: String,
+    /// 実測の site の先頭 3 つ（`<path>:<行>`）。
+    pub sites: Vec<String>,
+    /// 先頭 3 つの後ろに残る site の件数。
+    pub rest: usize,
+    /// 母集団の字（`text=<件数>`・測れない周は `text=-`）。
+    pub text: String,
 }
 
 impl Refuse {
@@ -284,6 +319,8 @@ impl Refuse {
             Self::EntranceNotRed { .. } => "entrance-not-red",
             Self::RulingUnresolved { .. } => "ruling-unresolved",
             Self::IndexBuilding { .. } => "index-building",
+            Self::CodeFacts(_) => "code-facts",
+            Self::CodeFactsUnmeasured { .. } => "code-facts-unmeasured",
         }
     }
 
@@ -334,12 +371,7 @@ impl Refuse {
             Self::HandWrittenContract { ref path } => {
                 format!("手書きの契約 file は受け付けない（{path}）＝契約の正本は設計 doc の行で、--design <doc>#<id> を渡す")
             }
-            Self::SameKindRepeated { kind, ref runs, stop } => format!(
-                "審査 FAIL の型 {} が {} 便続き {ROW_SAME_KIND_STOP} の {stop} に達した（run {}）のに契約 file と節の本文がともに不変＝焼き直しは書き直す",
-                kind.as_str(),
-                runs.len(),
-                runs.join(", ")
-            ),
+            Self::SameKindRepeated { kind, ref runs, stop } => repeated_reason(kind, runs, stop),
             Self::FindingUnaddressed { kind, ref at } => {
                 format!("直前の便の審査の指摘（{}）に対応する差分が無い（{}）", kind.as_str(), at.join(", "))
             }
@@ -358,6 +390,8 @@ impl Refuse {
             }
             Self::RulingUnresolved { ref section, ref row, ref unmeasured } => ruling_reason(self.as_str(), [section, row], unmeasured.as_deref()),
             Self::IndexBuilding { ref state } => index_building_reason(self.as_str(), state),
+            Self::CodeFacts(ref found) => code_facts_reason(self.as_str(), found),
+            Self::CodeFactsUnmeasured { ref element, ref state } => unmeasured_reason(self.as_str(), element, state),
         }
     }
 
@@ -376,7 +410,9 @@ impl Refuse {
             | Self::TeethPlaceUnresolved { .. }
             | Self::FnUndeclared { .. }
             | Self::TeethOutsideWriteSet { .. }
-            | Self::PromiseSymbolUnresolved { .. } => Evidence::Name,
+            | Self::PromiseSymbolUnresolved { .. }
+            | Self::CodeFacts(_) => Evidence::Name,
+            Self::CodeFactsUnmeasured { ref state, .. } if state == STATE_UNDECLARED => Evidence::Files(vec![DECL_FILE.to_owned()]),
             Self::NotARepo { .. }
             | Self::DuplicateRun { .. }
             | Self::WriteSetOverlap { .. }
@@ -386,7 +422,8 @@ impl Refuse {
             | Self::MaxLive { .. }
             | Self::EntranceNotRed { .. }
             | Self::RulingUnresolved { .. }
-            | Self::IndexBuilding { .. } => Evidence::Place,
+            | Self::IndexBuilding { .. }
+            | Self::CodeFactsUnmeasured { .. } => Evidence::Place,
             Self::ContractTable(ref found) => found.evidence(),
         }
     }
@@ -416,7 +453,9 @@ impl Refuse {
             | Self::PromiseSymbolUnresolved { .. }
             | Self::MaxLive { .. }
             | Self::EntranceNotRed { .. }
-            | Self::IndexBuilding { .. } => RC_REFUSED,
+            | Self::IndexBuilding { .. }
+            | Self::CodeFacts(_)
+            | Self::CodeFactsUnmeasured { .. } => RC_REFUSED,
             Self::RulingUnresolved { ref unmeasured, .. } if unmeasured.is_some() => RC_BROKEN,
             Self::RulingUnresolved { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
@@ -428,6 +467,24 @@ impl Refuse {
 /// 索引の組み立て中の断りの 1 行（設計 reverse-index.md §7 (b)・名と状態の語 `absent` か `building` を名指す）。
 fn index_building_reason(name: &str, state: &str) -> String {
     format!("{name} code の索引が作り中（{state}）＝touches に型を持つ行は索引が ready になるまで受け付けない")
+}
+
+/// 同型の停止の断りの 1 行（設計 contract-source.md §23・型と本数と行の値と便 id の列を名指す）。
+fn repeated_reason(kind: FindingKind, runs: &[String], stop: u64) -> String {
+    let (name, count, joined) = (kind.as_str(), runs.len(), runs.join(", "));
+    format!("審査 FAIL の型 {name} が {count} 便続き {ROW_SAME_KIND_STOP} の {stop} に達した（run {joined}）のに契約 file と節の本文がともに不変＝焼き直しは書き直す")
+}
+
+/// 欄 `code-facts` を持つ行が索引を測れない断りの 1 行（設計 reverse-index.md §7 (c)・要素と状態の語を名指す）。
+fn unmeasured_reason(name: &str, element: &str, state: &str) -> String {
+    format!("{name} 名乗りの事実 {element} を測れない（{state}）＝欄 code-facts を持つ行は索引が ready になるまで受け付けない")
+}
+
+/// 欄 `code-facts` の名乗りと実測の違いの断りの 1 行（設計 reverse-index.md §7 (c)・要素・名乗り・実測・site の先頭 3 つと残りの件数・母集団を名指す）。
+fn code_facts_reason(name: &str, found: &Difference) -> String {
+    let Difference { element, claimed, measured, sites, rest, text } = found;
+    let places = if sites.is_empty() { "なし".to_owned() } else { sites.join(", ") };
+    format!("{name} {element} 名乗り {claimed} 実測 {measured}（実測の site: {places}・残り {rest} 件・{text}）")
 }
 
 /// 裁定 id の引用の断りの 1 行（設計 dispatcher.md §37 約束 4）。測れた周は置き場（設計の節 → 契約表の行の順・空の置き場は書かない）
@@ -634,7 +691,9 @@ fn covers(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{covered, discern, normalize, overlaps, Certainty, ClosureError, Evidence, FindingKind, Refuse, INDEX_BUILD_TRIGGERS, REFUSALS};
+    use super::{
+        covered, discern, normalize, overlaps, Certainty, ClosureError, Difference, Evidence, FindingKind, Refuse, INDEX_BUILD_TRIGGERS, REFUSALS,
+    };
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::pipe::table::TableError;
     use proptest::prelude::*;
@@ -687,6 +746,15 @@ mod tests {
                 unmeasured: None,
             },
             Refuse::IndexBuilding { state: "absent".to_owned() },
+            Refuse::CodeFacts(Box::new(Difference {
+                element: "refs:crate::pipe::refuse::Refuse=3".to_owned(),
+                claimed: "3".to_owned(),
+                measured: "5".to_owned(),
+                sites: vec!["src/a.rs:1".to_owned(), "src/b.rs:2".to_owned(), "src/c.rs:3".to_owned()],
+                rest: 2,
+                text: "text=9".to_owned(),
+            })),
+            Refuse::CodeFactsUnmeasured { element: "refs:crate::pipe::refuse::Refuse=3".to_owned(), state: "absent".to_owned() },
         ]
     }
 
@@ -797,6 +865,7 @@ mod tests {
 
     // flip-check: retroactive s2-07l.738.37.4
     // flip-check: retroactive s2-07l.736.33.21.5
+    // flip-check: retroactive s2-07l.736.33.21.6
     /// 名前の slice は **宣言順**で、`as_str` の網羅 match と 1 対 1 である（ADR-0013 §2.1）。
     #[test]
     fn refuse_names_are_pinned_in_declaration_order() {
@@ -811,11 +880,13 @@ mod tests {
         assert_eq!(names.get(3).copied(), Some("write-set-unreadable"), "{names:?}");
         // 約束の行の 2 理由（設計 contract-source.md §33・`s2-07l.512`）が同時本数の上限（gate-cost.md §24・`s2-07l.398`）の
         // 手前に並び、base の木で撃った入口の断り（pipeline.md §56・`s2-07l.557`）がその次で、裁定 id の引用の断り（dispatcher.md
-        // §37・行 al）がその次で、索引の組み立て中の断り（reverse-index.md §7 (b)・行 d）が末尾で、母集団は 25 値。
-        assert_eq!(REFUSALS.len(), 25, "母集団 25 値");
-        assert_eq!(names.last().copied(), Some("index-building"), "末尾は索引の組み立て中");
+        // §37・行 al）がその次で、索引の組み立て中の断り（reverse-index.md §7 (b)・行 d）がその次で、欄 code-facts の違いと測れない周の
+        // 2 断り（§7 (c)・行 e）が末尾で、母集団は 27 値。
+        assert_eq!(REFUSALS.len(), 27, "母集団 27 値");
+        assert_eq!(names.last().copied(), Some("code-facts-unmeasured"), "末尾は欄 code-facts の測れない周");
+        assert_eq!(names.iter().rev().skip(1).take(2).copied().collect::<Vec<&str>>(), ["code-facts", "index-building"]);
         assert_eq!(
-            names.iter().rev().skip(1).take(4).copied().collect::<Vec<&str>>(),
+            names.iter().rev().skip(3).take(4).copied().collect::<Vec<&str>>(),
             ["ruling-unresolved", "entrance-not-red", "max-live", "promise-symbol-unresolved"]
         );
         let entrance = samples().get(22).map(|found| (found.reason(), found.rc()));
@@ -835,10 +906,12 @@ mod tests {
 
     // flip-check: retroactive s2-07l.738.37.4
     // flip-check: retroactive s2-07l.736.33.21.5
+    // flip-check: retroactive s2-07l.736.33.21.6
     /// 在り処は `REFUSALS` の 23 語の母集団で 1 語に 1 つずつ決まる（設計 dispatcher.md §27 形 3・宣言順）: 行の字だけで
     /// 決まる 3 語・名指した file の 4 語（file は payload の字面）・本文の読み手の 7 語・置き場と host の 8 語・契約表の
     /// 欠陥は理由の側（samples の `section-missing` は行）。名の 23 は歯を置いた時の語数で、行 al が置き場と host に 1 語足し（24 語）、
-    /// 行 d が置き場と host に索引の組み立て中の 1 語を足した（25 語）。
+    /// 行 d が置き場と host に索引の組み立て中の 1 語を足し（25 語）、行 e が本文の読み手に 1 語（code-facts）・置き場と host に 1 語
+    /// （code-facts-unmeasured・宣言を名乗らない周だけ vessel 宣言の file）を足した（27 語）。
     #[test]
     fn pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words() {
         let found: Vec<(&str, String)> = samples().iter().map(|refuse| (refuse.as_str(), refuse.evidence().render())).collect();
@@ -868,6 +941,8 @@ mod tests {
             ("entrance-not-red", "place"),
             ("ruling-unresolved", "place"),
             ("index-building", "place"),
+            ("code-facts", "name"),
+            ("code-facts-unmeasured", "place"),
         ];
         let want: Vec<(&str, String)> = want.iter().map(|(name, at)| (*name, (*at).to_owned())).collect();
         assert_eq!(found, want, "母集団 {} 語の在り処", REFUSALS.len());
@@ -944,12 +1019,46 @@ mod tests {
         assert!(REFUSALS.contains(&absent.as_str()), "語は REFUSALS に在る");
     }
 
-    /// 索引の組み立てを裏で起こす契機の語の列は断りの file の 1 か所に在り、行 d の時点では `index-building` の 1 語で、その語は
-    /// 断りの語（[`REFUSALS`]）の 1 つである。
+    /// 索引の組み立てを裏で起こす契機の語の列は断りの file の 1 か所に在り、行 d が置いた `index-building` に行 e が
+    /// `code-facts-unmeasured` を足した 2 語で、その語は断りの語（[`REFUSALS`]）の 2 つである。
     #[test]
-    fn refuse_index_building_trigger_words_are_the_one_word() {
-        assert_eq!(INDEX_BUILD_TRIGGERS, ["index-building"], "契機の語は 1 語");
+    fn refuse_index_building_trigger_words_are_the_two_words() {
+        assert_eq!(INDEX_BUILD_TRIGGERS, ["index-building", "code-facts-unmeasured"], "契機の語は 2 語");
         assert!(INDEX_BUILD_TRIGGERS.iter().all(|word| REFUSALS.contains(word)), "契機の語は断りの語");
+    }
+
+    /// 欄 `code-facts` の 2 断り（設計 reverse-index.md §7 (c)・行 e）: 語は REFUSALS の末尾が code-facts・code-facts-unmeasured の順で、rc 1・1 行。
+    /// 違いの断りは要素・名乗り・実測・site の先頭 3 つと残りの件数・母集団を名指し、在り処は本文の読み手。測れない周の断りは要素と状態の語を名指し、
+    /// 在り処は置き場（undeclared だけ vessel 宣言の file）で、確からしさは absent が unmeasured・undeclared が firm。
+    #[test]
+    fn refuse_code_facts_names_the_difference_and_the_unmeasured_state() {
+        let tail: Vec<&str> = REFUSALS.iter().rev().take(2).copied().collect();
+        assert_eq!(tail, ["code-facts-unmeasured", "code-facts"], "末尾 2 語は code-facts・code-facts-unmeasured の順");
+        let differ = Refuse::CodeFacts(Box::new(Difference {
+            element: "literals:crate::x::Y=2".to_owned(),
+            claimed: "2".to_owned(),
+            measured: "4".to_owned(),
+            sites: vec!["src/a.rs:1".to_owned(), "src/b.rs:2".to_owned(), "src/c.rs:3".to_owned()],
+            rest: 1,
+            text: "text=7".to_owned(),
+        }));
+        let line = differ.reason();
+        for want in ["code-facts ", "literals:crate::x::Y=2", "名乗り 2", "実測 4", "src/a.rs:1, src/b.rs:2, src/c.rs:3", "残り 1 件", "text=7"] {
+            assert!(line.contains(want), "{want}: {line}");
+        }
+        assert_eq!((differ.rc(), differ.evidence()), (RC_REFUSED, Evidence::Name), "rc 1・在り処は本文の読み手");
+        let unmeasured = |state: &str| Refuse::CodeFactsUnmeasured { element: "refs:crate::x::Y=1".to_owned(), state: state.to_owned() };
+        for state in ["absent", "building", "failed:rc", "none"] {
+            let line = unmeasured(state).reason();
+            assert!(line.starts_with("code-facts-unmeasured ") && line.contains("refs:crate::x::Y=1") && line.contains(state), "{line}");
+            assert_eq!((unmeasured(state).rc(), unmeasured(state).evidence()), (RC_REFUSED, Evidence::Place), "{state}: 置き場");
+        }
+        let undeclared = unmeasured("undeclared");
+        assert_eq!(undeclared.evidence(), Evidence::Files(vec![crate::pipe::declaration::DECL_FILE.to_owned()]), "宣言の file");
+        assert_eq!(discern(&undeclared.evidence(), &["src/a.rs".to_owned()]), Certainty::Firm, "undeclared は確定");
+        assert_eq!(discern(&unmeasured("absent").evidence(), &["src/a.rs".to_owned()]), Certainty::Unmeasured, "absent は測れない");
+        assert!([differ, undeclared].iter().all(|found| !found.reason().contains('\n')), "理由は 1 行");
+        assert_eq!(INDEX_BUILD_TRIGGERS.last().copied(), Some("code-facts-unmeasured"), "契機の語の末尾");
     }
 
     /// **rc は variant が持つ**: 読めない周だけ rc 2 で、残りは rc 1。理由は run / path を名乗る。

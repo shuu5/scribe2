@@ -44,6 +44,7 @@ pub use parse::{
     contract_id, find_row, form_of, parse_pointer, promises_of, read_rows, read_table, Form, Pointer, PointerError,
 };
 pub(crate) use check::{check_repo, declared_files, design_docs, read, read_all, repo_findings, tracked_files, Located};
+pub(crate) use parse::{code_fact, Claim};
 /// 区間の始まりの行（CLAUDE.md の憲法区間と同じ marker 形・行全体が marker の行だけを数える）。
 pub const BEGIN: &str = "<!-- contracts:begin -->";
 
@@ -195,7 +196,7 @@ pub struct PromiseRow {
 }
 
 /// 契約表の 1 行（欄は [`FIELDS`]・任意の列の「無い」は空）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContractRow {
     /// 行の見出し（`[[contract]]`）の doc 上の行番号。
     pub line: u64,
@@ -237,6 +238,8 @@ pub struct ContractRow {
     pub growth: Vec<String>,
     /// done の番号つき項目ごとの歯の対応（`<番号>:<歯>` の列・空 = 欄を持たない行・設計 contract-source.md §66 形 1・行 bw）。
     pub done_teeth: Vec<String>,
+    /// 欄 `code-facts` の要素（`<列>:<項目>=<値>` の列・空 = 欄を持たない行・設計 reverse-index.md §7 (c)・生成する契約 file には写さない）。
+    pub code_facts: Vec<String>,
     /// 節の本文の逐語（導出物の行だけの欄 [`DERIVED_GOAL`]・空 = `section` の節を doc から読む・設計 contract-source.md §47）。
     pub goal: String,
 }
@@ -426,6 +429,16 @@ pub enum TableError {
         /// 置き場の外を指していた pointer の path。
         path: String,
     },
+    /// 欄 `code-facts` の要素が形を崩す（列が 7 語の外・項目が path の形でない・値が 10 進でない〔vis は 5 形の外〕・`=` が無い・行の見出しの行・
+    /// 1 件に 1 要素・設計 reverse-index.md §7 (c)・FR47 / FR55・索引は読まない）。
+    CodeFactsForm {
+        /// 行番号。
+        line: u64,
+        /// 崩れた要素の字面。
+        element: String,
+        /// 崩れの理由（要素の読み手の 1 本が返す字面）。
+        reason: String,
+    },
 }
 
 impl TableError {
@@ -454,7 +467,8 @@ impl TableError {
             | Self::DoneTeeth { line, .. }
             | Self::DoneUnnumbered { line }
             | Self::DoneTeethMissing { line }
-            | Self::PlaceOutside { line, .. } => line,
+            | Self::PlaceOutside { line, .. }
+            | Self::CodeFactsForm { line, .. } => line,
         }
     }
 
@@ -484,6 +498,7 @@ impl TableError {
             Self::DoneUnnumbered { .. } => "done-unnumbered",
             Self::DoneTeethMissing { .. } => "done-teeth-missing",
             Self::PlaceOutside { .. } => "place-outside",
+            Self::CodeFactsForm { .. } => "code-facts-form",
         }
     }
 
@@ -533,6 +548,7 @@ impl TableError {
             Self::DoneTeeth { ref element, ref reason, .. } => format!("done-teeth {element:?} が外れている: {reason}"),
             Self::DoneUnnumbered { .. } => DONE_UNNUMBERED.to_owned(),
             Self::DoneTeethMissing { .. } => DONE_TEETH_MISSING.to_owned(),
+            Self::CodeFactsForm { ref element, ref reason, .. } => format!("code-facts {element:?} が崩れている: {reason}"),
             Self::PlaceOutside { ref path, .. } => format!(
                 "{path} は契約表の置き場の外（受付の pointer の置き場は既定の {DESIGN_DIR} 直下の .md と、宣言 {DECL_FILE} の key contract-tables の項目だけ）"
             ),
@@ -572,7 +588,8 @@ impl TableError {
             | Self::GrowthForm { .. }
             | Self::ClassUndeclared { .. }
             | Self::DoneUnnumbered { .. }
-            | Self::DoneTeethMissing { .. } => Evidence::Row,
+            | Self::DoneTeethMissing { .. }
+            | Self::CodeFactsForm { .. } => Evidence::Row,
         }
     }
 }
@@ -740,7 +757,7 @@ mod tests {
     use super::changed::{changed, gaps, Gap};
     use super::teeth::{done_teeth_located, done_teeth_misses, Given};
     use super::{
-        declared_files, design_docs, read_rows, read_table, render_schema, tracked_files, Base, Class, Need, Shape, Source,
+        check, code_fact, declared_files, design_docs, Claim, read_rows, read_table, render_schema, tracked_files, Base, Class, Need, Shape, Source,
         TableError, DERIVED_GOAL, FIELDS, PROMISE_FIELDS, WHOLE_HEAD,
     };
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
@@ -825,6 +842,7 @@ mod tests {
         "done-unnumbered",
         "done-teeth-missing",
         "place-outside",
+        "code-facts-form",
     ];
 
     /// 宣言順に 1 つずつ組んだ全 variant（行番号は 1 から順）。
@@ -854,16 +872,18 @@ mod tests {
             TableError::DoneUnnumbered { line: 21 },
             TableError::DoneTeethMissing { line: 22 },
             TableError::PlaceOutside { line: 23, path: text("contracts/t.toml") },
+            TableError::CodeFactsForm { line: 24, element: text("nope:crate::x::Y=1"), reason: text("r") },
         ]
     }
 
     /// 名前の slice は宣言順で `as_str` と 1 対 1・各 variant は行番号と 1 行の理由を持ち、読めない周だけ rc 2。
     #[test]
     fn table_error_names_are_pinned_in_declaration_order_and_carry_their_line() {
+        // flip-check: retroactive s2-07l.736.33.21.6
         let found = samples();
         let names: Vec<&str> = found.iter().map(TableError::as_str).collect();
         assert_eq!(names, TABLE_ERRORS, "名前の slice は宣言順（母集団 {} 値）", TABLE_ERRORS.len());
-        assert_eq!(TABLE_ERRORS.len(), 23, "母集団は 23 値");
+        assert_eq!(TABLE_ERRORS.len(), 24, "母集団は 24 値");
         for (index, error) in found.iter().enumerate() {
             assert_eq!(error.line(), index as u64 + 1, "{} は行番号を持つ", error.as_str());
             assert!(!error.reason().is_empty() && !error.reason().contains('\n'), "{} の理由は 1 行", error.as_str());
@@ -899,11 +919,12 @@ mod tests {
     /// 変わった行の要否の 2 語（done-unnumbered・done-teeth-missing）は行の字だけで決まる。
     #[test]
     fn pipe_table_evidence_is_decided_once_for_every_variant() {
+        // flip-check: retroactive s2-07l.736.33.21.6
         use crate::pipe::refuse::Refuse;
         let found: Vec<&str> = samples().iter().map(|error| error.evidence().as_str()).collect();
         let want = [
             "row", "row", "place", "row", "row", "row", "row", "row", "row", "row", "name", "row", "row", "row", "name", "row",
-            "row", "files", "files", "name", "row", "row", "files",
+            "row", "files", "files", "name", "row", "row", "files", "row",
         ];
         assert_eq!(found, want, "母集団 {} variant の在り処（宣言順）", TABLE_ERRORS.len());
         assert_eq!(found.len(), TABLE_ERRORS.len(), "全 variant に 1 つ");
@@ -1210,5 +1231,38 @@ mod tests {
         assert_eq!(gaps("番号の無い done", &[]), [Gap::Unnumbered, Gap::Missing], "両方");
         assert_eq!(gaps("（１）全角の番号", &[]), [Gap::Unnumbered, Gap::Missing], "全角の番号は項目でない");
         assert!(gaps("", &[]).is_empty(), "done を持たない行（Promised）には求めない");
+    }
+
+    /// (g) 欄 `code-facts` の形（設計 reverse-index.md §7 (c)・行 e）: 列が 7 語の外・値が 10 進でない・vis の字が 5 形の外・項目が path の形でない・`=` が
+    /// 無い要素の 5 行は `code-facts-form` の 5 件を各行の見出しの行番号で名指し、7 列を 1 つずつ持つ適合の要素の行（`pub(in <path>)` の vis を含む）は 0 件。
+    /// 要素の読み（`code_fact`）は件数と vis の字を名乗りの値として返す。
+    #[test]
+    fn contract_check_code_facts_names_five_unfit_forms_with_their_row_line() {
+        let unfit = [
+            "[\"pages:crate::x::Y=1\"]",
+            "[\"refs:crate::x::Y=many\"]",
+            "[\"vis:crate::x::Y=public\"]",
+            "[\"refs:x::Y=1\"]",
+            "[\"refs:crate::x::Y\"]",
+        ];
+        let fit = "[\"refs:crate::x::Y=3\", \"files:crate::x::Y=2\", \"callers:crate::x::z=0\", \"literals:crate::x::Y=4\", \"patterns:crate::x::Y=1\", \"teeth:crate::x::Y=5\", \"vis:crate::x::Y=pub(in crate::pipe)\"]";
+        let mut doc = String::new();
+        for (index, value) in unfit.iter().chain([&fit]).enumerate() {
+            let one = full_row(&[("id", &format!("\"r{index}\"")), ("code-facts", value)]);
+            doc.push_str(if index == 0 { &one } else { one.trim_start_matches("schema = 1\n") });
+        }
+        let rows = read_rows("t.toml", &doc).unwrap_or_default();
+        assert_eq!(rows.len(), 6, "5 つの崩れと適合の 1 行");
+        for (row, case) in rows.iter().zip(unfit) {
+            let found = check::code_facts_findings(row);
+            assert_eq!(found.len(), 1, "{case}: 1 要素に 1 件");
+            let line = found.first().map(|finding| finding.render("t.toml")).unwrap_or_default();
+            let head = format!("contracts: t.toml:{} contract-table:code-facts-form: ", row.line);
+            assert!(line.starts_with(&head), "{case}: 行の見出しの行番号で名指す: {line}");
+        }
+        assert!(rows.last().is_some_and(|row| row.code_facts.len() == 7 && check::code_facts_findings(row).is_empty()), "適合の 7 列は 0 件");
+        assert_eq!(code_fact("vis:crate::x::Y=pub(in crate::pipe)").map(|found| found.claim), Ok(Claim::Vis("pub(in crate::pipe)".to_owned())), "vis の字");
+        assert_eq!(code_fact("refs:crate::x::Y=12").map(|found| (found.column, found.claim)), Ok(("refs", Claim::Count(12))), "10 進の件数");
+        assert!(code_fact("refs:crate::x::Y=+1").is_err() && code_fact("refs:crate::x::Y=pub").is_err(), "符号つきと vis の字は件数でない");
     }
 }

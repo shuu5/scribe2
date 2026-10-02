@@ -49,7 +49,9 @@ struct Line {
     goal: String,
 }
 
-/// ref の木の契約表の全行（置き場の宣言と列挙の 1 関数 `design_docs` で絞った doc の行・doc の本文つき）。
+/// ref の木の契約表の全行（置き場の宣言と列挙の 1 関数 `design_docs` で絞った doc の行・doc の本文つき・既定は行 0 本＝rows 列が
+/// 空の表で、行 e の測りが rows 列を読まずに数える）。
+#[derive(Default)]
 pub(in crate::pipe) struct Tables {
     /// 全行（doc の順と行の順）。
     lines: Vec<Line>,
@@ -295,6 +297,34 @@ pub(in crate::pipe) fn count(ctx: &Ctx<'_>, item: &str, scope: &Scope<'_>) -> Co
     let rows = other_rows(ctx.tables, item, scope.own, &sites);
     let population = population(ctx, item, &symbols);
     Counted { item: item.to_owned(), state, marked: scope.marks.is_some(), columns, vis, rows, population }
+}
+
+/// 数えの読み口（欄 `code-facts` の測り〔行 e〕が読む・描きの [`render`] と同じ値を返し、数えの本体と字は変えない）。
+impl Counted {
+    /// 列 `name` の site（`<path>:<行>`・数えの順）。symbol が複数に解けた周と列の名が無い周は `None`・解けない周は空。
+    pub(in crate::pipe) fn sites(&self, name: &str) -> Option<Vec<String>> {
+        let (_, hits) = self.columns.iter().find(|(word, _)| *word == name)?;
+        Some(hits.iter().map(|found| format!("{}:{}", found.file, found.line)).collect())
+    }
+
+    /// 定義の可視性の字（`pub`・`pub(crate)`・`pub(in <path>)`・`private` など・解けない周と複数に解けた周は `None`）。
+    pub(in crate::pipe) fn definition_vis(&self) -> Option<String> {
+        let chain = self.vis.strip_prefix("定義 ")?;
+        chain.split(" ← ").next().filter(|word| *word != "?").map(str::to_owned)
+    }
+
+    /// symbol が複数に解けた周の候補の数。
+    pub(in crate::pipe) fn ambiguous(&self) -> Option<usize> {
+        match &self.state {
+            State::Many(many) => Some(many.len()),
+            State::One(_) | State::Unresolved => None,
+        }
+    }
+
+    /// 母集団の `text=`（項目の最後の節の名が語の境界で現れる行の数・git を撃てない周は `None`）。
+    pub(in crate::pipe) fn text(&self) -> Option<usize> {
+        self.population.as_ref().map(|pop| pop.text)
+    }
 }
 
 /// 候補の定義の site（`<path>:<行>`）。
