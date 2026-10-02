@@ -1935,3 +1935,361 @@ fn pipe_dispatch_sibling_wait_precedes_the_row_reservation() {
     assert_eq!(reason_of(&out, &sib("m")), format!("reserved:{FALLEN}/1"), "対照: 別の節の交差する候補は行の予約（{}）", told(&out));
     clean(&[&repo, &state]);
 }
+
+// ───── 起こす便が 0 の周の memo の審査の渡し（設計 dispatcher.md §42・契約表の行 aq・接頭辞 `pipe_dispatch_memo_triage_`） ─────
+
+/// 偽の lens が合図を待つ上限と、記録を待つ測る側の上限（秒・裏の子と測る側が同じ期限）。
+const TRIAGE_DEADLINE_S: u64 = 20;
+
+/// 引き金の満ちない（期日が未来の）開いた memo。作られた時刻は呼び手が選ぶ。
+fn triage_memo(id: &str, created: &str) -> String {
+    memo_of(id, "open", Some(created), &["引き金: 期日 2999-01-01T00:00Z"], "")
+}
+
+/// 偽の lens（呼びの材料の path を記し、合図の file が置かれるまで終わらず、keep を返す）。`open` が真なら合図を先に置く。返すのは `--lens` の値と合図の path。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn triage_lens(state: &Path, name: &str, open: bool) -> (String, std::path::PathBuf) {
+    let spy = memo_spy(state, name);
+    fs::create_dir_all(&spy).expect("偽 lens の置き場を作れる");
+    let gate = spy.join("gate");
+    if open {
+        fs::write(&gate, "").expect("合図を置ける");
+    }
+    let body = format!(
+        "printf '%s\\n' \"$2\" >> '{d}/calls'\nn=0\nwhile [ ! -e '{d}/gate' ] && [ \"$n\" -lt {tries} ]; do sleep 0.05; n=$((n + 1)); done\n\
+         printf '%s\\n' '{{\"verdict\":\"keep\",\"evidence\":\"e\",\"sketch\":\"\"}}'\n",
+        d = spy.display(),
+        tries = TRIAGE_DEADLINE_S * 20
+    );
+    let path = script(&state.join(format!("{name}.sh")), &body);
+    (format!("sh {path} --contract {{contract}} --worktree {{worktree}}"), gate)
+}
+
+/// 偽の lens が呼ばれた memo の id（字の順）を `want` 本まで期限つきで待ち、遅れて来る呼びを数えるため少し待ってから返す。
+fn triage_called(state: &Path, name: &str, want: usize) -> Vec<String> {
+    let read = || -> Vec<String> {
+        let text = fs::read_to_string(memo_spy(state, name).join("calls")).unwrap_or_default();
+        let mut ids: Vec<String> = text
+            .lines()
+            .filter_map(|line| Path::new(line).parent()?.file_name()?.to_str().map(str::to_owned))
+            .collect();
+        ids.sort();
+        ids
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TRIAGE_DEADLINE_S);
+    while read().len() < want && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    read()
+}
+
+/// 置き場に `fired` が在る memo の id（`ids` の順）。親の周が子を起こす前に書くので、周が返った直後に確かに測れる。
+fn triage_fired(state: &Path, ids: &[&str]) -> Vec<String> {
+    ids.iter().filter(|id| memo_place(state, id).join("fired").exists()).map(|id| (*id).to_owned()).collect()
+}
+
+/// 列の写し（[`dispatch_rules`]）に memo の審査の 2 行（間隔・本数）を足した写し（`None` は行を持たない写し）。lock の待ちは短くする。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn triage_rules(state: &Path, name: &str, (interval, per_round): (Option<u64>, Option<u64>)) -> String {
+    let base = fs::read_to_string(dispatch_rules(state)).expect("列の写しを読める");
+    let from = "kind = \"LockRetryMs\"\nvalue = 5000";
+    assert!(base.contains(from), "行の字面が在る");
+    let mut body = base.replace(from, "kind = \"LockRetryMs\"\nvalue = 100");
+    for (id, kind, value) in [("memo.triage_interval_h", "MemoTriageIntervalH", interval), ("memo.triage_per_round", "MemoTriagePerRound", per_round)] {
+        if let Some(value) = value {
+            body.push_str(&format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"));
+        }
+    }
+    let path = state.join(format!("rules-triage-{name}.toml"));
+    fs::write(&path, body).expect("写しを書ける");
+    path.display().to_string()
+}
+
+/// 列の 1 周（`listing` が真なら観測の `dispatch ls`・偽なら起こす側の手動の 1 周）。`lens` が `None` なら `--lens` を渡さない。
+fn triage_round(repo: &Path, state: &Path, (bd, rules, lens): (&str, &str, Option<&str>), listing: bool) -> Output {
+    let (state, repo) = (state.display().to_string(), repo.display().to_string());
+    let mut args = vec!["dispatch"];
+    if listing {
+        args.push("ls");
+    }
+    args.extend(["--state-dir", &state, "--repo", &repo, "--rules", rules, "--bd", bd, "--runner", IMPLEMENT]);
+    if let Some(lens) = lens {
+        args.extend(["--lens", lens]);
+    }
+    run_pipe(&args)
+}
+
+/// 局面の出力を置く（`actionable` の memo が memo-actionable の部品）。入力の印は比べない組が空なので固定の値でよい。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn triage_output_put(state: &Path, actionable: &[&str]) {
+    use vessel::case::{Extra, Kind, Links, Part, Phase, Turn};
+    use vessel::fleet::lifecycle::{render_output, Output, Owned, Scope};
+    use vessel::fleet::lifecycle_mark::{Events, Ledger, Marks};
+    let stamp = vessel::fleet::cli::format_utc(vessel::seat::state::now_secs().saturating_sub(600));
+    let parts = actionable
+        .iter()
+        .map(|id| Part {
+            part: Kind::Memo,
+            id: (*id).to_owned(),
+            phase: Phase::MemoActionable,
+            turn: Turn::Seat,
+            since: None,
+            reason: None,
+            closed: false,
+            overdue: None,
+            links: Links::default(),
+            extra: Extra::Memo { due: None, triggers: None, keep: None },
+        })
+        .collect();
+    let out = Output {
+        generated_at: stamp.clone(),
+        scope: Scope::Full,
+        full_at: stamp,
+        interval_s: Some(600),
+        closed_window_h: Some(72),
+        marks: Marks { ledger: Ledger::Files { len: 1, mtime_ns: 1 }, events: Events { len: 0, head: None }, main: "a".repeat(40) },
+        unmeasured: Vec::new(),
+        owned: Owned::default(),
+        parts,
+    };
+    let dir = state.join("fleet");
+    fs::create_dir_all(&dir).expect("fleet の dir を作れる");
+    fs::write(dir.join("lifecycle.json"), render_output(&out)).expect("出力を置ける");
+}
+
+/// 生きた持ち主が書き直しの lock を持っている形にする（書き直しは Busy になる）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn triage_hold_lifecycle_lock(state: &Path) {
+    let dir = state.join("fleet");
+    fs::create_dir_all(&dir).expect("fleet の dir を作れる");
+    fs::write(dir.join("lifecycle.lock"), format!("{}\n", std::process::id())).expect("lock を置ける");
+}
+
+/// (a) 本数と待たない: 引き金の満ちない間隔の外の memo 3 本と per_round 2 の写しで、手動の 1 周は作られた時刻の古い順に 2 本を撃ち（id の順ではない）、
+/// 3 本目は撃たない。撃った memo の置き場に `fired` の時刻が在る。偽の lens は合図まで終わらず、周は rc 0 で返り、返った時点で `verdict` が無く、
+/// 合図の後に 2 本の `verdict` が現れる。
+///
+/// base は手動の 1 周が memo の lens を撃たない（RED・機能不在）。
+#[test]
+fn pipe_dispatch_memo_triage_fires_the_oldest_up_to_per_round_without_waiting() {
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &[triage_memo("s2-m.1", "2026-08-03T00:00:00Z"), triage_memo("s2-m.2", "2026-08-01T00:00:00Z"), triage_memo("s2-m.3", "2026-08-02T00:00:00Z")]);
+    let rules = triage_rules(&state, "a", (Some(24), Some(2)));
+    let (lens, gate) = triage_lens(&state, "a", false);
+    let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), false);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "周は待たずに rc 0: {}", told(&out));
+    assert_eq!(triage_fired(&state, &["s2-m.1", "s2-m.2", "s2-m.3"]), ["s2-m.2", "s2-m.3"], "古い順に 2 本: {}", told(&out));
+    let stamp = place_file(&state, "s2-m.2", "fired");
+    assert!(stamp.trim().len() == 20 && stamp.trim().ends_with('Z'), "fired は周の時刻（UTC の秒まで）: {stamp:?}");
+    assert_eq!(triage_called(&state, "a", 2), ["s2-m.2", "s2-m.3"], "合図まで偽の lens は走り続け、撃つのは 2 本だけ");
+    assert!(
+        ["s2-m.2", "s2-m.3"].iter().all(|id| place_file(&state, id, "verdict").is_empty()),
+        "返った時点で（合図の前に）verdict は無い"
+    );
+    fs::write(&gate, "").expect("合図を置ける");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(TRIAGE_DEADLINE_S);
+    while ["s2-m.2", "s2-m.3"].iter().any(|id| place_file(&state, id, "verdict").is_empty()) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(["s2-m.2", "s2-m.3"].iter().all(|id| !place_file(&state, id, "verdict").is_empty()), "合図の後に 2 本の verdict が現れる");
+    assert!(place_file(&state, "s2-m.1", "verdict").is_empty() && !memo_place(&state, "s2-m.1").exists(), "3 本目は撃たない");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 間隔: 前の判定の時刻が間隔の内の memo・作られた時刻の無い memo・読めない `verdict` の file の memo は撃たない。同じ歯の、判定の `at` が
+/// 間隔の外の memo と、判定の無い・作られた時刻が間隔の外の memo は撃つ。
+#[test]
+fn pipe_dispatch_memo_triage_keeps_inside_the_interval_and_fires_outside_it() {
+    let (repo, state) = memo_repo();
+    let recent = vessel::fleet::cli::format_utc(vessel::seat::state::now_secs().saturating_sub(3600));
+    let old = "2026-08-01T00:00:00Z";
+    let judged = |at: &str| format!("{{\"verdict\":\"keep\",\"at\":\"{at}\",\"evidence\":\"e\",\"sketch\":\"\"}}\n");
+    let bd = fake_bd(
+        &state,
+        &[
+            triage_memo("s2-m.1", old),
+            triage_memo("s2-m.2", old),
+            memo_of("s2-m.3", "open", None, &["引き金: 期日 2999-01-01T00:00Z"], ""),
+            triage_memo("s2-m.4", old),
+            triage_memo("s2-m.5", &recent),
+        ],
+    );
+    put_memo_verdict(&state, "s2-m.1", &judged(&recent));
+    put_memo_verdict(&state, "s2-m.2", "これは読めない判定\n");
+    put_memo_verdict(&state, "s2-m.4", &judged(old));
+    let rules = triage_rules(&state, "b", (Some(24), Some(9)));
+    let (lens, _) = triage_lens(&state, "b", true);
+    let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), false);
+    let ids = ["s2-m.1", "s2-m.2", "s2-m.3", "s2-m.4", "s2-m.5"];
+    assert_eq!(triage_fired(&state, &ids), ["s2-m.4"], "判定が間隔の外の memo だけ撃つ（内・読めない・作られた時刻の無い memo と、判定の無い作られた時刻が間隔の内の memo は撃たない）: {}", told(&out));
+    assert_eq!(triage_called(&state, "b", 1), ["s2-m.4"], "撃った 1 本だけが lens を呼ぶ");
+    clean(&[&repo, &state]);
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &[triage_memo("s2-m.1", old), triage_memo("s2-m.2", &recent)]);
+    let rules = triage_rules(&state, "b", (Some(24), Some(9)));
+    let (lens, _) = triage_lens(&state, "b", true);
+    let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), false);
+    assert_eq!(triage_fired(&state, &["s2-m.1", "s2-m.2"]), ["s2-m.1"], "判定の無い memo は作られた時刻が間隔の外なら撃つ: {}", told(&out));
+    assert_eq!(triage_called(&state, "b", 1), ["s2-m.1"]);
+    clean(&[&repo, &state]);
+}
+
+/// (c) 撃つ周: 起こす便の在る周・台帳を読めない周・--lens の無い周・`dispatch ls` の周は 0 本。同じ歯の起こす便の無い手動の 1 周は撃つ。
+#[test]
+fn pipe_dispatch_memo_triage_fires_only_on_a_manual_round_with_no_launch_and_a_lens() {
+    let memo = || triage_memo("s2-m.1", "2026-08-01T00:00:00Z");
+    // 起こす便の在る周（ready の契約 1 本・起こした便の終端の周が撃つ前に、返った直後の置き場を見る）。
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &[memo(), issue("s2-toy.2", 2, "b")]);
+    let rules = triage_rules(&state, "c", (Some(24), Some(2)));
+    let (lens, _) = triage_lens(&state, "c", true);
+    let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), false);
+    assert_eq!(triage_fired(&state, &["s2-m.1"]), Vec::<String>::new(), "起こす便の在る周は撃たない: {}", told(&out));
+    assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "前提: 便を起こした周だった: {}", told(&out));
+    clean(&[&repo, &state]);
+    // 台帳を読めない周。
+    let (repo, state) = memo_repo();
+    let broken = script(&state.join("bd-broken"), "exit 1\n");
+    let rules = triage_rules(&state, "c", (Some(24), Some(2)));
+    let (lens, _) = triage_lens(&state, "c", true);
+    let out = triage_round(&repo, &state, (&broken, &rules, Some(&lens)), false);
+    assert_eq!(triage_fired(&state, &["s2-m.1"]), Vec::<String>::new(), "台帳を読めない周は撃たない: {}", told(&out));
+    clean(&[&repo, &state]);
+    // --lens の無い周と dispatch ls の周と、同じ歯の手動の 1 周。
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &[memo()]);
+    let rules = triage_rules(&state, "c", (Some(24), Some(2)));
+    let (lens, _) = triage_lens(&state, "c", true);
+    let out = triage_round(&repo, &state, (&bd, &rules, None), false);
+    assert_eq!(triage_fired(&state, &["s2-m.1"]), Vec::<String>::new(), "--lens の無い周は撃たない: {}", told(&out));
+    assert!(!stderr_of(&out).contains("triage="), "--lens の無い周は stderr にも出さない: {}", told(&out));
+    let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), true);
+    assert_eq!(triage_fired(&state, &["s2-m.1"]), Vec::<String>::new(), "dispatch ls の周は撃たない: {}", told(&out));
+    let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), false);
+    assert_eq!(triage_fired(&state, &["s2-m.1"]), ["s2-m.1"], "起こす便の無い手動の 1 周は撃つ: {}", told(&out));
+    assert_eq!(triage_called(&state, "c", 1), ["s2-m.1"]);
+    clean(&[&repo, &state]);
+}
+
+/// (d) 撃ち中: per_round 2 の写しで、生きた持ち主の `pid` を置いた memo の置き場が在る周は、その memo を撃たず、残りの本数 1 の分だけ古い順に撃つ。
+/// 同じ歯の死んだ持ち主の `pid` の周は 2 本を撃つ。
+#[test]
+fn pipe_dispatch_memo_triage_counts_a_live_owner_against_per_round_and_skips_it() {
+    let ledger = || [triage_memo("s2-m.1", "2026-08-01T00:00:00Z"), triage_memo("s2-m.2", "2026-08-02T00:00:00Z"), triage_memo("s2-m.3", "2026-08-03T00:00:00Z")];
+    let ids = ["s2-m.1", "s2-m.2", "s2-m.3"];
+    let put_pid = |state: &Path, pid: u32| {
+        fs::create_dir_all(memo_place(state, "s2-m.1")).unwrap_or_else(|err| panic!("置き場を作れる: {err}"));
+        fs::write(memo_place(state, "s2-m.1").join("pid"), format!("{pid}\n")).unwrap_or_else(|err| panic!("pid を置ける: {err}"));
+    };
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &ledger());
+    let rules = triage_rules(&state, "d", (Some(24), Some(2)));
+    let (lens, _) = triage_lens(&state, "d", true);
+    put_pid(&state, std::process::id());
+    let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), false);
+    assert_eq!(triage_fired(&state, &ids), ["s2-m.2"], "生きた持ち主の memo は撃たず、残り 1 本だけ撃つ: {}", told(&out));
+    assert_eq!(triage_called(&state, "d", 1), ["s2-m.2"]);
+    clean(&[&repo, &state]);
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &ledger());
+    let rules = triage_rules(&state, "d", (Some(24), Some(2)));
+    let (lens, _) = triage_lens(&state, "d", true);
+    let mut gone = Command::new("true").spawn().unwrap_or_else(|err| panic!("process を起こせる: {err}"));
+    let dead = gone.id();
+    gone.wait().unwrap_or_else(|err| panic!("process を回収できる: {err}"));
+    put_pid(&state, dead);
+    let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), false);
+    assert_eq!(triage_fired(&state, &ids), ["s2-m.1", "s2-m.2"], "死んだ持ち主の pid は数えず 2 本撃つ: {}", told(&out));
+    assert_eq!(triage_called(&state, "d", 2), ["s2-m.1", "s2-m.2"]);
+    clean(&[&repo, &state]);
+}
+
+/// (e) 行が無い: 間隔の行を持たない写しの周（本数の行を持たない写しも）は 0 本で、stderr に `triage=no-rule` の 1 行が在り、rc 0 で、stdout が
+/// 同じ置き場の行の在る写しの周と等しい。行の在る写しの周は撃ち、stderr に `triage=` の行が無い。
+#[test]
+fn pipe_dispatch_memo_triage_without_a_rule_row_fires_nothing_and_says_no_rule_on_stderr() {
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &[triage_memo("s2-m.1", "2026-08-01T00:00:00Z")]);
+    let (lens, _) = triage_lens(&state, "e", true);
+    let mut stdouts = Vec::new();
+    for (name, rows) in [("no-interval", (None, Some(2))), ("no-per-round", (Some(24), None))] {
+        let rules = triage_rules(&state, name, rows);
+        let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), false);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{name}: rc は行の在る周と同じ: {}", told(&out));
+        assert_eq!(stderr_of(&out).lines().filter(|line| *line == "triage=no-rule").count(), 1, "{name}: stderr に 1 行: {}", told(&out));
+        assert_eq!(triage_fired(&state, &["s2-m.1"]), Vec::<String>::new(), "{name}: 撃たない");
+        stdouts.push(stdout_of(&out));
+    }
+    let rules = triage_rules(&state, "both", (Some(24), Some(2)));
+    let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), false);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", told(&out));
+    assert!(!stderr_of(&out).lines().any(|line| line.starts_with("triage=")), "行の在る周は stderr に triage= が無い: {}", told(&out));
+    assert_eq!(triage_fired(&state, &["s2-m.1"]), ["s2-m.1"], "行の在る周は撃つ: {}", told(&out));
+    assert!(stdouts.iter().all(|text| *text == stdout_of(&out)), "stdout は行の在る周と等しい: {stdouts:?} / {}", told(&out));
+    assert_eq!(triage_called(&state, "e", 1), ["s2-m.1"]);
+    clean(&[&repo, &state]);
+}
+
+/// (f) 除く: lifecycle.lock を生きた pid で持たせて同じ周の書き直しを Busy にした置き場で、出力の fixture で memo-actionable の memo は撃たず、
+/// ほかの memo は撃つ。同じ歯の出力の無い置き場（同じく lock を持たせる）では同じ memo を撃つ。
+#[test]
+fn pipe_dispatch_memo_triage_skips_a_memo_that_the_lifecycle_output_calls_actionable() {
+    let ledger = || [triage_memo("s2-m.1", "2026-08-01T00:00:00Z"), triage_memo("s2-m.2", "2026-08-02T00:00:00Z")];
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &ledger());
+    let rules = triage_rules(&state, "f", (Some(24), Some(1)));
+    let (lens, _) = triage_lens(&state, "f", true);
+    triage_output_put(&state, &["s2-m.1"]);
+    triage_hold_lifecycle_lock(&state);
+    let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), false);
+    assert!(stderr_of(&out).lines().any(|line| line == "lifecycle=busy"), "前提: 書き直しは Busy: {}", told(&out));
+    assert_eq!(triage_fired(&state, &["s2-m.1", "s2-m.2"]), ["s2-m.2"], "memo-actionable の memo は撃たない: {}", told(&out));
+    assert_eq!(triage_called(&state, "f", 1), ["s2-m.2"]);
+    clean(&[&repo, &state]);
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &ledger());
+    let rules = triage_rules(&state, "f", (Some(24), Some(1)));
+    let (lens, _) = triage_lens(&state, "f", true);
+    triage_hold_lifecycle_lock(&state);
+    let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), false);
+    assert!(stderr_of(&out).lines().any(|line| line == "lifecycle=busy"), "前提: 書き直しは Busy: {}", told(&out));
+    assert_eq!(triage_fired(&state, &["s2-m.1", "s2-m.2"]), ["s2-m.1"], "出力の無い置き場は同じ memo を撃つ: {}", told(&out));
+    assert_eq!(triage_called(&state, "f", 1), ["s2-m.1"]);
+    clean(&[&repo, &state]);
+}
+
+/// (g) 母集団: 引き金の満ちた memo と、最後の昇格の行が全部の memo は撃たない。同じ歯の満ちない memo（最後の昇格の行が一部の memo を含む）は撃つ。
+#[test]
+fn pipe_dispatch_memo_triage_leaves_met_and_fully_promoted_memos_out() {
+    let (repo, state) = memo_repo();
+    let old = "2026-08-01T00:00:00Z";
+    let unmet = ["引き金: 期日 2999-01-01T00:00Z"];
+    let bd = fake_bd(
+        &state,
+        &[
+            memo_of("s2-m.1", "open", Some(old), &["引き金: 期日 2000-01-01T00:00Z"], ""),
+            memo_of("s2-m.2", "open", Some(old), &unmet, "昇格: 全部 s2-toy.1\n"),
+            memo_of("s2-m.3", "open", Some(old), &unmet, "昇格: 一部 s2-toy.1\n"),
+            memo_of("s2-m.4", "open", Some(old), &unmet, ""),
+        ],
+    );
+    let rules = triage_rules(&state, "g", (Some(24), Some(9)));
+    let (lens, _) = triage_lens(&state, "g", true);
+    let out = triage_round(&repo, &state, (&bd, &rules, Some(&lens)), false);
+    assert_eq!(triage_fired(&state, &["s2-m.1", "s2-m.2", "s2-m.3", "s2-m.4"]), ["s2-m.3", "s2-m.4"], "満ちた memo と全部昇格の memo は撃たない: {}", told(&out));
+    assert_eq!(triage_called(&state, "g", 2), ["s2-m.3", "s2-m.4"]);
+    clean(&[&repo, &state]);
+}

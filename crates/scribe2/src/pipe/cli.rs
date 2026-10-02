@@ -252,7 +252,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
     if contact {
         if let Some(queue) = queue_of(args, &manifest, driving.as_ref(), drove.as_deref()) {
             let turn = queue::fire(&queue.borrow());
-            outcome.err.extend(lifecycle_err(&turn));
+            outcome.err.extend(round_err(&turn));
             // **終端の周だけ席の pane へ知らせる**（設計 dispatcher.md §19）: 落ちた便の 1 行と、列が idle の 1 行。
             // 送れたかは stdout の `notify=` の行で残し、rc は変えない（通知は副作用）。列の行より前に置く
             // （自走の周の最後の行は列の 1 行のまま）。同じ字面を stderr にも写す（列が起こした運転手の周も launch.log に残る・§29 形 4）。
@@ -544,10 +544,12 @@ fn with_turn(args: &[String], manifest: &Manifest, mut outcome: Outcome) -> Outc
     outcome
 }
 
-/// 局面の出力の全部の書き直し（契機 (a)）の返りのうち `Written`・`Unchanged`・`Coalesced` の外の語を stderr の 1 行にする
-/// （呼び手の rc と stdout の字は変えない・設計 case-lifecycle.md §12 約束 8）。
-fn lifecycle_err(turn: &queue::Turn) -> Vec<String> {
-    turn.lifecycle.map(|word| format!("lifecycle={word}")).into_iter().collect()
+/// 局面の出力の全部の書き直し（契機 (a)）の返りのうち `Written`・`Unchanged`・`Coalesced` の外の語を `lifecycle=<語>` の 1 行に、memo の審査の渡しが
+/// 規則の行を読めず撃たなかった周の語を `triage=<語>` の 1 行にして stderr へ（呼び手の rc と stdout の字は変えない・設計 case-lifecycle.md §12 約束 8・
+/// dispatcher.md §42 約束 5）。
+fn round_err(turn: &queue::Turn) -> Vec<String> {
+    let lifecycle = turn.lifecycle.map(|word| format!("lifecycle={word}"));
+    lifecycle.into_iter().chain(turn.triage.map(|word| format!("triage={word}"))).collect()
 }
 
 /// 列の 1 周の行（引数から材料を解いて [`queue::fire`] を撃つ＝**起こす側**）と stderr の行。stdout の最後の行は列の 1 行で、終端の周の軸を
@@ -557,7 +559,7 @@ fn turn_lines(args: &[String], manifest: &Manifest) -> (Vec<String>, Vec<String>
         Some(queue) => {
             let turn = queue::fire(&queue.borrow());
             let out = queue::vessel_line(&turn).into_iter().chain(std::iter::once(queue::line(&turn))).collect();
-            (out, lifecycle_err(&turn))
+            (out, round_err(&turn))
         }
         None => (vec![format!("dispatch=unmeasured reason={ARGS_UNMEASURED}")], Vec::new()),
     }

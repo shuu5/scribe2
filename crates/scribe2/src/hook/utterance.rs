@@ -186,7 +186,7 @@ mod tests {
         let manifest = crate::rules::manifest::Manifest::embedded().expect("面を読める").with_host(&dir.join("host.toml")).expect("host の面を合わせられる");
         let group = manifest.groups().first().expect("群が 1 つ");
         let candidate = Candidate { bead: "b".to_owned(), priority: None, mark: None, reason: None };
-        let turn = Turn { candidates: vec![candidate], launches: Vec::new(), revives: Vec::new(), unmeasured: None, drive: None, vessel: None, lifecycle: None };
+        let turn = Turn { candidates: vec![candidate], launches: Vec::new(), revives: Vec::new(), unmeasured: None, drive: None, vessel: None, lifecycle: None, triage: None };
         let facts = Facts { live: Fact::Absent, idle: Fact::Absent, held: None, precheck: None, unreflected: 0, floor: None };
         let pace = crate::seat::tick::signal::Pace::of(60, &["30".to_owned(), "90".to_owned()]).expect("梯子を読める");
         let pressed = crate::hook::group::Pressed { window: crate::fleet::WindowKind::FiveHour, used: 90, cap: 85 };

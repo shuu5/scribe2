@@ -59,6 +59,9 @@ pub mod reserve;
 /// memo の引き金の満ちを判じる行と審査の置き場の形・読み（設計 §40・契約表の行 ao）。
 pub mod memo;
 
+/// 起こす便が 0 の周に、引き金の満ちない memo を間隔と本数の内で裏の審査へ渡す選びと撃ち（設計 §42・契約表の行 aq）。
+mod memo_triage;
+
 /// memo の審査の裏の process `pipe dispatch memo-lens`（口座を選び lens の段 memo を撃ち、判定を置き場と event に残す・設計 §41・契約表の行 ap）。
 pub(in crate::pipe) mod memo_lens;
 
@@ -452,6 +455,9 @@ pub struct Turn {
     /// 局面の出力の全部の書き直し（契機 (a)）の返りのうち `Written`・`Unchanged`・`Coalesced` の外の語（起こす側の [`fire`] だけ
     /// `Some` になりうる・呼び手が stderr の `lifecycle=<語>` の 1 行にする・設計 case-lifecycle.md §12 約束 8）。
     pub lifecycle: Option<&'static str>,
+    /// memo の審査の渡しが規則の行を読めず撃たなかった周の語 `no-rule`（起こす側の [`fire`] だけ `Some` になりうる・呼び手が stderr の
+    /// `triage=<語>` の 1 行にする・設計 §42 約束 5）。
+    pub triage: Option<&'static str>,
 }
 
 /// 列の 1 周に要る材料（すべて永続面から解いたもの・process の記憶を持たない）。
@@ -693,6 +699,7 @@ pub fn fire(input: &Input<'_>) -> Turn {
         precheck::round(input, &turn, &found.issues, found.materials.as_ref().ok());
         // **局面の出力の全部の書き直しは事前審査の後**（設計 case-lifecycle.md §12 約束 8 (a)）: 同じ周の台帳と列の判定を借りる（2 度読まない）。
         turn.lifecycle = candidates::lifecycle_round(input, &turn, found);
+        turn.triage = memo_triage::round(input, &turn.launches, found);
     }
     // **終端の周の軸は起こし終えた後に 1 回**（設計 consumer-sync.md §15 形 2）: この周に起こした便・起こし直した便が
     // 在れば live は 0 でない（子の `RunCreated` を待たずに数える＝走り出した便の下で binary を入れ替えない）。
@@ -744,6 +751,7 @@ fn unmeasured(reason: Unmeasured) -> Turn {
         drive: None,
         vessel: None,
         lifecycle: None,
+        triage: None,
     }
 }
 
