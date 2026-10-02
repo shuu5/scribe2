@@ -23,11 +23,11 @@ use crate::hook::vessel::digest::fnv1a_64;
 use crate::hook::vessel::state_dir as named_state_dir;
 use crate::ledger::form::{is_memo, is_question, pointer_text};
 use crate::ledger::phase_main::{Commit, Row};
-use crate::pipe::declaration::requirements_at_sha;
+use crate::pipe::declaration::{requirements_at_sha, TablePlaces};
 use crate::pipe::dispatch::memo::Word;
 use crate::pipe::dispatch::unreflected::{asked, Asked, Question};
 use crate::pipe::land::{contract_key, source_key, RUN_TRAILER, TERMINAL_TOKENS};
-use crate::pipe::table::{read_table as table_rows, requirement_ids, DESIGN_DIR};
+use crate::pipe::table::{design_docs, read_table as table_rows, requirement_ids};
 use crate::pipe::{git_bytes, live_driver};
 use crate::seat::ledger::Issue;
 use std::cmp::Ordering;
@@ -640,11 +640,14 @@ fn listed(repo: &Path, args: &[&str]) -> Option<Vec<String>> {
     Some(String::from_utf8_lossy(&out).split('\0').filter(|name| !name.is_empty()).map(str::to_owned).collect())
 }
 
-/// 契約表の行（`docs/design/` 直下の `.md` を main の sha の tree から読む・行 id は `<doc>#<id>` の pointer の字）と、pointer ごとの write-set。
+/// 契約表の行（main の sha の tree の宣言が名乗る置き場〔既定の `docs/design/` 直下の `.md` と宣言の `contract-tables` の項目〕を、
+/// sha の tree の全 path から [`design_docs`] の 1 本で絞って読む・行 id は `<置き場の path>#<id>` の pointer の字）と、pointer ごとの
+/// write-set。sha の宣言を読めない周は表が在っても `Missing`（既定の置き場に倒さない・設計 contract-source.md §69 行 cc）。
 pub fn read_rows(repo: &Path, sha: &str) -> Face<Rows> {
-    let Some(names) = listed(repo, &["ls-tree", "--name-only", "-z", sha, DESIGN_DIR]) else { return Face::Fault };
-    let docs: Vec<&String> =
-        names.iter().filter(|name| name.strip_prefix(DESIGN_DIR).is_some_and(|rest| !rest.contains('/') && rest.ends_with(".md"))).collect();
+    let places = TablePlaces::at(repo, sha);
+    let Some(items) = places.items() else { return Face::Missing };
+    let Some(names) = listed(repo, &["ls-tree", "-r", "--name-only", "-z", sha]) else { return Face::Fault };
+    let docs = design_docs(&names, items);
     if docs.is_empty() {
         return Face::Missing;
     }
@@ -1352,5 +1355,77 @@ mod tests {
         assert_eq!(census_anchors(&state, &repo, &registered), AnchorCensus::Foreign, "R だけ");
         let both = [registered[0].clone(), census_event("SeatRegistered", &census_repo("c-b", None))];
         assert_eq!(census_anchors(&state, &repo, &both), AnchorCensus::Many, "設定の無い B を足す");
+    }
+
+    /// 契約表の行 1 つの全文（`.toml` の置き場の本文・`.md` の区間の本文のどちらにも使う）。
+    fn table_row(id: &str, write_set: &str) -> String {
+        format!(
+            "[[contract]]\nid = \"{id}\"\ntitle = \"t\"\nreq = [\"FR1\"]\nsection = \"1\"\nwrite-set = [\"{write_set}\"]\nsize = \"S\"\nverify = [\"cargo test\"]\ndone = \"d\"\n"
+        )
+    }
+
+    /// 現在の HEAD の sha。
+    fn head_of(repo: &Path) -> String {
+        crate::pipe::git_bytes(repo, &["rev-parse", "HEAD"]).map(|out| String::from_utf8_lossy(&out).trim().to_owned()).unwrap_or_default()
+    }
+
+    /// 木を `files`（path と本文）と宣言の追加行で組んで commit し、その sha を返す（前の commit の file は消す）。
+    fn commit_tree(repo: &Path, key: &str, files: &[(&str, String)]) -> String {
+        for dir in ["contracts", "docs"] {
+            let _ = std::fs::remove_dir_all(repo.join(dir));
+        }
+        let declaration = format!("schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git status\"]\n{key}");
+        put(&repo.join(".vessel.toml"), &declaration);
+        for (path, body) in files {
+            put(&repo.join(path), body);
+        }
+        assert!(crate::pipe::git_ok(repo, &["add", "-A"]) && crate::pipe::git_ok(repo, &["commit", "-q", "--allow-empty", "-m", "c"]), "commit");
+        head_of(repo)
+    }
+
+    /// 行の write-set を pointer ごとに引く（`Found` でなければ `None`）。
+    fn write_sets(found: super::Face<super::Rows>) -> Option<Vec<(String, Vec<String>)>> {
+        match found {
+            super::Face::Found((_, sets)) => Some(sets),
+            super::Face::Missing | super::Face::Fault => None,
+        }
+    }
+
+    /// (a) key で `contracts/` を名乗り表を `contracts/x.toml` だけに置いた commit は `contracts/x.toml#a` と行の write-set を返す・
+    /// (b) key を消した commit は Missing で同じ repo の (a) の sha は (a) と同じ行・(c) key の値を壊した commit は `contracts/x.toml` と
+    /// `docs/design/y.md` の両方に表が在っても Missing（読めない宣言を既定の置き場や Fixed に倒さない）・
+    /// (d) key の無い宣言で `docs/design/y.md` に表を置いた commit は y.md の行を返す。
+    #[test]
+    fn lifecycle_declared_tables_reads_the_places_the_sha_declaration_names() {
+        let repo = crate::pipe::fixture::scratch("lifecycle-mark-declared-tables");
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.name", "t"], &["config", "user.email", "t@example.invalid"], &["config", "commit.gpgsign", "false"]] {
+            assert!(crate::pipe::git_ok(&repo, args), "{args:?}");
+        }
+        let region = |id: &str, write_set: &str| {
+            format!("# y\n\n{}\nschema = 1\n\n{}{}\n", crate::pipe::table::BEGIN, table_row(id, write_set), crate::pipe::table::END)
+        };
+        let whole = |id: &str, write_set: &str| format!("schema = 1\n\n{}", table_row(id, write_set));
+        let expected_a = Some(vec![("contracts/x.toml#a".to_owned(), vec!["src/a.rs".to_owned()])]);
+
+        let a = commit_tree(&repo, "contract-tables = [\"contracts/\"]\n", &[("contracts/x.toml", whole("a", "src/a.rs"))]);
+        assert!(!repo.join("docs/design").exists(), "docs/design/ に file が無い");
+        assert_eq!(write_sets(super::read_rows(&repo, &a)), expected_a, "(a) key で名乗った置き場の行");
+        let rows = match super::read_rows(&repo, &a) {
+            super::Face::Found((rows, _)) => rows.into_iter().map(|row| row.pointer).collect::<Vec<_>>(),
+            super::Face::Missing | super::Face::Fault => Vec::new(),
+        };
+        assert_eq!(rows, ["contracts/x.toml#a"], "pointer は <置き場の path>#<行 id>");
+
+        let b = commit_tree(&repo, "", &[("contracts/x.toml", whole("a", "src/a.rs"))]);
+        assert!(matches!(super::read_rows(&repo, &b), super::Face::Missing), "(b) key を消した commit は Missing");
+        assert_eq!(write_sets(super::read_rows(&repo, &a)), expected_a, "(b) 古い sha を名指すと (a) と同じ行");
+
+        let broken = "contract-tables = \"contracts/\"\n";
+        let c = commit_tree(&repo, broken, &[("contracts/x.toml", whole("a", "src/a.rs")), ("docs/design/y.md", region("y", "src/y.rs"))]);
+        assert!(matches!(super::read_rows(&repo, &c), super::Face::Missing), "(c) 読めない宣言は表が在っても Missing");
+
+        let d = commit_tree(&repo, "", &[("docs/design/y.md", region("y", "src/y.rs"))]);
+        let expected_d = Some(vec![("docs/design/y.md#y".to_owned(), vec!["src/y.rs".to_owned()])]);
+        assert_eq!(write_sets(super::read_rows(&repo, &d)), expected_d, "(d) key の無い宣言は既定の置き場の行");
     }
 }
