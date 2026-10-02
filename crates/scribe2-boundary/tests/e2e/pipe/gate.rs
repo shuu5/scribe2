@@ -3234,8 +3234,9 @@ fn max_turns_lens(state: &Path) -> String {
     let mut perm = fs::metadata(&claude).expect("権限を読める").permissions();
     std::os::unix::fs::PermissionsExt::set_mode(&mut perm, 0o755);
     fs::set_permissions(&claude, perm).expect("実行可能にできる");
+    // lens は起こす前に木の憲法を測る（設計 gate-cost.md §47 行 ar）: 行の頭で {worktree} に憲法の file を置く。
     format!(
-        "{} lens --contract {{contract}} --worktree {{worktree}} --claude {}",
+        "mkdir -p {{worktree}}/docs && : > {{worktree}}/docs/constitution.md && {} lens --contract {{contract}} --worktree {{worktree}} --claude {}",
         env!("CARGO_BIN_EXE_scribe2"),
         claude.display()
     )

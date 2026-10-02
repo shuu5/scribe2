@@ -11,6 +11,10 @@
 //! 起動 cwd 1 本なので、渡されなければ claude を起こさず rc 1 で断る——継承した cwd に
 //! 頼ると、呼び手が変わった周に憲法の載らない判定が静かに出る（fail-closed・C11.2）。
 //!
+//! **憲法の file が載らない周も claude を呼ばない**（設計 gate-cost.md §47 行 ar）。diff の審査の周は cap の後・prompt の前に
+//! `--worktree` の木の [`CONSTITUTION_FILE`] を在る・無い・読めないの 3 値に測り（[`constitution_of`]・中身は読まない）、
+//! 無い周と読めない周は置く物か直す物を名指す INCONCLUSIVE の 1 行を返す。在る周の prompt は 1 字も変わらない。
+//!
 //! **cap を超えた diff では claude を呼ばない**。呼んでから「長すぎた」と言うのでは、
 //! 上限を置いた意味（NFR1）が無い。判定に届かなかった周はすべて INCONCLUSIVE へ倒す——
 //! 偽の PASS を作らないためである（AC3）。
@@ -162,9 +166,37 @@ pub fn usage() -> String {
 /// 封筒の `subtype` が `error_max_turns` の周の evidence（行の id を名指す・gate の撃ち直しの理由に載る）。
 const TURNS_EVIDENCE: &str = "lens が turn の上限（lens.max_turns）で終わった";
 
+/// 憲法の file の `--worktree` からの相対 path（lens の観点 `constitution` が読む面・設計 gate-cost.md §47 行 ar）。
+const CONSTITUTION_FILE: &str = "docs/constitution.md";
+
 /// 判定に届かなかった 1 行を組む。
 fn inconclusive(reason: &str) -> String {
     format!(r#"{{"verdict":"INCONCLUSIVE","evidence":"{reason}"}}"#)
+}
+
+/// `--worktree` の木の [`CONSTITUTION_FILE`] の 3 値（中身は読まない）。
+enum Constitution {
+    /// symlink を辿って開けた先が通常の file。
+    Present,
+    /// その path の項目そのものが無い（`docs` の dir が無い周も含む）。
+    Absent,
+    /// それ以外（dir・辿った先の無い symlink・権限で開けない・`docs` が file）。
+    Unreadable,
+}
+
+/// 起こす前に `worktree` の木の [`CONSTITUTION_FILE`] を測る。lens の cwd と契約の dir は読まない。
+/// 開く前に辿った先の種別を見る（FIFO を開いて待たない）。
+fn constitution_of(worktree: &Path) -> Constitution {
+    let path = worktree.join(CONSTITUTION_FILE);
+    match std::fs::symlink_metadata(&path) {
+        Err(err) if err.kind() == ErrorKind::NotFound => return Constitution::Absent,
+        Err(_) => return Constitution::Unreadable,
+        Ok(_) => {}
+    }
+    match std::fs::metadata(&path) {
+        Ok(found) if found.is_file() && std::fs::File::open(&path).is_ok() => Constitution::Present,
+        _ => Constitution::Unreadable,
+    }
 }
 
 /// [`KNOWN_FLAGS`] の外の引数を 1 つ名指す（無ければ `None`）。
@@ -281,7 +313,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")),
     };
     note_ignored(contract_path, mode.as_deref());
-    let prompt = match prompt_of(contract_path, &state(&contract), &rulings, cap) {
+    let prompt = match prompt_of(contract_path, &state(&contract), &rulings, (cap, Path::new(&worktree))) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
@@ -396,7 +428,7 @@ fn note_ignored(contract: &Path, mode: Option<&str>) {
 /// 在る・読めない周は `Err(rc 2)`（材料を落として審査しない）。**1 走査で埋める**——重ねて replace すると、
 /// 先に埋めた契約本文の中の `{diff}` / `{design}` まで展開され、外から来る text が prompt の構造へ触れられる
 /// （runner と同じ理由・裁定も同じ走査）。
-fn prompt_of(contract: &Path, stated: &str, rulings: &str, cap: u64) -> Result<String, Outcome> {
+fn prompt_of(contract: &Path, stated: &str, rulings: &str, (cap, worktree): (u64, &Path)) -> Result<String, Outcome> {
     let material = material_of(contract).map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")))?;
     let over = |bytes: usize| u64::try_from(bytes).unwrap_or(u64::MAX) > cap;
     match material {
@@ -405,6 +437,19 @@ fn prompt_of(contract: &Path, stated: &str, rulings: &str, cap: u64) -> Result<S
             if over(diff.len()) {
                 // **claude を呼ばずに**返す。呼ばないことが cap の意味である。
                 return Err(Outcome::ok_line(inconclusive("diff exceeds cap")));
+            }
+            // **憲法が載らない周も claude を呼ばない**（観点 `constitution` を 0 と数えさせない・設計 gate-cost.md §47 行 ar）。
+            // 測るのは diff の審査の周の cap の後だけ（契約の審査と memo の段は憲法を載せる面でない）。
+            match constitution_of(worktree) {
+                Constitution::Present => {}
+                Constitution::Absent => {
+                    return Err(Outcome::ok_line(inconclusive(&format!(
+                        "constitution file absent: {CONSTITUTION_FILE} (place the constitution or a pointer to it)"
+                    ))));
+                }
+                Constitution::Unreadable => {
+                    return Err(Outcome::ok_line(inconclusive(&format!("constitution file unreadable: {CONSTITUTION_FILE}"))));
+                }
             }
             Ok(fill(
                 TEMPLATE,
@@ -645,9 +690,15 @@ fn with_usage(verdict: &str, usage: Option<&Usage>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{prompt_of, CONTRACT_TEMPLATE};
+    use super::CONTRACT_TEMPLATE;
+    use crate::cli_outcome::Outcome;
     use crate::pipe::review::{BASE_FILE, DESIGN_FILE, ITEMS_FILE, OUTSIDE_FILE, REQUIREMENTS_FILE};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+
+    /// 契約の審査の周（材料が在る周）だけを撃つ歯なので worktree は測られない（憲法の測りは diff の審査の周だけ）。
+    fn prompt_of(contract: &Path, stated: &str, rulings: &str, cap: u64) -> Result<String, Outcome> {
+        super::prompt_of(contract, stated, rulings, (cap, Path::new(".")))
+    }
 
     /// 契約の写しの隣に設計の節と要件（と `base` が在れば base の要約）を置いた tmp dir と写しの path。
     fn materials(name: &str, base: Option<&str>) -> (PathBuf, PathBuf) {
