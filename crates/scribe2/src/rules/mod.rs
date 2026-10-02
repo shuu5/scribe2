@@ -265,6 +265,10 @@ pub enum RuleKind {
     /// land の追随が衝突した便を**起こし直す回数の上限**（回）。値 N = 最大 N 回起こし直す
     /// （N+1 回目の衝突で終端する）。
     FollowRetries,
+    /// 終わりの門（runner の終わりに器が共通 verify と契約の検証行を撃つ周・設計 pipeline.md §66）が赤を渡して runner を
+    /// **起こし直す回数の上限**（回）。値 N = 最大 N 回起こし直す（runner の turn は最大 N+1 回）。0 は門を撃って記録するだけで
+    /// 起こし直さない。
+    RunnerEndGateRounds,
     /// 変異検査の並列度の**上限**（宣言値）。実効値は受付（設計 gate-cost.md §3.3）が導く。
     GateMutantsJobs,
     /// job 1 つが要る memory の宣言値（MiB）。受付の分母と封じ込めの箱に使う。
@@ -460,6 +464,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::GroupPressure7dPct,
     RuleKind::GroupPressureModelPct,
     RuleKind::FollowRetries,
+    RuleKind::RunnerEndGateRounds,
     RuleKind::GateMutantsJobs,
     RuleKind::GateJobMemoryMb,
     RuleKind::HostReserveMemoryMb,
@@ -549,7 +554,7 @@ impl RuleKind {
             // 上限 R-C4-4.fn-lines・閉じた列の網羅は不変）。
             Self::GroupPressure5hPct => "GroupPressure5hPct", Self::GroupPressure7dPct => "GroupPressure7dPct",
             Self::GroupPressureModelPct => "GroupPressureModelPct",
-            Self::FollowRetries => "FollowRetries",
+            Self::FollowRetries => "FollowRetries", Self::RunnerEndGateRounds => "RunnerEndGateRounds",
             Self::GateMutantsJobs => "GateMutantsJobs",
             Self::GateJobMemoryMb => "GateJobMemoryMb",
             Self::HostReserveMemoryMb => "HostReserveMemoryMb",
@@ -606,7 +611,7 @@ impl RuleKind {
             | Self::UsageTimeoutS
             | Self::UsageFreshS
             | Self::GroupPressure5hPct | Self::GroupPressure7dPct | Self::GroupPressureModelPct
-            | Self::FollowRetries
+            | Self::FollowRetries | Self::RunnerEndGateRounds
             | Self::GateMutantsJobs
             | Self::GateJobMemoryMb
             | Self::HostReserveMemoryMb

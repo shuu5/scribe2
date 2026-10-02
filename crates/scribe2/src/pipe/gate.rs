@@ -44,6 +44,8 @@ pub(crate) use record::{
     aimed_lines, keep_detection, keep_reason, landed_step_record, landed_unfired_record, next_copy_dir,
     population_lines, LandedMark, Unfired,
 };
+// runner の終わりの門（`spawn`・設計 pipeline.md §66 形 2）が gate の verify の撃ちと記録と同じ 1 本で撃つ口。
+pub(crate) use record::{record_checks, Counted, Logs, Shoot};
 pub(crate) use verify::{fill_holes, recorded_rc, run_detection_admitted, teeth_of, Admit};
 // 受付が契約の検証行を base の木で撃つ口（設計 pipeline.md §56 形 3・撃つ実装を 2 本にしない）。
 pub(crate) use verify::run_line_captured;

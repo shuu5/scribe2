@@ -36,7 +36,7 @@ use super::gate::RC_INCONCLUSIVE;
 use super::land::MAIN_REF;
 use super::ratelimit::{choose_account, Pool};
 use super::refuse::SHRINK_FILE;
-use super::spawn::{spawn, Account, Launch};
+use super::spawn::{red_round, spawn, Account, EndGate, EndGateHold, GateRed, Launch};
 use super::table::{repo_findings, Located};
 use super::{
     base_of_run, contract_path, emit, git_line, git_ok, question_of_run, vessel_path, worktree_path, Emit, Precheck,
@@ -177,6 +177,9 @@ pub struct Runner<'a> {
     pub cmd: &'a str,
     /// 便用の選定の入力（宣言した口座が 1 つ以上在る周だけ・[`Pool::declared`]）。
     pub pool: Option<&'a Pool>,
+    /// 終わりの門の線（gate の線と起こし直しの回数の上限・組む周の manifest から [`EndGate::of`] の 1 本で組む・設計
+    /// pipeline.md §66 形 8）。
+    pub gate: &'a EndGate,
 }
 
 /// 追随が止まった 1 回分の材料（land の追随が渡す・衝突 [`on_conflict`] と stale [`on_stale`] で同じ形）。
@@ -615,39 +618,18 @@ fn missing_runner(entry: &Turn<'_>) -> Outcome {
 /// `account` は runner を起こす口座（閉じた 3 値・設計 account-autonomy.md §4）: 初回の起動と衝突の起こし直しは
 /// [`spawn_selected`] が選んだ [`Account::Chosen`]（宣言 0 なら [`Account::Inherit`]）、上限で止まった便の
 /// 別口座での起こし直しは [`Account::Resumed`]。
+///
+/// **終わりの門の起こし直しの輪はここが持つ**（設計 pipeline.md §66 形 7）: `spawn` が rc 0 で返り便の最新の `RunStage` が
+/// 門の赤なら、同じ口座で Budget を測り直して門の赤の節つきの `Launch` で `spawn` を呼び直す。輪は回数を数えない（止めるのは
+/// 門の数え）。門の間の印は輪を抜ける時に外し、追随の後始末（[`settle`]）は輪を抜けた後に 1 回だけ撃つ。
 pub(crate) fn spawn_turn(entry: &Turn<'_>, account: Account<'_>) -> Outcome {
     let Some(runner) = entry.runner else {
         return missing_runner(entry);
     };
-    let budget = match Precheck::measure(entry.contract, entry.repo) {
-        Ok(found) => found.into_budget(),
-        Err(reason) => return refused(reason),
+    let mut outcome = {
+        let _hold = EndGateHold::new(entry.state_dir, entry.run);
+        spawn_rounds(entry, runner, account)
     };
-    // 回答済みの質問が在る周だけ「回答」節が付く（`Questioned` 以外の段では質問が無く `None`）。
-    let answered =
-        question_of_run(entry.state_dir, entry.run).filter(|question| question.answer.is_some());
-    // 「追随」節の有無は **stdin の組立にだけ**効く。turn の後始末（[`settle`]）は節の有無に
-    // 依らず同じ 1 本である（設計 §3 手順 5）。
-    let follow = section(entry.state_dir, entry.repo, entry.run);
-    // 「途中再開」節も同じく stdin の組立にだけ効く（上限で止まった便と runner が死んだ便だけが持つ）。
-    let resumed = resumption(entry.state_dir, entry.repo, entry.run);
-    let mut outcome = spawn(
-        budget,
-        &Launch {
-            run: entry.run,
-            bead: entry.bead,
-            repo: entry.repo,
-            state_dir: entry.state_dir,
-            contract: entry.contract,
-            runner: runner.cmd,
-            approved: entry.approved,
-            answered,
-            follow,
-            resumed,
-            account,
-            policy: entry.policy,
-        },
-    );
     if outcome.rc != RC_OK {
         return outcome;
     }
@@ -658,6 +640,52 @@ pub(crate) fn spawn_turn(entry: &Turn<'_>, account: Account<'_>) -> Outcome {
         outcome.rc = settled.rc;
     }
     outcome
+}
+
+/// `spawn` を呼び、門の赤の周は赤を渡して呼び直す輪（返すのは最後の周の `spawn` の戻りだけ・門の赤の周の戻りの行は足さない）。
+fn spawn_rounds(entry: &Turn<'_>, runner: Runner<'_>, account: Account<'_>) -> Outcome {
+    let mut red: Option<GateRed> = None;
+    loop {
+        let budget = match Precheck::measure(entry.contract, entry.repo) {
+            Ok(found) => found.into_budget(),
+            Err(reason) => return refused(reason),
+        };
+        // 回答済みの質問が在る周だけ「回答」節が付く（`Questioned` 以外の段では質問が無く `None`）。
+        let answered =
+            question_of_run(entry.state_dir, entry.run).filter(|question| question.answer.is_some());
+        // 「追随」節の有無は **stdin の組立にだけ**効く。turn の後始末（[`settle`]）は節の有無に
+        // 依らず同じ 1 本である（設計 §3 手順 5）。
+        let follow = section(entry.state_dir, entry.repo, entry.run);
+        // 「途中再開」節も同じく stdin の組立にだけ効く（上限で止まった便と runner が死んだ便だけが持つ）。
+        let resumed = resumption(entry.state_dir, entry.repo, entry.run);
+        let outcome = spawn(
+            budget,
+            &Launch {
+                run: entry.run,
+                bead: entry.bead,
+                repo: entry.repo,
+                state_dir: entry.state_dir,
+                contract: entry.contract,
+                runner: runner.cmd,
+                approved: entry.approved,
+                answered,
+                follow,
+                resumed,
+                account,
+                gate: runner.gate,
+                red: red.take(),
+                policy: entry.policy,
+            },
+        );
+        if outcome.rc != RC_OK {
+            return outcome;
+        }
+        // 輪を続けるかは event log の最新の段で決める（`spawn` の戻りの字は読まない）。
+        match red_round(entry.state_dir, entry.run) {
+            Some(round) => red = Some(GateRed::read(entry.state_dir, entry.run, round)),
+            None => return outcome,
+        }
+    }
 }
 
 /// 便が追随すべき相手（main の sha と便の base）。追随の要らない周は `None`。
@@ -825,12 +853,12 @@ fn settle(entry: &Turn<'_>) -> Outcome {
     if !ended_implemented(entry) {
         return Outcome::ok(Vec::new());
     }
-    let Some((old, advanced)) = advanced(entry) else {
+    let Some((old, merged)) = advanced(entry.state_dir, entry.repo, entry.run) else {
         return Outcome::ok(Vec::new());
     };
-    match record(entry, Stage::Implemented, format!("rebase:{old}..{advanced}")) {
+    match record(entry, Stage::Implemented, format!("rebase:{old}..{merged}")) {
         Err(reason) => broken(reason),
-        Ok(()) => Outcome::ok_line(format!("run={} rebase={old}..{advanced}", entry.run)),
+        Ok(()) => Outcome::ok_line(format!("run={} rebase={old}..{merged}", entry.run)),
     }
 }
 
@@ -858,19 +886,28 @@ fn mid_rebase(worktree: &Path) -> bool {
 /// （従来の追随）と、祖先でないが merge-base が在り、実測の merge-base が記録済みの base の手前**ではない**周
 /// （`--onto` で運ばれた木・設計 pipeline.md §38＝実測の merge-base が記録済みの base の祖先なら、木は
 /// まだ運ばれておらず base を手前へ戻す形なので進んでいない・却下案「merge-base を新しい base として記帳する」）。
-fn advanced(entry: &Turn<'_>) -> Option<(String, String)> {
+fn advanced(state_dir: &Path, repo: &Path, run: &str) -> Option<(String, String)> {
     // base が無い周も読めない周も**進んでいないと読む**側へ倒す（追随の記帳を増やさない）。
-    let old = base_of_run(entry.state_dir, entry.run).known()?;
-    let head = git_line(&worktree_path(entry.repo, entry.run), &["rev-parse", "HEAD"])?;
-    let main = git_line(entry.repo, &["rev-parse", MAIN_REF])?;
-    let merged = git_line(entry.repo, &["merge-base", &head, &main])?;
+    let old = base_of_run(state_dir, run).known()?;
+    let head = git_line(&worktree_path(repo, run), &["rev-parse", "HEAD"])?;
+    let main = git_line(repo, &["rev-parse", MAIN_REF])?;
+    let merged = git_line(repo, &["merge-base", &head, &main])?;
     if merged == old {
         return None;
     }
-    match Ancestry::judge(entry.repo, &old, &merged) {
+    match Ancestry::judge(repo, &old, &merged) {
         Ancestry::Ancestor => Some((old, merged)),
         Ancestry::Diverged(fork) if fork != merged => Some((old, merged)),
         Ancestry::Diverged(_) | Ancestry::Unrelated => None,
+    }
+}
+
+/// 終わりの門が測る base（設計 pipeline.md §66 形 2）: 進んだ周は実測の merge-base（[`settle`] が後で記帳し gate が読む base と
+/// 同じ値）、進んでいない周は記録済みの base。base を読めない周は `None`（門は測れなかった周にする）。
+pub(crate) fn gate_base(state_dir: &Path, repo: &Path, run: &str) -> Option<String> {
+    match advanced(state_dir, repo, run) {
+        Some((_, merged)) => Some(merged),
+        None => base_of_run(state_dir, run).known(),
     }
 }
 
@@ -913,9 +950,10 @@ fn broken(reason: String) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_conflict, is_stale, removed_paths, retried, spawn_turn, stale_rows, widen_write_set, Ancestry, FollowCheck, Located,
-        Runner, StaleRow, Turn, DIRTY, EXHAUSTED, STALE, STALE_ROWS,
+        is_conflict, is_stale, removed_paths, retried, spawn_turn, stale_rows, widen_write_set, Ancestry, EndGate, FollowCheck,
+        Located, Runner, StaleRow, Turn, DIRTY, EXHAUSTED, STALE, STALE_ROWS,
     };
+    use crate::rules::manifest::Manifest;
     use crate::cli_outcome::{RC_OK, RC_REFUSED};
     use crate::fleet::store::{self, LockPolicy};
     use crate::fleet::{EventKind, Stage};
@@ -966,6 +1004,8 @@ mod tests {
     fn mutant_in_pipe_spawn_turn_returns_spawn_or_settle_rc() {
         let (root, repo, state) = repo_with_state("spawn-turn");
         let policy = LockPolicy::embedded().expect("埋め込みの lock 規則を読める");
+        // 終わりの門の線は組む周の manifest から同じ 1 本で組む（この便は写しを持たない＝門は測れなかった周になる）。
+        let gate = EndGate::of(&Manifest::embedded().expect("埋め込み manifest を読める"));
 
         let gated = contract(&["src/lib.rs"], &["C9"]);
         let blocked = spawn_turn(
@@ -975,7 +1015,7 @@ mod tests {
                 repo: &repo,
                 state_dir: &state,
                 contract: &gated,
-                runner: Some(Runner { cmd: "true", pool: None }),
+                runner: Some(Runner { cmd: "true", pool: None, gate: &gate }),
                 approved: false,
                 policy,
             },
@@ -993,7 +1033,7 @@ mod tests {
                 repo: &repo,
                 state_dir: &state,
                 contract: &open,
-                runner: Some(Runner { cmd: runner, pool: None }),
+                runner: Some(Runner { cmd: runner, pool: None, gate: &gate }),
                 approved: false,
                 policy,
             },

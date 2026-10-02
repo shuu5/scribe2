@@ -3,11 +3,12 @@
 //! 判定の順と終端は親（[`super::gate`]）が持つ。
 
 use super::verify::{gate_checks, is_unreadable, recorded_rc, run_checks_admitted, Admit, Check, Checks, Step};
-use super::{DetectionSkip, Gate};
+use super::{DetectionSkip, Gate, Limits};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{append_line, read_all, LockPolicy};
 use crate::fleet::{Stage, SCHEMA};
 use crate::pipe::confine::Reason;
+use crate::pipe::contract::Contract;
 use crate::pipe::declaration::Effective;
 use crate::pipe::move_proof::{self, LensInput};
 use crate::pipe::{contract_path, git_bytes, run_dir, verify_log_path, vessel_path};
@@ -139,19 +140,55 @@ pub(super) const USAGE_HEAD: &str = "confine-usage";
 /// **検出線（③）は撃たない**（段の列は [`gate_checks`] の ①②④・設計 gate-cost.md §44 形 (9)）: 写しの検出線を渡さず、
 /// 周ごとの写しの置き場も作らず、③ の skip record も置かない（③ は着地後の検出の口だけが撃ち・写す）。
 pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counted, String> {
-    let frozen = frozen_copy(entry)?;
-    let admit = Admit { state_dir: entry.state_dir, run: entry.run, rules: entry.limits.admission(entry.policy) };
+    let shoot = Shoot {
+        state_dir: entry.state_dir,
+        run: entry.run,
+        contract: entry.contract,
+        limits: entry.limits,
+        policy: entry.policy,
+    };
+    let record = verify_log_path(entry.state_dir, entry.run);
+    let tail = record.with_file_name(STDERR_LOG_FILE);
+    record_checks(&shoot, worktree, base, &Logs { record: &record, tail: &tail })
+}
+
+/// 撃ちと記録の本体の材料（gate の [`record_verify`] と runner の終わりの門〔設計 pipeline.md §66 形 2〕が同じ 1 本を通る）。
+pub(crate) struct Shoot<'a> {
+    /// 置き場。
+    pub state_dir: &'a Path,
+    /// 便 id。
+    pub run: &'a str,
+    /// 読み込み済みの契約。
+    pub contract: &'a Contract,
+    /// 規則から読んだ線。
+    pub limits: Limits,
+    /// lock の待ち方。
+    pub policy: LockPolicy,
+}
+
+/// 撃ちの record と赤い行の診断を書く file の対。
+pub(crate) struct Logs<'a> {
+    /// record（1 行 1 段の JSON）の file。
+    pub record: &'a Path,
+    /// 赤い行の診断の file。
+    pub tail: &'a Path,
+}
+
+/// [`record_verify`] の本体（便の写しの共通 verify の読み・受付の材料と [`Checks`] の組み・撃ち・record と診断の記録・
+/// 赤と測れなかった行の数え）。gate が書く file の名と record の字は呼び手の [`Logs`] が決める。
+pub(crate) fn record_checks(shoot: &Shoot<'_>, worktree: &Path, base: &str, logs: &Logs<'_>) -> Result<Counted, String> {
+    let frozen = frozen_copy(shoot.state_dir, shoot.run)?;
+    let admit = Admit { state_dir: shoot.state_dir, run: shoot.run, rules: shoot.limits.admission(shoot.policy) };
     let checks = Checks {
         worktree,
         base,
-        contract: entry.contract,
+        contract: shoot.contract,
         common: frozen.common_verify(),
         detection: &[],
-        host: entry.limits.breaker(),
+        host: shoot.limits.breaker(),
     };
     let steps = run_checks_admitted(&checks, &gate_checks(), Some(&admit));
-    let path = verify_log_path(entry.state_dir, entry.run);
-    let tail_path = path.with_file_name(STDERR_LOG_FILE);
+    let (path, tail_path, policy) = (logs.record, logs.tail, shoot.policy);
     let mut red = 0;
     // 遮断器が閉じて撃たなかった最初の行の `n`（設計 gate-cost.md §32 約束 5・検出線の rc 2 と同じ形）。
     // skip record を挟む周も record の `n` と一致させるため、record 列の側で数える。
@@ -174,8 +211,8 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
                 }
             }
         }
-        record.diagnose(&tail_path, entry.policy)?;
-        append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
+        record.diagnose(tail_path, policy)?;
+        append_line(path, &record.body, policy).map_err(|err| err.to_string())?;
     }
     Ok(Counted { red, unreadable, killed, busy })
 }
@@ -740,15 +777,15 @@ fn step_fields(number: u64, step: &Step) -> Vec<(&'static str, Value)> {
 }
 
 /// `verify.jsonl` の数え上げ（赤の本数と「測れなかった」の印）。
-pub(super) struct Counted {
+pub(crate) struct Counted {
     /// rc≠0 だった verify 行の本数（**測れた行**だけを数える・検出線の rc 2 は数えない）。
-    pub(super) red: u64,
+    pub(crate) red: u64,
     /// 段①（write-set 照合）で diff の path を読めなかったか。
-    pub(super) unreadable: bool,
+    pub(crate) unreadable: bool,
     /// 箱の中で殺された行の理由（在れば）。
-    pub(super) killed: Option<Reason>,
+    pub(crate) killed: Option<Reason>,
     /// 器の健康の遮断器が閉じて撃たなかった行の `n`（最初の 1 行・在れば・設計 gate-cost.md §32 約束 5）。
-    pub(super) busy: Option<u64>,
+    pub(crate) busy: Option<u64>,
 }
 
 /// 検出線（`Check::Detection`）の **rc 2 = 測れなかった**か（`s2-07l.331`・設計 pipeline.md §5.3）。
@@ -795,8 +832,8 @@ fn box_kill(step: &Step) -> Option<Reason> {
 ///
 /// **読むのは `<state_dir>/pipe/<run>/vessel.toml` だけ**である——repo や worktree の
 /// `.vessel.toml` を読み直すと、便の実装が自分の検証を書き換えられる（ADR-0010 §2.4）。
-fn frozen_copy(entry: &Gate<'_>) -> Result<Effective, String> {
-    let path = vessel_path(entry.state_dir, entry.run);
+fn frozen_copy(state_dir: &Path, run: &str) -> Result<Effective, String> {
+    let path = vessel_path(state_dir, run);
     Effective::load(&path)
         .map_err(|errors| {
             let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();

@@ -2224,3 +2224,299 @@ fn runner_touches_section_lines_skip_own_row_and_bundle_pointers() {
     assert_eq!(vessel::pipe::spawn::touches_lines(&rows, "d#a"), "- X ← d#b, e#c\n- Y ← d#b\n", "自分を除き・束ね・辞書順");
     assert_eq!(vessel::pipe::spawn::touches_lines(rows.get(..1).unwrap_or_default(), "d#a"), "なし\n", "自分の行だけなら項目 0");
 }
+
+// ───── runner の終わりの門（設計 pipeline.md §66・行 bj・接頭辞 `end_gate_`） ─────
+//
+// runner が rc 0 で commit を作って終わった周に、器が gate と同じ行を便の worktree へ撃つ。赤なら同じ worktree で runner を
+// 起こし直して赤を渡し、上限の周まで直させてから Implemented にする。偽 runner は turn ごとに stdin を写す（`turn_runner`）。
+// 契約の verify 行は `src/lib.rs` の中身で赤と緑が決まる stub で、赤い周に**cmd の字に無い語**を stderr へ出す。
+
+/// 契約の verify 行が撃つ stub（`src/lib.rs` に `green` が在れば緑・無ければ stderr に語を出して rc 1）。
+const GATE_STUB: &str = "if grep -q green src/lib.rs; then exit 0; fi\nprintf 'gate-red-%s\\n' word >&2\nexit 1\n";
+
+/// stub を撃つ契約の verify 行。
+const GATE_VERIFY: &str = r#"verify = ["sh verify-lib.sh"]"#;
+
+/// turn の本文: `word` を `src/lib.rs` の末尾へ足して commit する（赤 / 緑は `green` を含むかで決まる）。
+fn commit_turn(word: &str) -> String {
+    format!("printf '{word}\\n' >> src/lib.rs\ngit add -A\ngit commit -q -m '{word}'\nexit 0")
+}
+
+/// stub の契約の verify 行を持つ便を intake する（repo・置き場・便 id）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn gate_run_intake() -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    fs::write(repo.join("verify-lib.sh"), GATE_STUB).expect("stub を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "gate-stub"]);
+    let design = write_contract(&repo, &["verify"], &[GATE_VERIFY]);
+    let id = intake(&repo, &state, &design);
+    (repo, state, id)
+}
+
+/// 行 `runner.end_gate_rounds` を足した tmp manifest（`rounds` が `None` の周は行を足さない）。受付の fixture は `slots`。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn end_gate_rules(state: &Path, name: &str, slots: SlotFixture, rounds: Option<u64>) -> PathBuf {
+    let path = write_rules_full(state, name, (1, 1_000_000), FOLLOW_RETRIES, slots);
+    if let Some(rounds) = rounds {
+        let body = fs::read_to_string(&path).expect("tmp manifest を読める");
+        let row = format!(
+            "\n[[rule]]\nid = \"runner.end_gate_rounds\"\nkind = \"RunnerEndGateRounds\"\nvalue = {rounds}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
+        );
+        fs::write(&path, format!("{body}{row}")).expect("tmp manifest を書ける");
+    }
+    path
+}
+
+/// 偽 runner `runner` で spawn を 1 回撃つ（`rules` が在れば `--rules`）。
+fn end_gate_spawn(repo: &Path, state: &Path, id: &str, runner: &str, rules: Option<&Path>) -> Output {
+    let (repo_arg, state_arg) = (repo.display().to_string(), state.display().to_string());
+    let mut args = vec!["spawn", "--run", id, "--repo", &repo_arg, "--state-dir", &state_arg, "--runner", runner];
+    let rules_arg = rules.map(|found| found.display().to_string());
+    if let Some(found) = &rules_arg {
+        args.extend(["--rules", found]);
+    }
+    run_pipe(&args)
+}
+
+/// 便の `Spawned` で始まる段の記帳の列（intake と審査の段は除く）。
+fn spawned_trail(state: &Path, id: &str) -> Vec<(Option<Stage>, Option<String>)> {
+    stages(state, id).into_iter().skip_while(|(stage, _)| *stage != Some(Stage::Spawned)).collect()
+}
+
+/// 便の段の記帳のうち、門の赤（`Spawned` で detail が `end-gate:red:` で始まる）の件数。
+fn red_marks(state: &Path, id: &str) -> usize {
+    stages(state, id)
+        .iter()
+        .filter(|(stage, detail)| {
+            *stage == Some(Stage::Spawned) && detail.as_deref().is_some_and(|found| found.starts_with("end-gate:red:"))
+        })
+        .count()
+}
+
+/// 門の record の行（要約の行を除く）。
+fn end_gate_records(state: &Path, id: &str) -> Vec<String> {
+    end_gate_lines(state, id).into_iter().filter(|line| !line.starts_with("{\"end_gate\":")).collect()
+}
+
+/// 要約の行のうち語が `unmeasured` の行の `reason` の字。
+fn unmeasured_reason(state: &Path, id: &str) -> String {
+    end_gate_lines(state, id)
+        .iter()
+        .find(|line| line.starts_with("{\"end_gate\":") && line.contains("\"result\":\"unmeasured\""))
+        .and_then(|line| line.split_once("\"reason\":\"").map(|(_, rest)| rest.to_owned()))
+        .unwrap_or_default()
+}
+
+/// 2 回目の stdin の「門の赤」節: 周の番号・赤い行の字・`rc=1`・stub の語を持ち、ほかの行の touches の節の後に在る。
+fn assert_red_section(second: &str) {
+    assert!(second.contains("\n## 門の赤\n"), "2 回目に節が在る: {second}");
+    for word in ["sh verify-lib.sh", "rc=1", "gate-red-word", "周 1"] {
+        assert!(second.contains(word), "節は {word} を持つ: {second}");
+    }
+    let touches_at = second.find("\n## ほかの行の touches\n");
+    let red_at = second.find("\n## 門の赤\n");
+    assert!(matches!((touches_at, red_at), (Some(t), Some(r)) if t < r), "touches → 門の赤 の順: {second}");
+}
+
+/// (a) 1 周目に赤い中身を commit した便は、門の赤を渡されて直す: runner が 2 回起き、2 回目の stdin に「門の赤」節と赤い行の字と
+/// `rc=1` と stub の語が在り（1 回目には節が無い）、段の記帳の列は Spawned（base）・Spawned（end-gate:red:1:1）・Spawned
+/// （end-gate:1）・Implemented（detail なし）。2 回目の木の履歴に 1 回目の commit が在り、要約の語は red・green の順。
+#[test]
+fn end_gate_red_round_restarts_the_runner_with_the_red_section_and_lands_green() {
+    let (repo, state, id) = gate_run_intake();
+    let runner = turn_runner(
+        &state,
+        &[commit_turn("red-one"), format!("git log --format=%s > \"$D/log-2\"\n{}", commit_turn("green"))],
+    );
+    let out = end_gate_spawn(&repo, &state, &id, &runner, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(stub_calls(&state), 2, "runner は 2 回起きる");
+    let first = stub_stdin(&state, 1);
+    assert!(!first.contains("## 門の赤"), "1 回目には節が無い: {first}");
+    assert_red_section(&stub_stdin(&state, 2));
+    let trail = spawned_trail(&state, &id);
+    let details: Vec<Option<&str>> = trail.iter().map(|(_, detail)| detail.as_deref()).collect();
+    assert_eq!(trail.len(), 4, "段の記帳は 4 件: {trail:?}");
+    assert!(details.first().copied().flatten().is_some_and(|found| found.starts_with("base:")), "{trail:?}");
+    assert_eq!(details.get(1).copied().flatten(), Some("end-gate:red:1:1"), "{trail:?}");
+    assert_eq!(details.get(2).copied().flatten(), Some("end-gate:1"), "{trail:?}");
+    assert_eq!(trail.last().cloned(), Some((Some(Stage::Implemented), None)), "Implemented の detail は無い: {trail:?}");
+    let log = fs::read_to_string(stub_dir(&state).join("log-2")).unwrap_or_default();
+    assert!(log.lines().any(|line| line == "red-one"), "2 回目の木の履歴に 1 回目の commit が在る: {log}");
+    assert_eq!(end_gate_words(&state, &id), ["red", "green"], "要約の語");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 直さない runner の便は runner が 3 回・門の赤の記帳 2 件で Implemented（要約 exhausted）。gate（偽 lens は PASS）は FAIL で、
+/// `verify.jsonl` の record の数は同じ契約を行の値 0 の manifest で通した便と同じ。値 0 の便は runner が 1 回・門の赤の記帳 0 件で、
+/// `end-gate.jsonl` は 1 周分の record と要約 exhausted を持つ。
+#[test]
+fn end_gate_unfixed_run_exhausts_after_two_rounds_and_a_zero_value_fires_once() {
+    let lens = |state: &Path| fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let (repo, state, id) = gate_run_intake();
+    let runner = turn_runner(&state, &[commit_turn("red-one"), commit_turn("red-two"), commit_turn("red-three")]);
+    let out = end_gate_spawn(&repo, &state, &id, &runner, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(stub_calls(&state), 3, "runner は 3 回起きる");
+    assert_eq!(red_marks(&state, &id), 2, "門の赤の記帳は 2 件: {:?}", stages(&state, &id));
+    assert_eq!(stages(&state, &id).last().cloned(), Some((Some(Stage::Implemented), None)), "{:?}", stages(&state, &id));
+    assert_eq!(end_gate_words(&state, &id), ["red", "red", "exhausted"]);
+    let gated = gate_once(&repo, &state, &id, Some(&lens(&state)));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_REFUSED)), "赤い便の gate は FAIL: {}", stdout_of(&gated));
+    let upper = verify_rows(&state, &id).len();
+    clean(&[&repo, &state]);
+
+    let (repo, state, id) = gate_run_intake();
+    let rules = end_gate_rules(&state, "rules-end-gate-0.toml", default_slots(), Some(0));
+    let runner = turn_runner(&state, &[commit_turn("red-one")]);
+    let out = end_gate_spawn(&repo, &state, &id, &runner, Some(&rules));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(stub_calls(&state), 1, "値 0 の便は runner が 1 回");
+    assert_eq!(red_marks(&state, &id), 0, "門の赤の記帳は 0 件");
+    assert_eq!(end_gate_words(&state, &id), ["exhausted"], "要約は exhausted");
+    assert_eq!(end_gate_records(&state, &id).len(), 3, "1 周分の record（write-set・共通 verify・契約の verify）");
+    assert_eq!(stages(&state, &id).last().cloned(), Some((Some(Stage::Implemented), None)));
+    let gated = gate_once(&repo, &state, &id, Some(&lens(&state)));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_REFUSED)), "値 0 の便の gate も FAIL: {}", stdout_of(&gated));
+    assert_eq!(verify_rows(&state, &id).len(), upper, "verify.jsonl の record の数は同じ");
+    clean(&[&repo, &state]);
+}
+
+/// 測れなかった周の共通の assert: runner が 1 回・門の赤の記帳が無く Implemented・要約は unmeasured。理由を返す。
+fn assert_unmeasured_once(state: &Path, id: &str, out: &Output) -> String {
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(out), stderr_of(out));
+    assert_eq!(stub_calls(state), 1, "runner は 1 回");
+    assert_eq!(red_marks(state, id), 0, "門の赤の記帳は無い: {:?}", stages(state, id));
+    assert_eq!(stages(state, id).last().cloned(), Some((Some(Stage::Implemented), None)), "{:?}", stages(state, id));
+    assert_eq!(end_gate_words(state, id), ["unmeasured"], "要約は unmeasured");
+    unmeasured_reason(state, id)
+}
+
+/// (c) 測れなかった周は赤が在っても起こし直さない: 箱の中で死ぬ行を赤い行と一緒に持つ便・遮断器の閉じる manifest で起こす
+/// 赤い行の便・spawn の前に便の写しを読めない字に書き替えた便は、runner が 1 回で Implemented（要約 unmeasured）。
+/// 写しの便の理由は写しの file を名指す。
+#[test]
+fn end_gate_unmeasured_rounds_never_restart_the_runner() {
+    // 箱の中で死ぬ行 + 赤い行。
+    let (repo, state) = repo_with_state();
+    fs::write(repo.join("verify-lib.sh"), GATE_STUB).unwrap_or_default();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "gate-stub"]);
+    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-lib.sh", "sh verify-oom.sh"]"#]);
+    let id = intake(&repo, &state, &design);
+    let bin_dir = state.join("systemd-bin");
+    crate::write_systemd_run_stub(&bin_dir, &state.join("scope-args"));
+    let path = format!("{}:{}", bin_dir.display(), crate::toolbox_path(&state));
+    let runner = turn_runner(&state, &[commit_turn("red-one")]);
+    let out = run_pipe_with_path(
+        &path,
+        &["spawn", "--run", &id, "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(), "--runner", &runner],
+    );
+    let reason = assert_unmeasured_once(&state, &id, &out);
+    assert!(reason.contains("scope の中で死んだ"), "箱の中の死: {reason}");
+    clean(&[&repo, &state]);
+
+    // 遮断器の閉じる manifest（走行可能と待ちの倍率 0・待ちの上限 1 秒）+ 赤い行。
+    let (repo, state, id) = gate_run_intake();
+    let slots = SlotFixture { runnable_per_core: 0, blocked_per_core: 0, ..default_slots() };
+    let rules = end_gate_rules(&state, "rules-end-gate-busy.toml", slots, Some(2));
+    let runner = turn_runner(&state, &[commit_turn("red-one")]);
+    let out = end_gate_spawn(&repo, &state, &id, &runner, Some(&rules));
+    let reason = assert_unmeasured_once(&state, &id, &out);
+    assert!(reason.contains("host が混んだまま"), "遮断器の閉じた周: {reason}");
+    clean(&[&repo, &state]);
+
+    // 便の写しを読めない字に書き替えた便。
+    let (repo, state, id) = gate_run_intake();
+    fs::write(vessel_copy(&state, &id), "これは宣言ではない\n").unwrap_or_default();
+    let runner = turn_runner(&state, &[commit_turn("red-one")]);
+    let out = end_gate_spawn(&repo, &state, &id, &runner, None);
+    let reason = assert_unmeasured_once(&state, &id, &out);
+    assert!(reason.contains("vessel.toml"), "理由は写しの file を名指す: {reason}");
+    clean(&[&repo, &state]);
+}
+
+/// (d) 全行が緑の便は runner が 1 回で Implemented（detail なし）・要約 green・門の record の数は gate の段の数（write-set の段 1・
+/// 共通 verify の行・契約の verify の行）と同じ。
+#[test]
+fn end_gate_green_run_fires_once_with_the_gate_stage_count() {
+    let (repo, state, id) = gate_run_intake();
+    let runner = turn_runner(&state, &[commit_turn("green")]);
+    let out = end_gate_spawn(&repo, &state, &id, &runner, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(stub_calls(&state), 1, "runner は 1 回");
+    assert_eq!(stages(&state, &id).last().cloned(), Some((Some(Stage::Implemented), None)), "{:?}", stages(&state, &id));
+    assert_eq!(red_marks(&state, &id), 0);
+    assert_eq!(end_gate_words(&state, &id), ["green"]);
+    let fired = end_gate_records(&state, &id).len();
+    assert_eq!(fired, 3, "門の record は gate の段の数: {:?}", end_gate_lines(&state, &id));
+    let lens = fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let gated = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "{}", stdout_of(&gated));
+    assert_eq!(verify_rows(&state, &id).len(), fired, "門の record の数は gate の record の数と同じ");
+    assert!(stdout_of(&out).contains(&format!("run={id} stage=Implemented")), "判定行は 1 周の便と同じ形: {}", stdout_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (e) 行の無い manifest で起こす赤い行の便は、門を撃てず runner が 1 回・要約 unmeasured で、理由が行の id を名指す。
+#[test]
+fn end_gate_manifest_without_the_row_is_unmeasured_naming_the_row() {
+    let (repo, state, id) = gate_run_intake();
+    let rules = end_gate_rules(&state, "rules-end-gate-absent.toml", default_slots(), None);
+    let runner = turn_runner(&state, &[commit_turn("red-one")]);
+    let out = end_gate_spawn(&repo, &state, &id, &runner, Some(&rules));
+    let reason = assert_unmeasured_once(&state, &id, &out);
+    assert!(reason.contains("runner.end_gate_rounds"), "理由は行の id を名指す: {reason}");
+    assert!(end_gate_records(&state, &id).is_empty(), "撃たない周は要約の 1 行だけ: {:?}", end_gate_lines(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// 門を撃っている間、解放の file が在るまで待つ stub（撃ち始めの印は git の共通 dir・上限 60 秒）。
+const HOLD_STUB: &str = "common=\"$(git rev-parse --git-common-dir)\"\ntouch \"$common/hold-started\"\ni=0\n\
+     while [ ! -f \"$common/hold-release\" ] && [ \"$i\" -lt 600 ]; do sleep 0.1; i=$((i+1)); done\nexit 0\n";
+
+/// (f) 門の間は run dir に `end-gate.pid` が在り、その間の `resume --runner` は rc 1 で `end-gate=alive` を持って runner を起こさず
+/// （偽 runner の回数は 1 のまま）、門を抜けた spawn は Implemented で印が無い。
+#[test]
+fn end_gate_mark_stands_while_the_gate_fires_and_refuses_a_resume() {
+    let (repo, state) = repo_with_state();
+    fs::write(repo.join("verify-hold.sh"), HOLD_STUB).unwrap_or_default();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "hold-stub"]);
+    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-hold.sh"]"#]);
+    let id = intake(&repo, &state, &design);
+    let runner = turn_runner(&state, &[commit_turn("green")]);
+    let (repo_arg, state_arg) = (repo.display().to_string(), state.display().to_string());
+    let mut child = pipe_cmd(&["spawn", "--run", &id, "--repo", &repo_arg, "--state-dir", &state_arg, "--runner", &runner])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap_or_else(|err| panic!("spawn を起こせる: {err}"));
+    let (started, release) = (repo.join(".git").join("hold-started"), repo.join(".git").join("hold-release"));
+    let begun = Instant::now();
+    while !started.exists() {
+        assert!(child.try_wait().ok().flatten().is_none(), "門を撃つ前に spawn が終わった");
+        assert!(begun.elapsed() < Duration::from_secs(60), "門が撃ち始めない");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(end_gate_mark_path(&state, &id).exists(), "門の間は印が在る");
+    let resumed = run_pipe(&["resume", "--run", &id, "--repo", &repo_arg, "--state-dir", &state_arg, "--runner", &runner]);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_REFUSED)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    assert!(stdout_of(&resumed).contains(&format!("run={id} end-gate=alive pid={}", child.id())), "{}", stdout_of(&resumed));
+    assert_eq!(stub_calls(&state), 1, "偽 runner は起きない");
+    fs::write(&release, "").unwrap_or_default();
+    let status = child.wait().unwrap_or_else(|err| panic!("spawn を待てる: {err}"));
+    assert!(status.success(), "解放の後の spawn は rc 0");
+    assert_eq!(stages(&state, &id).last().cloned(), Some((Some(Stage::Implemented), None)), "{:?}", stages(&state, &id));
+    assert!(!end_gate_mark_path(&state, &id).exists(), "門を抜けた spawn は印を外す");
+    assert_eq!(stub_calls(&state), 1, "runner は 1 回のまま");
+    clean(&[&repo, &state]);
+}

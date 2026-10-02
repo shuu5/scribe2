@@ -403,6 +403,17 @@ enabled = true
 ruling = "user 2026-09-12T03:25Z"
 ruled_at = "2026-09-12"
 
+# 終わりの門（設計 pipeline.md §66 形 10）。runner の終わりに器が共通 verify と契約の検証行を撃ち、赤なら同じ worktree で
+# runner を起こし直す回数の上限。値 0 も門を撃って記録する（起こし直さないだけ）。
+
+[[rule]]
+id = "runner.end_gate_rounds"
+kind = "RunnerEndGateRounds"
+value = 2
+enabled = true
+ruling = "user 2026-09-30T22:13Z 項 end-gate"
+ruled_at = "2026-09-30"
+
 # gate の費用（設計 gate-cost.md §3.1・ADR-0021）。並列度は宣言値であって実効値ではない
 # （C10）——実効値は受付（同 §3.2）が host の空きと突き合わせて導く。
 

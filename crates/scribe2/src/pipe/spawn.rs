@@ -7,25 +7,28 @@
 //! 親の env をそのまま継承させ、必要な値は cmd の placeholder 置換で渡す。
 
 use super::approve::{block, Approval, Approve, RC_BLOCKED};
+use super::cli::int_row;
 use super::confine;
-use super::follow::{Halt, Resumption, Section, RUNNER_UNREACHABLE};
+use super::follow::{gate_base, Halt, Resumption, Section, RUNNER_UNREACHABLE};
 use super::declaration::Effective;
-use super::gate::{fill_holes, last_json_object, teeth_of};
+use super::gate::{fill_holes, last_json_object, record_checks, teeth_of, Counted, Limits, Logs, Shoot};
 use super::land::MAIN_REF;
 use super::refuse;
 use super::table::{design_docs, read_table};
 use super::{
-    base_of_run, branch_name, contract_path, emit, git_bytes, git_line, plugin_path, record_cost, runner_stderr_path,
-    runner_stdout_path, vessel_path, worktree_path, Budget, Emit, Question, RC_QUESTION,
+    base_of_run, branch_name, contract_path, emit, git_bytes, git_line, plugin_path, record_cost, run_dir,
+    runner_stderr_path, runner_stdout_path, vessel_path, worktree_path, Budget, Emit, Question, RC_QUESTION,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
-use crate::fleet::store::{lock_owner, owner_pid, started_ms, LockPolicy, Owner};
+use crate::fleet::json_lite::{self, Value};
+use crate::fleet::store::{acquire_with, append_line, lock_owner, owner_pid, read_all, started_ms, LockPolicy, Owner, Reclaim};
 use crate::fleet::{Cost, CostSource, EventKind, Stage};
 use crate::headless::runner::{stop_status, summary_usage, top_level_string};
 use crate::headless::{NO_VALUE, RC_RATE_LIMIT, RC_UNREACHABLE};
 use crate::name::{NAME, PLUGIN_DIR};
 use crate::pipe::contract::Contract;
 use crate::polarity::{OnFailure, Polarity, Timing};
+use crate::rules::manifest::Manifest;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -95,6 +98,293 @@ pub(crate) fn end_gate_mark(state_dir: &Path, id: &str) -> EndGateMark {
     }
 }
 
+/// 終わりの門の record の file の名（run dir の直下・1 行の形は `verify.jsonl` と同じ・周の終わりに要約の 1 行を足す）。
+const END_GATE_RECORD: &str = "end-gate.jsonl";
+
+/// 終わりの門の赤い行の診断の file の名（`verify.stderr.log` と同じ形・周の頭に [`ROUND_HEAD`] の 1 行を置く）。
+const END_GATE_STDERR: &str = "end-gate.stderr.log";
+
+/// 診断 file の周の見出しの頭（`# end-gate=<周>`・段の見出し `## ` とは別の字面）。
+const ROUND_HEAD: &str = "# end-gate=";
+
+/// 門の赤の記帳の detail の頭（`end-gate:red:<周>:<赤い行の数>`・段は `Spawned` のまま）。
+const RED_DETAIL: &str = "end-gate:red:";
+
+/// 起こし直しの回数の上限を持つ rules 行（設計 pipeline.md §66 形 10）。
+const ROW_END_GATE_ROUNDS: &str = "runner.end_gate_rounds";
+
+/// 終わりの門の線（**閉じた 2 値**・設計 pipeline.md §66 形 8）: gate の線と起こし直しの回数の上限の対、か、読めない理由の 1 行。
+/// 読めない周は門を撃たずに `Implemented` へ進める（要約の語 unmeasured）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EndGate {
+    /// 線を読めた。
+    Line {
+        /// gate と同じ線（[`Limits::of`]）。
+        limits: Limits,
+        /// 起こし直しの回数の上限（rules 行 `runner.end_gate_rounds`）。
+        rounds: u64,
+    },
+    /// 線を読めない（行の無い・不発効・型違いの manifest）。値は理由の 1 行。
+    Unreadable(String),
+}
+
+impl EndGate {
+    /// 組む周の manifest から線を組む（**`Runner` を組む口はすべてこの 1 本**）。
+    pub fn of(manifest: &Manifest) -> Self {
+        match (Limits::of(manifest), int_row(manifest, ROW_END_GATE_ROUNDS)) {
+            (Ok(limits), Ok(rounds)) => Self::Line { limits, rounds },
+            (Err(reason), _) | (_, Err(reason)) => Self::Unreadable(reason),
+        }
+    }
+}
+
+/// 門の間の印を外す番（[`spawn_turn`](super::follow::spawn_turn) が輪の外側に 1 つ持つ・設計 pipeline.md §66 形 9）。
+///
+/// 外すのは先頭の語が自分の pid の印だけ（driver の札の `Drop` と同じ形）。印を置くのは門を撃ち始める周
+/// （[`hold_mark`]）で、置かれなかった周の `Drop` は何もしない。
+pub(crate) struct EndGateHold {
+    /// 印の path。
+    path: PathBuf,
+}
+
+impl EndGateHold {
+    /// 印の外し番を持つ（印は置かない）。
+    pub(crate) fn new(state_dir: &Path, run: &str) -> Self {
+        Self { path: run_dir(state_dir, run).join(END_GATE_MARK) }
+    }
+}
+
+impl Drop for EndGateHold {
+    fn drop(&mut self) {
+        if mark_is_mine(&self.path) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// 印の先頭の語が自分の pid か。
+fn mark_is_mine(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|body| owner_pid(&body) == Some(std::process::id()))
+}
+
+/// 門の間の印を置く（driver の札と同じ原子的な置き方・自分の pid の印が既に在る周〔前の周の門〕はそのまま使う）。
+fn hold_mark(launch: &Launch<'_>) -> Result<(), String> {
+    let path = run_dir(launch.state_dir, launch.run).join(END_GATE_MARK);
+    if mark_is_mine(&path) {
+        return Ok(());
+    }
+    acquire_with(&path, launch.policy, Reclaim::DeadOnly)
+        .map(|_| ())
+        .map_err(|err| format!("{} を置けない: {err}", path.display()))
+}
+
+/// 前の周の門の赤（診断 file が持つ最新の周の赤い行）。
+pub struct GateRed {
+    /// 赤かった周の番号。
+    pub round: u64,
+    /// 赤い行（診断 file の順）。
+    rows: Vec<RedRow>,
+}
+
+/// 赤い行 1 つ（撃った行の字・rc・診断の抜粋）。
+struct RedRow {
+    /// 撃った行の字（置換後）。
+    cmd: String,
+    /// rc の字面。
+    rc: String,
+    /// 診断の抜粋（段の stderr の写し）。
+    text: String,
+}
+
+/// 診断の抜粋を 1 行ごとに残す行数（末尾から数える・窓の大きさで判定の閾値ではない＝rules 行にしない・`STDERR_TAIL_LINES` と同じ読み）。
+const RED_LINES_PER_ROW: usize = 40;
+
+/// 「門の赤」節に載せる抜粋の合計の字数の上限（上と同じ読み）。
+const RED_CHARS_TOTAL: usize = 16000;
+
+impl GateRed {
+    /// 診断 file の最新の周（最後の [`ROUND_HEAD`] の行より後ろ）の赤い行を読む（読めない周は行が空＝節は 1 文だけ残る）。
+    pub(crate) fn read(state_dir: &Path, run: &str, round: u64) -> Self {
+        let log = std::fs::read_to_string(run_dir(state_dir, run).join(END_GATE_STDERR)).unwrap_or_default();
+        let lines: Vec<&str> = log.lines().collect();
+        let from = lines.iter().rposition(|line| line.starts_with(ROUND_HEAD)).map_or(0, |at| at.saturating_add(1));
+        let mut rows: Vec<RedRow> = Vec::new();
+        for line in lines.get(from..).unwrap_or_default() {
+            if let Some(row) = RedRow::heading(line) {
+                rows.push(row);
+            } else if let Some(row) = rows.last_mut() {
+                row.text.push_str(line);
+                row.text.push('\n');
+            }
+        }
+        Self { round, rows }
+    }
+
+    /// 「門の赤」節（stdin に足す字・1 行目は周の番号と 1 文）。
+    fn section(&self) -> String {
+        let mut body = format!("\n## 門の赤\n- 周 {}: 器が撃った次の行が赤い。直して commit してから終える\n", self.round);
+        let (mut used, mut dropped) = (0_usize, 0_usize);
+        for row in &self.rows {
+            let room = RED_CHARS_TOTAL.saturating_sub(used);
+            if room == 0 {
+                dropped = dropped.saturating_add(1);
+                continue;
+            }
+            let item = row.render(room);
+            used = used.saturating_add(item.chars().count());
+            body.push_str(&item);
+        }
+        if dropped > 0 {
+            body.push_str(&format!("- 字数の上限で省いた赤い行: {dropped} 行\n"));
+        }
+        body
+    }
+}
+
+impl RedRow {
+    /// 診断の見出し（`## n=<n> rc=<rc> cmd=<cmd>`）から行を起こす（見出しでない行は `None`）。
+    fn heading(line: &str) -> Option<Self> {
+        let (_, rest) = line.strip_prefix("## n=")?.split_once(" rc=")?;
+        let (rc, cmd) = rest.split_once(" cmd=")?;
+        Some(Self { cmd: cmd.to_owned(), rc: rc.to_owned(), text: String::new() })
+    }
+
+    /// 節の 1 項目（撃った行の字・rc・診断の末尾 [`RED_LINES_PER_ROW`] 行・`room` 字まで）。
+    fn render(&self, room: usize) -> String {
+        let lines: Vec<&str> = self.text.lines().collect();
+        let from = lines.len().saturating_sub(RED_LINES_PER_ROW);
+        let mut item = format!("- `{}` rc={}\n", self.cmd, self.rc);
+        if from > 0 {
+            item.push_str(&format!("  （診断の先頭 {from} 行は省いた）\n"));
+        }
+        for line in lines.get(from..).unwrap_or_default() {
+            item.push_str("  | ");
+            item.push_str(line);
+            item.push('\n');
+        }
+        let mut cut: String = item.chars().take(room).collect();
+        if !cut.ends_with('\n') {
+            cut.push('\n');
+        }
+        cut
+    }
+}
+
+/// 便の最新の `RunStage` が門の赤なら、その周の番号（event log から読む・読めない周と門の赤でない周は `None`）。
+pub(crate) fn red_round(state_dir: &Path, run: &str) -> Option<u64> {
+    let events = read_all(state_dir).ok()?;
+    let last = events.iter().rev().find(|event| event.run == run && event.kind == EventKind::RunStage)?;
+    let rest = last.detail.as_deref()?.strip_prefix(RED_DETAIL)?;
+    if last.stage != Some(Stage::Spawned) {
+        return None;
+    }
+    rest.split(':').next()?.parse().ok()
+}
+
+/// 門の赤の数（設計 pipeline.md §66 形 6）: 便の `RunStage` を畳み、`Spawned` でない最新の段より後ろの、detail が
+/// [`RED_DETAIL`] で始まる記帳の件数。読めない周は `None`。
+fn red_count(state_dir: &Path, run: &str) -> Option<u64> {
+    let events = read_all(state_dir).ok()?;
+    let mut count = 0_u64;
+    for event in events.iter().filter(|event| event.run == run && event.kind == EventKind::RunStage) {
+        if event.stage != Some(Stage::Spawned) {
+            count = 0;
+        } else if event.detail.as_deref().is_some_and(|detail| detail.starts_with(RED_DETAIL)) {
+            count = count.saturating_add(1);
+        }
+    }
+    Some(count)
+}
+
+/// 門の 1 周の結果（**閉じた 4 値**・要約の行の `result` の語）。
+enum Round {
+    /// 全行 rc 0。
+    Green,
+    /// 赤が在り、起こし直す（値は赤い行の数）。
+    Red(u64),
+    /// 赤が在り、起こし直しの数が上限に届いた。
+    Exhausted,
+    /// 測れなかった（値は理由の 1 行）。
+    Unmeasured(String),
+}
+
+impl Round {
+    /// 要約の行の語。
+    fn word(&self) -> &'static str {
+        match self {
+            Self::Green => "green",
+            Self::Red(_) => "red",
+            Self::Exhausted => "exhausted",
+            Self::Unmeasured(_) => "unmeasured",
+        }
+    }
+
+    /// 要約の 1 行（`{"end_gate":<周>,"result":"<語>"}`・測れなかった周は `reason` を足す）。
+    fn summary(&self, round: u64) -> String {
+        let mut fields = vec![("end_gate", Value::Num(round)), ("result", Value::Str(self.word().to_owned()))];
+        if let Self::Unmeasured(reason) = self {
+            fields.push(("reason", Value::Str(reason.clone())));
+        }
+        json_lite::write_object(&fields)
+    }
+
+    /// 撃った結果の数えから周の結果を決める（**測れなかったは赤より先**・赤は上限の内だけ起こし直す）。
+    fn judge(counted: &Counted, prior: u64, rounds: u64) -> Self {
+        if counted.unreadable {
+            return Self::Unmeasured("diff の path を読めない（write-set を照合できない）".to_owned());
+        }
+        if let Some(reason) = counted.killed {
+            return Self::Unmeasured(format!("verify の行が scope の中で死んだ（reason={}）", reason.as_str()));
+        }
+        if let Some(n) = counted.busy {
+            return Self::Unmeasured(format!("host が混んだまま待ちの上限を超えた（n={n} 以後の行を撃っていない）"));
+        }
+        match counted.red {
+            0 => Self::Green,
+            red if prior < rounds => Self::Red(red),
+            _ => Self::Exhausted,
+        }
+    }
+}
+
+/// 門を撃つ（印・base・契約の写しを揃えて gate と同じ 1 本で撃つ・設計 pipeline.md §66 形 2）。`Err` は測れなかった理由の 1 行。
+fn shoot_gate(launch: &Launch<'_>, worktree: &Path, limits: Limits, round: u64) -> Result<Counted, String> {
+    hold_mark(launch)?;
+    let base = gate_base(launch.state_dir, launch.repo, launch.run)
+        .ok_or_else(|| format!("run {} の base を読めない", launch.run))?;
+    // 契約は撃つ時に便の写しから読み直す（`Launch` の契約は land の起こし直しで広げる前の値のことが在る）。
+    let path = contract_path(launch.state_dir, launch.run);
+    let contract = Contract::load(&path).map_err(|errors| {
+        let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+        format!("{} を読めない: {}", path.display(), lines.join(" / "))
+    })?;
+    let dir = run_dir(launch.state_dir, launch.run);
+    let (record, tail) = (dir.join(END_GATE_RECORD), dir.join(END_GATE_STDERR));
+    append_line(&tail, &format!("{ROUND_HEAD}{round}"), launch.policy).map_err(|err| err.to_string())?;
+    let shoot = Shoot { state_dir: launch.state_dir, run: launch.run, contract: &contract, limits, policy: launch.policy };
+    record_checks(&shoot, worktree, &base, &Logs { record: &record, tail: &tail })
+}
+
+/// runner が rc 0 で commit を作って終わった周の門（設計 pipeline.md §66 形 1〜5）: 撃って要約を残し、赤で起こし直せる周は
+/// 段を `Spawned` のまま門の赤を記帳し、ほかは `Implemented`（detail なし）にする。
+fn end_gate(launch: &Launch<'_>, worktree: &Path) -> Outcome {
+    let prior = red_count(launch.state_dir, launch.run);
+    let round = prior.unwrap_or(0).saturating_add(1);
+    let result = match (launch.gate, prior) {
+        (EndGate::Unreadable(reason), _) => Round::Unmeasured(reason.clone()),
+        (EndGate::Line { .. }, None) => Round::Unmeasured("便の event を読めない".to_owned()),
+        (EndGate::Line { limits, rounds }, Some(prior)) => shoot_gate(launch, worktree, *limits, round)
+            .map_or_else(Round::Unmeasured, |counted| Round::judge(&counted, prior, *rounds)),
+    };
+    // 要約の行も書けない周は書かずに進む（門の結果は段の記帳が持つ）。
+    let record = run_dir(launch.state_dir, launch.run).join(END_GATE_RECORD);
+    let _ = append_line(&record, &result.summary(round), launch.policy);
+    match result {
+        Round::Red(red) => record_stage(launch, Stage::Spawned, Some(format!("{RED_DETAIL}{round}:{red}"))),
+        Round::Green | Round::Exhausted | Round::Unmeasured(_) => record_stage(launch, Stage::Implemented, None),
+    }
+}
+
 /// 起動 1 回の材料。
 pub struct Launch<'a> {
     /// 便 id。
@@ -127,6 +417,11 @@ pub struct Launch<'a> {
     /// runner を起こす口座（閉じた 3 値・ADR-0017 §2.3・設計 account-autonomy.md §4）。label を持つ周は runner の
     /// 行に `--account-dir <state_dir>/accounts/<label>` を足し、[`Account::Inherit`] は親の環境をそのまま継承させる。
     pub account: Account<'a>,
+    /// 終わりの門の線（gate の線と起こし直しの回数の上限・設計 pipeline.md §66 形 8）。
+    pub gate: &'a EndGate,
+    /// **前の周の門の赤**（輪の 2 周目以降だけ持つ・設計 pipeline.md §66 形 7）。在る周は同じ run の worktree と base を使い、
+    /// runner の stdin に「門の赤」節を付ける。
+    pub red: Option<GateRed>,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }
@@ -213,11 +508,9 @@ pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
     // base は初回の `base:<sha>` が持ったままで、読み手（`base_of_run`）は接頭辞の違う行を飛ばす。
     // 器が選んだ口座での起動は `base:<sha>,account:<label>`（読み手は最初の `,` までを sha と読む）。
     // 理由を読めない途中再開（節の材料が無い）は起こさない（印を推量しない・fail-closed）。
-    let detail = match (launch.account, launch.resumed.as_ref()) {
-        (Account::Inherit, _) => format!("base:{base}"),
-        (Account::Chosen(label), _) => format!("base:{base},account:{label}"),
-        (Account::Resumed(label), Some(resumed)) => format!("account:{label},{}", resume_mark(resumed.halt)),
-        (Account::Resumed(_), None) => return refused(format!("run {} の途中再開の理由を読めない", launch.run)),
+    let detail = match spawned_detail(launch, &base) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
     };
     if let Err(err) = emit(
         launch.state_dir,
@@ -235,6 +528,21 @@ pub fn spawn(budget: Budget, launch: &Launch<'_>) -> Outcome {
         return broken(err.to_string());
     }
     launch_runner(launch, &worktree, &cmd, &base)
+}
+
+/// `Spawned` の記帳の detail（**閉じた形**）: 門の赤の周は `end-gate:<周>`（口座が在れば `,account:<label>`・`base:` で始めない＝
+/// base の読み手が飛ばす形・設計 pipeline.md §66 形 8）、ほかは口座の 3 値で分かれる。理由を読めない途中再開は `Err`。
+fn spawned_detail(launch: &Launch<'_>, base: &str) -> Result<String, String> {
+    if let Some(red) = &launch.red {
+        let account = launch.account.label().map(|label| format!(",account:{label}")).unwrap_or_default();
+        return Ok(format!("end-gate:{}{account}", red.round));
+    }
+    match (launch.account, launch.resumed.as_ref()) {
+        (Account::Inherit, _) => Ok(format!("base:{base}")),
+        (Account::Chosen(label), _) => Ok(format!("base:{base},account:{label}")),
+        (Account::Resumed(label), Some(resumed)) => Ok(format!("account:{label},{}", resume_mark(resumed.halt))),
+        (Account::Resumed(_), None) => Err(format!("run {} の途中再開の理由を読めない", launch.run)),
+    }
 }
 
 /// runner を起こし、終わりまで見届けて段を決める（起動行は [`spawn`] が組み上げて渡す）。
@@ -539,14 +847,17 @@ pub fn touches_lines(rows: &[(String, Vec<String>)], own: &str) -> String {
     by_item.iter().map(|(item, pointers)| format!("- {item} ← {}\n", pointers.join(", "))).collect()
 }
 
-/// runner の stdin に流す本文 = 契約の写し（再読）+ 「共通 verify」節 + 「ほかの行の touches」節 + 回答済みの質問が在れば
-/// 「回答」節 + 途中再開なら「途中再開」節 + 追随の相手が在れば「追随」節。**順序は 契約 → 共通 verify → ほかの行の
-/// touches → 回答 → 途中再開 → 追随**である（節の読み方は `headless/runner.txt` の雛形が持ち、ここは run ごとの値だけを
+/// runner の stdin に流す本文 = 契約の写し（再読）+ 「共通 verify」節 + 「ほかの行の touches」節 + 門の赤が在れば「門の赤」節 +
+/// 回答済みの質問が在れば「回答」節 + 途中再開なら「途中再開」節 + 追随の相手が在れば「追随」節。**順序は 契約 → 共通 verify →
+/// ほかの行の touches → 門の赤 → 回答 → 途中再開 → 追随**である（節の読み方は `headless/runner.txt` の雛形が持ち、ここは run ごとの値だけを
 /// 載せる）。
 fn prompt(launch: &Launch<'_>, base: &str) -> String {
     let mut body = std::fs::read_to_string(contract_path(launch.state_dir, launch.run)).unwrap_or_default();
     body.push_str(&format!("\n## 共通 verify\n{}", common_section(launch, base)));
     body.push_str(&format!("\n## ほかの行の touches\n{}", touches_section(launch, base)));
+    if let Some(red) = &launch.red {
+        body.push_str(&red.section());
+    }
     if let Some(Question { question, answer: Some(answer), .. }) = &launch.answered {
         body.push_str(&format!("\n## 回答\n- 質問: {question}\n- 回答: {answer}\n"));
     }
@@ -604,15 +915,11 @@ fn commit_count(worktree: &Path, from: &str) -> u64 {
 /// commit の有無まで見て段を決める。**commit 0 は完了ではない**。
 fn settle(launch: &Launch<'_>, worktree: &Path, base: &str, rc: i32) -> Outcome {
     let commits = commit_count(worktree, base);
-    let (stage, detail) = if rc == 0 && commits >= 1 {
-        (Stage::Implemented, None)
-    } else {
-        (
-            Stage::Failed,
-            Some(format!("runner-rc:{rc},commits:{commits}")),
-        )
-    };
-    record_stage(launch, stage, detail)
+    if rc == 0 && commits >= 1 {
+        // **終わりの門**（設計 pipeline.md §66）: Implemented の枝だけが撃つ。
+        return end_gate(launch, worktree);
+    }
+    record_stage(launch, Stage::Failed, Some(format!("runner-rc:{rc},commits:{commits}")))
 }
 
 /// 包みが rc [`RC_RATE_LIMIT`] で終わった周: stdout の最後の停止行を読み、
@@ -903,13 +1210,13 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
 /// 便の worktree と base を用意する。
 ///
 /// 初回は repo の HEAD を base にして worktree を**切る**。**再開の turn**——回答済みの質問
-/// （[`Launch::answered`]）か追随（[`Launch::follow`]）か途中再開（[`Launch::resumed`]）を持つ周
+/// （[`Launch::answered`]）か追随（[`Launch::follow`]）か途中再開（[`Launch::resumed`]）か門の赤（[`Launch::red`]）を持つ周
 /// ——は**同じ run の worktree と記録済みの base を使う**（設計 pipeline-question.md §5 /
 /// pipeline-conflict.md §3 / account-autonomy.md §4: 再開は同じ便・worktree が無い / 別 branch に
 /// 居る周は断る）。
 fn prepare_worktree(launch: &Launch<'_>) -> Result<(PathBuf, String), String> {
     let worktree = worktree_path(launch.repo, launch.run);
-    if launch.answered.is_none() && launch.follow.is_none() && launch.resumed.is_none() {
+    if launch.answered.is_none() && launch.follow.is_none() && launch.resumed.is_none() && launch.red.is_none() {
         let base = super::head_of(launch.repo)
             .ok_or_else(|| format!("{} の HEAD を読めない", launch.repo.display()))?;
         add_worktree(launch.repo, &worktree, launch.run, &base)?;

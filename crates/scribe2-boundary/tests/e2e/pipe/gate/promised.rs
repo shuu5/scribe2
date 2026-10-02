@@ -113,7 +113,7 @@ fn promised_gate(body: &str) -> (PathBuf, PathBuf, String, Output) {
     let copied = copied_write_set(&state, &id);
     assert!(copied.contains(&format!("+{PROMISED_FILE}")), "前提: 写しの write-set は約束の `+` の file を持つ: {copied:?}");
     let runner = format!("echo '{body}' > {PROMISED_FILE} && git add -A && git commit -q -m runner");
-    let out = spawn_with(&repo, &state, &id, &runner);
+    let out = spawn_without_gate(&repo, &state, &id, &runner);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
     let gated = gate_with_cargo_stub(&repo, &state, &id, &fake_lens(&state.join("lens-ran"), &lens_verdict("PASS")));
     (repo, state, id, gated)

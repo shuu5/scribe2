@@ -128,7 +128,7 @@ fn prefixed_run(extra: &str) -> (PathBuf, PathBuf, String) {
     let runner = format!(
         "echo new > src/new.rs && echo '// old' > src/old.rs {extra} && git add -A && git commit -q -m runner"
     );
-    let out = spawn_with(&repo, &state, &id, &runner);
+    let out = spawn_without_gate(&repo, &state, &id, &runner);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
     (repo, state, id)
 }
@@ -1413,10 +1413,13 @@ fn scope_prop(record: &str, key: &str) -> String {
 fn confined_run(repo: &Path, state: &Path, path: &str, lens: &str) -> (String, Output) {
     let design = write_contract(repo, &[], &[]);
     let id = intake(repo, state, &design);
+    // spawn も行 `runner.end_gate_rounds` を持たない `--rules` の fixture で撃つ＝終わりの門は撃たれない（要約の語 unmeasured・
+    // 歯の関心は gate の封じ込めと受付で、門の分の scope の記録と受付の待ちを gate の前に積まない・設計 pipeline.md §66）。
     let spawned = run_pipe_with_path(
         path,
         &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
-          "--state-dir", &state.display().to_string(), "--runner", TOY_COMMIT],
+          "--state-dir", &state.display().to_string(), "--runner", TOY_COMMIT,
+          "--rules", &ceiling_rules(state)],
     );
     assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
     // `--rules` の tmp manifest で撃つ（受付の待ちの上限を fixture の値にする）。
