@@ -539,7 +539,8 @@ fn pipe_review_contract_whole_goal_reads_the_goal_from_a_derived_toml() {
         &[("write-set", "[\"crates/toy/src/tint.rs\"]"), ("section", "\"47\""), ("req", "[\"FR2\"]"), ("goal", &quoted)],
     );
     let derived = format!("schema = 1\n\n{row}");
-    let (repo, state) = derive_repo_with(&table_doc(""), &[("docs/design/derived.toml", &derived)]);
+    let vessel = format!("{DERIVE_VESSEL}contract-tables = [\"docs/design/\"]\n");
+    let (repo, state) = derive_repo_with(&table_doc(""), &[(".vessel.toml", &vessel), ("docs/design/derived.toml", &derived)]);
     let out = intake_raw(&repo, &state, "docs/design/derived.toml#g", "s2-g");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "導出物の行の受付は通る: {}", stderr_of(&out));
     let id = run_id_of(&out);

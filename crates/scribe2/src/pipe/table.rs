@@ -418,6 +418,14 @@ pub enum TableError {
         /// 行番号。
         line: u64,
     },
+    /// 受付の pointer の path が受付の材料の宣言の置き場（既定の `docs/design/` 直下の `.md` と宣言 `contract-tables` の項目）に入らない
+    /// （doc を読む前に断る・行 0・設計 contract-source.md §69 形 8・行 cg）。
+    PlaceOutside {
+        /// 行番号（file 全体の 0）。
+        line: u64,
+        /// 置き場の外を指していた pointer の path。
+        path: String,
+    },
 }
 
 impl TableError {
@@ -445,7 +453,8 @@ impl TableError {
             | Self::DocIdDuplicate { line, .. }
             | Self::DoneTeeth { line, .. }
             | Self::DoneUnnumbered { line }
-            | Self::DoneTeethMissing { line } => line,
+            | Self::DoneTeethMissing { line }
+            | Self::PlaceOutside { line, .. } => line,
         }
     }
 
@@ -474,6 +483,7 @@ impl TableError {
             Self::DoneTeeth { .. } => "done-teeth",
             Self::DoneUnnumbered { .. } => "done-unnumbered",
             Self::DoneTeethMissing { .. } => "done-teeth-missing",
+            Self::PlaceOutside { .. } => "place-outside",
         }
     }
 
@@ -523,6 +533,9 @@ impl TableError {
             Self::DoneTeeth { ref element, ref reason, .. } => format!("done-teeth {element:?} が外れている: {reason}"),
             Self::DoneUnnumbered { .. } => DONE_UNNUMBERED.to_owned(),
             Self::DoneTeethMissing { .. } => DONE_TEETH_MISSING.to_owned(),
+            Self::PlaceOutside { ref path, .. } => format!(
+                "{path} は契約表の置き場の外（受付の pointer の置き場は既定の {DESIGN_DIR} 直下の .md と、宣言 {DECL_FILE} の key contract-tables の項目だけ）"
+            ),
         }
     }
 
@@ -541,6 +554,7 @@ impl TableError {
         match *self {
             Self::SurfaceUnknown { .. } | Self::TeethOutsideWriteSet { .. } | Self::DoneTeeth { .. } => Evidence::Name,
             Self::PlaceEmpty { ref item, .. } => Evidence::Files(vec![item.clone()]),
+            Self::PlaceOutside { .. } => Evidence::Files(vec![DECL_FILE.to_owned()]),
             Self::DocIdDuplicate { ref doc, ref other, .. } => Evidence::Files(vec![doc.clone(), other.clone()]),
             Self::Unreadable { .. } => Evidence::Place,
             Self::RegionMissing { .. }
@@ -637,7 +651,7 @@ pub struct Finding {
 
 impl Finding {
     /// 契約表そのものの欠陥の 1 件。
-    fn table(error: TableError) -> Self {
+    pub(crate) fn table(error: TableError) -> Self {
         Self { line: error.line(), refuse: Refuse::ContractTable(error) }
     }
 
@@ -810,6 +824,7 @@ mod tests {
         "done-teeth",
         "done-unnumbered",
         "done-teeth-missing",
+        "place-outside",
     ];
 
     /// 宣言順に 1 つずつ組んだ全 variant（行番号は 1 から順）。
@@ -838,6 +853,7 @@ mod tests {
             TableError::DoneTeeth { line: 20, element: text("2:x_tooth"), reason: text("r") },
             TableError::DoneUnnumbered { line: 21 },
             TableError::DoneTeethMissing { line: 22 },
+            TableError::PlaceOutside { line: 23, path: text("contracts/t.toml") },
         ]
     }
 
@@ -847,7 +863,7 @@ mod tests {
         let found = samples();
         let names: Vec<&str> = found.iter().map(TableError::as_str).collect();
         assert_eq!(names, TABLE_ERRORS, "名前の slice は宣言順（母集団 {} 値）", TABLE_ERRORS.len());
-        assert_eq!(TABLE_ERRORS.len(), 22, "母集団は 22 値");
+        assert_eq!(TABLE_ERRORS.len(), 23, "母集団は 23 値");
         for (index, error) in found.iter().enumerate() {
             assert_eq!(error.line(), index as u64 + 1, "{} は行番号を持つ", error.as_str());
             assert!(!error.reason().is_empty() && !error.reason().contains('\n'), "{} の理由は 1 行", error.as_str());
@@ -878,7 +894,7 @@ mod tests {
         assert!(twice.contains("docs/design/toy.md") && twice.contains("contracts/toy.toml"), "重なった 2 本の doc を名乗る: {twice}");
     }
 
-    /// 在り処は全 variant の母集団（22）で 1 つずつ決まり（設計 dispatcher.md §27 形 3・宣言順）、契約表の欠陥の断りは同じ値を
+    /// 在り処は全 variant の母集団（23）で 1 つずつ決まり（設計 dispatcher.md §27 形 3・宣言順）、契約表の欠陥の断りは同じ値を
     /// 受付の側（`Refuse::ContractTable`）へ渡す。本文の読み手が解くのは外形の名と歯の置き場と欄 done-teeth の在りかの 3 つ・読めない周は測れない。
     /// 変わった行の要否の 2 語（done-unnumbered・done-teeth-missing）は行の字だけで決まる。
     #[test]
@@ -887,7 +903,7 @@ mod tests {
         let found: Vec<&str> = samples().iter().map(|error| error.evidence().as_str()).collect();
         let want = [
             "row", "row", "place", "row", "row", "row", "row", "row", "row", "row", "name", "row", "row", "row", "name", "row",
-            "row", "files", "files", "name", "row", "row",
+            "row", "files", "files", "name", "row", "row", "files",
         ];
         assert_eq!(found, want, "母集団 {} variant の在り処（宣言順）", TABLE_ERRORS.len());
         assert_eq!(found.len(), TABLE_ERRORS.len(), "全 variant に 1 つ");

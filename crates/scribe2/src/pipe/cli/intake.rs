@@ -256,6 +256,9 @@ pub(in crate::pipe) struct Materials {
     requirements: Result<BTreeSet<String>, String>,
     /// repo の全 doc が宣言済みの新規 file（`contracts check` と同じ 1 本 [`table::declared_files`]・読めない周は理由）。
     declared: Result<Vec<String>, String>,
+    /// HEAD の宣言の契約表の置き場の項目（key `contract-tables`・書かない宣言は空・読めない周は `None`＝照らさない・設計
+    /// contract-source.md §69 形 8・行 cg）。受付の pointer の path をこれに照らす（[`generated`]）。
+    places: Option<Vec<String>>,
     /// クラスの語列表（上限の [`Ceiling`] から借りた写し・表の検査が verify 行から 3 クラスを導く）。
     classes: Vec<String>,
     /// 裁定 id の引用の判定の材料（台帳の client と、1 周に 1 回だけ読む宣言・台帳・線・設計 dispatcher.md §37 約束 5）。
@@ -283,6 +286,7 @@ impl Materials {
         let requirements =
             table::read(repo, &facts.requirements).and_then(|found| table::requirement_ids(&facts.requirements, &found));
         let declared = table::declared_files(repo, &tracked);
+        let places = declaration::TablePlaces::at(repo, "HEAD").items().map(<[String]>::to_vec);
         Ok(Self {
             tracked,
             sources,
@@ -290,6 +294,7 @@ impl Materials {
             facts,
             requirements,
             declared,
+            places,
             classes: ceiling.classes.to_vec(),
             ruling: ruling::Rulings::new(bd),
             index: None,
@@ -408,6 +413,15 @@ pub(in crate::pipe) fn generated(
     pointer: &table::Pointer,
     materials: &Materials,
 ) -> Result<(Contract, String), Denial> {
+    // 置き場の外の pointer は doc を読む前に断る（置き場の外は表でない＝読む理由が無い・設計 contract-source.md §69 形 8・行 cg）。
+    // 置き場を読めない周（宣言の不備は材料の読みが先に断っている）は照らさず、今の読みに任せる。
+    if let Some(items) = materials.places.as_deref() {
+        let paths = std::slice::from_ref(&pointer.path);
+        if table::design_docs(paths, items).is_empty() {
+            let outside = TableError::PlaceOutside { line: 0, path: pointer.path.clone() };
+            return Err(finding_denial(&pointer.path, &[table::Finding::table(outside)]));
+        }
+    }
     let Some(text) = crate::pipe::show_head(repo, &pointer.path) else {
         let reason = format!("{} を base（HEAD）から読めない", pointer.path);
         return Err(refuse(&Refuse::ContractTable(TableError::Unreadable { line: 0, reason }), &[]));
@@ -419,13 +433,7 @@ pub(in crate::pipe) fn generated(
     })?;
     let findings = check_row(&pointer.path, &text, &row, materials);
     if !findings.is_empty() {
-        // 名は `Refuse::ContractTable` の側から取る（字面を 2 か所に書かない・C1）。findings は表の検査の
-        // 描画をそのまま並べる（`contracts check` と 1 byte 同じ行＝読み手が 2 つの形を覚えない）。
-        let name = Refuse::ContractTable(TableError::RowMissing { line: 0, id: String::new() }).as_str();
-        let rc = findings.iter().map(table::Finding::rc).fold(RC_REFUSED, u8::max);
-        let lines = findings.iter().map(|finding| finding.render(&pointer.path)).collect();
-        let refusals = findings.iter().map(|finding| finding.refuse().clone()).collect();
-        return Err(Denial { refusals, ..denied(name, Outcome::failed(rc, lines)) });
+        return Err(finding_denial(&pointer.path, &findings));
     }
     exclude_unindexed(&row, materials)?;
     let design = format!("{}#{}", pointer.path, pointer.id);
@@ -449,6 +457,16 @@ pub(in crate::pipe) fn generated(
         denied(DENIAL_GENERATED, unloadable(errors))
     })?;
     Ok((contract, body))
+}
+
+/// 表の検査の findings を受付の断りに組む（rc は最大・名は `Refuse::ContractTable` の側から取る＝字面を 2 か所に書かない・C1）。
+/// 行は表の検査の描画をそのまま並べる（`contracts check` と 1 byte 同じ行＝読み手が 2 つの形を覚えない）。
+fn finding_denial(path: &str, findings: &[table::Finding]) -> Denial {
+    let name = Refuse::ContractTable(TableError::RowMissing { line: 0, id: String::new() }).as_str();
+    let rc = findings.iter().map(table::Finding::rc).fold(RC_REFUSED, u8::max);
+    let lines = findings.iter().map(|finding| finding.render(path)).collect();
+    let refusals = findings.iter().map(|finding| finding.refuse().clone()).collect();
+    Denial { refusals, ..denied(name, Outcome::failed(rc, lines)) }
 }
 
 /// touches に型の項目を持つ行を、base の索引の状態で断る（設計 reverse-index.md §7 (b)・[`generated`] の表の検査が findings 0 で通った
@@ -1351,6 +1369,7 @@ mod tests {
             facts: TableFacts { allowed: Vec::new(), denied: Vec::new(), requirements: String::new(), crate_roots: vec!["crates/".to_owned()], teeth_check: false },
             requirements: Ok(BTreeSet::new()),
             declared: Ok(Vec::new()),
+            places: Some(Vec::new()),
             classes: Vec::new(),
             ruling: Rulings::new("bd"),
             index: None,

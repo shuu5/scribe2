@@ -3304,3 +3304,68 @@ fn pipe_intake_index_closure_refuses_while_the_index_is_absent_or_building_and_n
     }
     clean(&[&place.repo, &place.state]);
 }
+
+// ───── 受付の pointer の置き場（設計 docs/design/contract-source.md §69 形 8・行 cg・接頭辞 `intake_place_outside_`） ─────
+
+/// 置き場の外の toy: key の無い宣言に、導出物の行 a を持つ `contracts/t.toml` と、`docs/design/toy.md` の行 a を commit する。
+fn place_outside_repo() -> (PathBuf, PathBuf) {
+    let derived = format!(
+        "schema = 1\n\n{}",
+        derive_row("a", &[("write-set", "[\"crates/toy/src/tint.rs\"]"), ("section", "\"47\""), ("req", "[\"FR2\"]"), ("goal", "\"g\"")])
+    );
+    let row = derive_row("a", &[("write-set", "[\"crates/toy/src/tint.rs\"]")]);
+    derive_repo_with(&table_doc(&table_region(&[row])), &[("contracts/t.toml", &derived)])
+}
+
+/// 置き場の外の pointer の断りの 1 行（`contracts: <path>:0 contract-table:place-outside: <理由>`）の接頭辞。
+fn place_outside_prefix(path: &str) -> String {
+    format!("contracts: {path}:0 contract-table:place-outside: ")
+}
+
+/// (a) key の無い toy の `contracts/t.toml#a` の受付は rc 1・stderr の 1 行が place-outside で始まり・run dir と event は撃つ前と同数。
+/// 同じ pointer の preflight は stderr に同じ 1 行・stdout の末尾が `preflight: refused n=1` で rc 1。HEAD に無い `contracts/none.toml#a` も
+/// 読めない断りでなく同じ形で断る（doc を読む前に判じる）。
+#[test]
+fn intake_place_outside_refuses_a_pointer_outside_the_places_before_reading_the_doc() {
+    let (repo, state) = place_outside_repo();
+    for path in ["contracts/t.toml", "contracts/none.toml"] {
+        let design = format!("{path}#a");
+        let (dirs, events) = (run_dirs(&state), event_count(&state));
+        let refused = intake_raw(&repo, &state, &design, "s2-po");
+        let err = stderr_of(&refused);
+        assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "{path}: 受付は rc 1: {err}");
+        assert_eq!(err.trim_end().lines().count(), 1, "{path}: stderr は 1 行: {err}");
+        assert!(err.starts_with(&place_outside_prefix(path)), "{path}: 置き場の外の断りの形: {err}");
+        assert_eq!((run_dirs(&state), event_count(&state)), (dirs.clone(), events), "{path}: run dir と event を作らない");
+        let checked = preflight_raw(&repo, &state, &design, "s2-po", true);
+        assert_eq!(checked.status.code(), Some(i32::from(RC_REFUSED)), "{path}: preflight も rc 1: {}", stdout_of(&checked));
+        assert_eq!(stderr_of(&checked), err, "{path}: preflight の stderr は受付と同じ 1 行");
+        assert_eq!(tail_line(&checked), "preflight: refused n=1", "{path}: {}", stdout_of(&checked));
+        assert_eq!((run_dirs(&state), event_count(&state)), (dirs, events), "{path}: preflight も run を作らない");
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (b) 同じ toy に key で `contracts/` を名乗る commit を足すと、同じ受付が rc 0 で run を作る。
+#[test]
+fn intake_place_outside_passes_a_pointer_the_declaration_names() {
+    let (repo, state) = place_outside_repo();
+    let declaration = fs::read_to_string(repo.join(".vessel.toml")).expect("宣言を読める");
+    fs::write(repo.join(".vessel.toml"), format!("{declaration}contract-tables = [\"contracts/\"]\n")).expect("宣言を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "declare-contracts"]);
+    let dirs = run_dirs(&state);
+    let taken = intake_raw(&repo, &state, "contracts/t.toml#a", "s2-po");
+    assert_eq!(taken.status.code(), Some(i32::from(RC_OK)), "名乗った置き場の pointer は通る: {}", stderr_of(&taken));
+    assert_eq!(run_dirs(&state).len(), dirs.len() + 1, "run を作る");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 同じ toy の `docs/design/toy.md` の行 a の受付は rc 0（既定の置き場・対照）。
+#[test]
+fn intake_place_outside_passes_a_pointer_in_the_default_place() {
+    let (repo, state) = place_outside_repo();
+    let taken = intake_raw(&repo, &state, "docs/design/toy.md#a", "s2-po");
+    assert_eq!(taken.status.code(), Some(i32::from(RC_OK)), "既定の置き場は通る: {}", stderr_of(&taken));
+    clean(&[&repo, &state]);
+}
