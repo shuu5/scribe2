@@ -833,3 +833,34 @@ fn pipe_follow_stale_rows_no_runner_records_and_resume_continues() {
     assert!(!marker.exists(), "再 gate は撃たれない");
     clean(&[&repo, &state]);
 }
+
+/// (o) 追随の再 gate も上限の許可を読む（設計 limit-permit.md §20 約束 1・歯 (o)）: 許可の無い manifest で PASS した便の後に、検出線の面に触れる commit で
+/// main が動いた。許可を足して cap 1 の manifest の `pipe land --rules` を撃つと、再 gate が許可で PASS し、permit を持つ `Gated` が 1 件増えて着地する。
+#[test]
+fn pipe_follow_gate_permit_regate_reads_the_grant_at_the_regate() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let verdicts = |state: &Path| -> Vec<String> { gated_details(state, &id).into_iter().filter(|detail| detail.starts_with("verdict:")).collect() };
+    let first = verdicts(&state);
+    commit_other_in_scope(&repo);
+    let record = vessel::pipe::permit::Record::Permit {
+        rule: "gate.token_cap".to_owned(),
+        value: 1_000_000,
+        until: "2099-01-01T00:00:00Z".to_owned(),
+        ruling: "s2-rq9.1".to_owned(),
+    };
+    super::super::gate::append_permit(&state, "s2-2e5", &record);
+    let rules = write_rules(&state, "rules-follow-permit.toml", 1, 1).display().to_string();
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = land_extra(&repo, &state, &id, &["--rules", &rules, "--lens", &lens]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "再 gate が許可で PASS して着地: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=PASS") && !stdout_of(&out).contains("regate=skipped"), "再 gate を撃った: {}", stdout_of(&out));
+    let after = verdicts(&state);
+    assert_eq!(after.len(), first.len() + 1, "判定の Gated が 1 件増える: {after:?}");
+    assert!(after.last().is_some_and(|detail| detail.ends_with(",permit:gate.token_cap=1000000 ruling=s2-rq9.1")), "permit を持つ: {after:?}");
+    assert!(first.iter().all(|detail| !detail.contains(",permit:")), "最初の gate は許可を持たない: {first:?}");
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "着地する");
+    clean(&[&repo, &state]);
+}

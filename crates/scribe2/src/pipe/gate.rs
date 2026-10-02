@@ -59,22 +59,25 @@ use super::cli::int_row;
 use super::health;
 use super::lens_record::LensSource;
 use super::move_proof::{self, LensInput, NotPure};
+use super::permit::{permitted, Effect};
 use super::ratelimit::{select_lens_account, LensAccount, Pool};
 use super::{
     contract_path, emit, git_bytes, git_line, record_cost, run_dir, verdict_path, worktree_path, Emit,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
-use crate::fleet::store::LockPolicy;
-use crate::fleet::{cli::now_utc, Cost, CostSource, EventKind, Stage, SCHEMA};
+use crate::fleet::store::{self, LockPolicy, StoreError};
+use crate::fleet::{cli::now_utc, Cost, CostSource, Event, EventKind, Stage, SCHEMA};
 use crate::invocation::Invocation;
 use crate::rules::manifest::Manifest;
+use crate::seat::state::now_secs;
 use findings::Tally;
 use lens::{
     ask_lens, fold_renamed_paths, head_paths, lens_input, prune_deletions, substitute, unjudged, write_verdict, Judged,
     LENS_STAGE,
 };
 use record::{record_notice, record_verify};
+use std::io::ErrorKind;
 use std::path::Path;
 use verify::byte_count;
 
@@ -237,6 +240,106 @@ impl Limits {
     }
 }
 
+/// 効く cap（設計 limit-permit.md §20 約束 1）: manifest の宣言値と event log の許可から周の入口で 1 回導く実効値。
+/// 宣言値の型 [`Limits`] に入れない（C10）。許可の周だけ行と値と裁定 id を持つ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EffectiveCap {
+    /// manifest の値のまま。
+    Declared(u64),
+    /// 許可の値で数える周。
+    Permitted {
+        /// 許可の対象の rules 行。
+        row: &'static str,
+        /// 許可の値。
+        value: u64,
+        /// 結んだ裁定の id。
+        ruling: String,
+    },
+}
+
+impl EffectiveCap {
+    /// 畳みの閾値と予算の照合が比べる値。
+    fn value(&self) -> u64 {
+        match self {
+            Self::Declared(value) | Self::Permitted { value, .. } => *value,
+        }
+    }
+
+    /// 許可の周だけ使用の記録の字（`gate.token_cap=<値> ruling=<裁定 id>`・文と detail と `verdict.json` が同じ字を使う）。
+    fn permit(&self) -> Option<String> {
+        match self {
+            Self::Declared(_) => None,
+            Self::Permitted { row, value, ruling } => Some(format!("{row}={value} ruling={ruling}")),
+        }
+    }
+
+    /// run dir の写しの 1 行（出所つき・lens が [`cap_copy`] で読む）。
+    fn copy_line(&self) -> String {
+        match self {
+            Self::Declared(value) => format!("{ROW_CAP}={value} source=manifest"),
+            Self::Permitted { row, value, ruling } => format!("{row}={value} source=permit ruling={ruling}"),
+        }
+    }
+}
+
+/// 周の入口の読み: event log を 1 回読み、行 b の [`permitted`] を今の時刻で 1 回呼んで効く cap を導く。
+fn read_cap(entry: &Gate<'_>) -> Result<EffectiveCap, String> {
+    cap_of(store::read_all(entry.state_dir), entry.limits.token_cap, entry.bead, now_secs())
+}
+
+/// [`read_cap`] の純関数の本体。読めない結果は許可にも manifest の値にも倒さず `Err`（効きの読み分けは [`permitted`] の 1 本・C2）。
+fn cap_of(read: Result<Vec<Event>, Vec<StoreError>>, declared: u64, bead: &str, now: u64) -> Result<EffectiveCap, String> {
+    let events = read.map_err(|errors| {
+        let first = errors.first().map_or_else(String::new, ToString::to_string);
+        format!("event log を読めない（上限の許可を照らせない）: {first}")
+    })?;
+    Ok(match permitted(ROW_CAP, declared, bead, &events, now) {
+        Effect::Declared => EffectiveCap::Declared(declared),
+        Effect::Permitted { value, ruling, .. } => EffectiveCap::Permitted { row: ROW_CAP, value, ruling },
+    })
+}
+
+/// run dir の直下の cap の写しの名（契約の写しの隣・gate が lens を起こす直前に書き直し、lens が読む）。
+pub(crate) const CAP_FILE: &str = "cap.txt";
+
+/// 写しを書き直す（書けない周は呼び手が lens を起こさず止まる）。
+fn keep_cap(entry: &Gate<'_>, cap: &EffectiveCap) -> Result<(), String> {
+    let path = run_dir(entry.state_dir, entry.run).join(CAP_FILE);
+    std::fs::write(&path, format!("{}\n", cap.copy_line())).map_err(|err| format!("{} を書けない: {err}", path.display()))
+}
+
+/// 契約の写しの隣の cap の写しの値（lens の読み手・path の導出と 1 行の読みはこの 1 組だけ）。無ければ `None`・
+/// 在るのに読めない周と 2 形（`gate.token_cap=<整数> source=manifest` / `... source=permit ruling=<空でない>`）の外は `Err`。
+pub(crate) fn cap_copy(contract: &Path) -> Result<Option<u64>, String> {
+    let path = contract.with_file_name(CAP_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(found) => found,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(format!("{}: {err}", path.display())),
+    };
+    let line = text.strip_suffix('\n').unwrap_or(&text);
+    copy_value(line).map(Some).ok_or_else(|| format!("{}: 1 行が写しの 2 形のどちらでもない", path.display()))
+}
+
+/// 写しの 1 行の値（2 形の外は `None`）。
+fn copy_value(line: &str) -> Option<u64> {
+    let (digits, source) = line.strip_prefix(ROW_CAP)?.strip_prefix('=')?.split_once(' ')?;
+    let value = digits.bytes().all(|byte| byte.is_ascii_digit()).then(|| digits.parse::<u64>().ok()).flatten()?;
+    let granted = match source.strip_prefix("source=permit ruling=") {
+        Some(ruling) => !ruling.is_empty() && !ruling.contains('\n'),
+        None => source == "source=manifest",
+    };
+    granted.then_some(value)
+}
+
+/// 予算を超えた周の INCONCLUSIVE の文。許可の周だけ cap の値の直後に `（上限の許可 <使用の記録の字>）` を持つ（許可の無い周の字は不変）。
+fn over_cap(kind: &str, size: u64, cap: &EffectiveCap) -> String {
+    match cap.permit() {
+        None => format!("{kind} {size} byte が cap {} を超えた", cap.value()),
+        Some(word) => format!("{kind} {size} byte が cap {}（上限の許可 {word}）を超えた", cap.value()),
+    }
+}
+
 /// 撃たない理由（record の `reason=`・閉じた enum・憲法 C11）。
 ///
 /// 検出線（③）は gate・主実測・候補の木のどれも撃たない（着地後の検出の口だけ・設計 gate-cost.md §44 形 (9)）ので、
@@ -333,6 +436,8 @@ struct Decision {
     account: Option<String>,
     /// 読んだ manifest の出所（`embedded` / file の blob id / `unreadable`・gate の入口で 1 回測る・[`rules_word`]）。
     rules: String,
+    /// 効く cap が許可だった周の使用の記録の字（許可の無い周は `None`＝detail も `verdict.json` も不変・[`EffectiveCap::permit`]）。
+    permit: Option<String>,
 }
 
 /// [`decide`] の戻り（判定・lens の scope の片付け・lens を起こした口座）。
@@ -358,15 +463,20 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
     if let Some(reason) = precheck(&worktree, &base) {
         return precheck_failed(entry, &reason);
     }
+    // **効く cap は周の入口で 1 回だけ導く**（verify の前・追随の再 gate もここを通る・設計 limit-permit.md §20 約束 1）。
+    let cap = match read_cap(entry) {
+        Ok(found) => found,
+        Err(reason) => return broken(reason),
+    };
     // **撃つ前の木を読む**（precheck が clean を見た木＝verify を撃つ木・設計 gate-cost.md §5）。
     let tree = git_line(&worktree, &["rev-parse", "HEAD^{tree}"]);
-    let measured = match measure(entry, &worktree, &base) {
+    let measured = match measure(entry, &worktree, &base, cap.value()) {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
     // 口座の計測の行は stderr 側へ写す（`fleet select` と同じ・判定は変えない）。
     let mut notes = Vec::new();
-    let decided = match decide(entry, &worktree, &measured, &mut notes) {
+    let decided = match decide(entry, &worktree, &measured, (&cap, &mut notes)) {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
@@ -384,6 +494,7 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
         scope: decided.scope,
         account: decided.account,
         rules,
+        permit: cap.permit(),
     };
     match settle(entry, &decision) {
         Err(reason) => broken(reason),
@@ -426,7 +537,7 @@ fn precheck(worktree: &Path, base: &str) -> Option<String> {
 ///
 /// 通知（[`record_notice`]・設計 §21 (3)）は rc に依らず・入力の型に依らず 1 行で、判定は動かさない
 /// ——`Outcome.err` の 1 行は呼び手が捨てうる面なので、事後に読める面（run dir）にも同じ事実を置く。
-fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, String> {
+fn measure(entry: &Gate<'_>, worktree: &Path, base: &str, cap: u64) -> Result<Measured, String> {
     let counted = record_verify(entry, worktree, base)?;
     let (red, unreadable, killed, busy) = (counted.red, counted.unreadable, counted.killed, counted.busy);
     // 段①が diff を読めない周は同じ range の生 diff も読めない。ここで broken（rc 2・
@@ -447,7 +558,7 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
         LensInput::Diff(_) => {
             let head = head_paths(worktree);
             let (folded, hunks, lines) = fold_renamed_paths(&diff, head.as_deref());
-            if byte_count(&folded) > entry.limits.token_cap {
+            if byte_count(&folded) > cap {
                 let (body, runs, omitted) = prune_deletions(&folded);
                 (body, (hunks, lines), (runs, omitted))
             } else {
@@ -468,7 +579,7 @@ fn decide(
     entry: &Gate<'_>,
     worktree: &Path,
     measured: &Measured,
-    notes: &mut Vec<String>,
+    (cap, notes): (&EffectiveCap, &mut Vec<String>),
 ) -> Result<Decided, String> {
     // 機械検証の段の判定（測れなかった → 遮断器 → 赤）は pure な 1 本で先に読む。
     if let Some(judged) = machine_order(measured) {
@@ -478,13 +589,9 @@ fn decide(
     // `verdict.json` の `diff_bytes` は従来どおり生 diff の byte）。
     let body = measured.input.body(&measured.lens_diff);
     let size = byte_count(body);
-    if size > entry.limits.token_cap {
-        // **換算係数を持たない**（NFR1）。byte ≥ token の保守的な読みで直接比べる。
-        return inconclusive(format!(
-            "{} {size} byte が cap {} を超えた",
-            measured.input.kind(),
-            entry.limits.token_cap
-        ));
+    if size > cap.value() {
+        // **換算係数を持たない**（NFR1）。byte ≥ token の保守的な読みで直接比べる。上限なしの枝は持たない（許可の値も越えたら止まる）。
+        return inconclusive(over_cap(measured.input.kind(), size, cap));
     }
     // **本数は照合する**。0 本（lens を呼ばずに通す）も 2 本以上（1 本で足りたことに
     // する）も「lens の verdict」を得ていないので、判定順の 4 番目は成立しない。
@@ -512,6 +619,8 @@ fn decide(
     // **裁定の写しは lens を起こす直前に書く**（`s2-07l.309`）。書けない周は lens を「裁定なし」で
     // 起こさない——回答で認めた逸脱が契約違反に読まれ、偽 FAIL / 偽 INCONCLUSIVE へ倒れる。
     keep_rulings(entry)?;
+    // **cap の写しも lens を起こす直前に書き直す**（lens は別 process で event log を読まない・書けない周は lens を起こさない）。
+    keep_cap(entry, cap)?;
     let contract = contract_path(entry.state_dir, entry.run);
     // **lens の口座は起こす直前に選ぶ**（裁定の写しを書いた後・設計 account-autonomy.md §15）。
     let (line, account) = match lens_account(entry, substitute(cmd, &contract, worktree), notes) {
@@ -679,6 +788,10 @@ fn settle(entry: &Gate<'_>, decision: &Decision) -> Result<(), String> {
         fields.push(("findings", Value::Str(tally.findings_field())));
         fields.push(("population", Value::Str(tally.population_field())));
     }
+    // 許可で数えた周だけ使用を残す（schema は 1 のまま・許可の無い周の key の列は不変・設計 limit-permit.md §20 約束 3）。
+    if let Some(permit) = &decision.permit {
+        fields.push(("permit", Value::Str(permit.clone())));
+    }
     fields.push(("ts", Value::Str(now_utc())));
     let body = json_lite::write_object(&fields);
     write_verdict(&verdict_path(entry.state_dir, entry.run), &format!("{body}\n"))?;
@@ -706,9 +819,14 @@ fn settle(entry: &Gate<'_>, decision: &Decision) -> Result<(), String> {
 fn gated_detail(decision: &Decision) -> String {
     let verdict = format!("verdict:{}", decision.verdict.as_str());
     let rules = &decision.rules;
-    match &decision.account {
+    let detail = match &decision.account {
         None => format!("{verdict},rules:{rules}"),
         Some(label) => format!("{verdict},account:{label},rules:{rules}"),
+    };
+    // 許可で数えた周だけ行 a の出所の後ろに `,permit:`（判定に依らない・設計 limit-permit.md §20 約束 3）。
+    match &decision.permit {
+        None => detail,
+        Some(permit) => format!("{detail},permit:{permit}"),
     }
 }
 
@@ -788,6 +906,35 @@ mod tests {
         assert_eq!(red.verdict, Verdict::Fail, "印が無ければ赤が FAIL");
         assert_eq!(red.evidence, "verify の 1 行が rc≠0", "字面は不変");
         assert!(machine_order(&measured(0, None)).is_none(), "何も無い周は lens へ進む");
+    }
+
+    /// (s) 効く cap の読み: 読めない結果は「event log」を名指す `Err`（manifest の値にも許可にも倒さない）・空の列は manifest の値で
+    /// 許可が無い・許可の記帳が在れば許可の値（設計 limit-permit.md §20 約束 1・8）。
+    #[test]
+    fn gate_cap_read_unreadable_log_is_an_error_and_an_empty_log_is_declared() {
+        use super::{cap_of, EffectiveCap};
+        use crate::fleet::store::StoreError;
+        let unreadable = cap_of(Err(vec![StoreError::Io("壊れた行".to_owned())]), 7, "s2-b", 0);
+        let reason = unreadable.expect_err("読めない結果は止まる");
+        assert!(reason.contains("event log"), "event log を名指す: {reason}");
+        assert!(reason.contains("壊れた行"), "最初の理由を継ぐ: {reason}");
+        assert_eq!(cap_of(Ok(Vec::new()), 7, "s2-b", 0), Ok(EffectiveCap::Declared(7)), "空の列は manifest の値");
+        let line = r#"{"schema":1,"ts":"2026-10-02T01:00:00Z","kind":"LimitPermitted","bead":"s2-b","host":"h","actor":"machine","detail":"rule=gate.token_cap value=50 until=2099-01-01T00:00:00Z ruling=q-9"}"#;
+        let events = vec![crate::fleet::Event::from_line(line).expect("fixture の行が読める")];
+        let granted = cap_of(Ok(events), 7, "s2-b", 0).expect("読めた列");
+        assert_eq!(granted.value(), 50, "許可の値");
+        assert_eq!(granted.permit().as_deref(), Some("gate.token_cap=50 ruling=q-9"));
+    }
+
+    /// 写しの 1 行の読み: 2 形は値を返し、形の外（整数でない・裁定 id が空・出所の語が別）は `None`。
+    #[test]
+    fn gate_cap_read_copy_line_accepts_only_the_two_forms() {
+        use super::copy_value;
+        assert_eq!(copy_value("gate.token_cap=5 source=manifest"), Some(5));
+        assert_eq!(copy_value("gate.token_cap=100 source=permit ruling=user 2026-10-01 項 a"), Some(100));
+        for bad in ["gate.token_cap=x source=manifest", "gate.token_cap=1 source=permit ruling=", "gate.token_cap=1 source=other", "gate.token_cap=+1 source=manifest", "gate.token_cap= source=manifest"] {
+            assert_eq!(copy_value(bad), None, "形の外: {bad}");
+        }
     }
 
     /// (k) 出所の語: 埋め込みは git を撃たずに `embedded`、path は git の hash-object を 1 回（絶対 path・`--no-filters`）撃って

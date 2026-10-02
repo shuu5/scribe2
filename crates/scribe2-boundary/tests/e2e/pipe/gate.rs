@@ -4028,3 +4028,433 @@ fn limit_permit_value_must_exceed_the_declared_value() {
     assert_eq!(permitted(PERMIT_RULE, PERMIT_VALUE, "b1", &events, now), Effect::Declared, "manifest の値と等しい");
     assert_eq!(permitted(PERMIT_RULE, PERMIT_VALUE - 1, "b1", &events, now), permitted_effect(PERMIT_VALUE, "q-1", PERMIT_UNTIL), "1 小さいと許可の値");
 }
+
+// ───── 上限の許可の読み手（設計 limit-permit.md §20 行 d・接頭辞 `pipe_gate_permit_`） ─────
+//
+// 2 つの bead は write-set の file を分ける（INCONCLUSIVE の便は終端でなく、同じ write-set の 2 本目は受付が断る）。許可の記帳は行 b の形の
+// 1 行を event log の file へ足す（`fleet record` は便の形の kind しか書けない）。期限は未来を 2099 年・過去を 2000 年の秒の形にする。
+
+/// 許可の裁定 id（bead id にも出力の他の字にも現れない字）。
+const RULING: &str = "s2-rq9.1";
+/// 許可の期限（未来・過去）。
+const FUTURE: &str = "2099-01-01T00:00:00Z";
+const PAST: &str = "2000-01-01T00:00:00Z";
+/// 許可の値（cap 1 の manifest を越える値）。
+const BIG: u64 = 1_000_000;
+
+/// 記帳 1 件を置き場の event log の file の末尾へ足す（pipe の子の module から呼べる）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+pub(super) fn append_permit(state: &Path, bead: &str, record: &vessel::pipe::permit::Record) {
+    use std::io::Write;
+    let line = permit_row(bead, "2026-10-02T00:00:00Z", record).to_line();
+    let mut log = fs::OpenOptions::new().append(true).open(state.join("fleet").join("events.jsonl")).expect("event log を開ける");
+    writeln!(log, "{line}").expect("記帳を足せる");
+}
+
+/// 上限の許可の歯の置き場（cap 1 の manifest と PASS を返す偽 lens）。
+struct Fixture {
+    repo: PathBuf,
+    state: PathBuf,
+    rules: PathBuf,
+    marker: PathBuf,
+    lens: String,
+}
+
+impl Fixture {
+    /// 置き場と `cap` の manifest（`gate.token_cap` だけ振る）と偽 lens。
+    fn new(cap: u64) -> Self {
+        let (repo, state) = repo_with_state();
+        let marker = state.join("lens-ran");
+        let lens = fake_lens(&marker, &lens_verdict("PASS"));
+        let rules = write_rules(&state, "permit.toml", 1, cap);
+        Self { repo, state, rules, marker, lens }
+    }
+
+    /// bead の便を Implemented まで通す（write-set は `file` 1 本・runner はその file へ 1 行足して commit する）。
+    fn run(&self, bead: &str, file: &str) -> String {
+        let design = write_set_contract(&self.repo, &format!("row-{bead}"), &[file]);
+        let id = intake_bead(&self.repo, &self.state, &design, bead);
+        let runner = format!("echo x >> {file} && git add -A && git commit -q -m runner");
+        let out = spawn_without_gate(&self.repo, &self.state, &id, &runner);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
+        id
+    }
+
+    /// 許可（値 `value`・期限 `until`・裁定 id `ruling`）を足す。
+    fn grant(&self, bead: &str, value: u64, until: &str, ruling: &str) {
+        append_permit(&self.state, bead, &permit_record(PERMIT_RULE, value, until, ruling));
+    }
+
+    /// 既定の manifest（cap 1）と偽 lens で便を gate する。
+    fn gate(&self, id: &str) -> Output {
+        gate_with_rules(&self.repo, &self.state, id, &self.rules, &self.lens)
+    }
+
+    /// 便の run dir。
+    fn dir(&self, id: &str) -> PathBuf {
+        run_dir(&self.state, id)
+    }
+
+    /// 便の最後の `Gated` の detail。
+    fn detail(&self, id: &str) -> String {
+        gated_details(&self.state, id).pop().unwrap_or_default()
+    }
+
+    /// 許可の無い周: INCONCLUSIVE（rc 3）で文が manifest の「cap N を超えた」・`上限の許可` を持たず、detail と `verdict.json` に permit が無く、
+    /// lens も写しも無い。
+    fn assert_manifest_stop(&self, out: &Output, id: &str, cap: u64) {
+        assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "cap 超過は rc 3: {} / {}", stdout_of(out), stderr_of(out));
+        let pairs = verdict_pairs(&self.state, id);
+        let evidence = value_of(&pairs, "evidence");
+        assert!(evidence.contains(&format!("cap {cap} を超えた")) && !evidence.contains("上限の許可"), "manifest の文: {evidence}");
+        assert!(!pairs.iter().any(|(key, _)| key == "permit"), "verdict.json に permit が無い: {pairs:?}");
+        assert!(!self.detail(id).contains(",permit:"), "detail に permit が無い: {}", self.detail(id));
+        assert!(!self.marker.exists() && !self.dir(id).join("cap.txt").exists(), "lens も写しも無い");
+    }
+
+    /// PASS（rc 0）で lens が起きた。
+    fn assert_passed(&self, out: &Output, why: &str) {
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{why}: {} / {}", stdout_of(out), stderr_of(out));
+        assert!(self.marker.exists(), "{why}: lens が起きた");
+    }
+
+    /// 許可で数えた周の記録: detail の末尾・`verdict.json` の `permit` が `word`。
+    fn assert_used(&self, id: &str, word: &str) {
+        assert!(self.detail(id).ends_with(&format!(",permit:{word}")), "detail の末尾: {}", self.detail(id));
+        assert_eq!(value_of(&verdict_pairs(&self.state, id), "permit"), word, "verdict.json の permit");
+    }
+}
+
+/// (a) cap 1 の manifest でも値 1000000 の許可の便は PASS し lens が起きる。同じ歯の `pipe.permit_rows` を不発効にした写しの manifest でも
+/// 別の許可の便は PASS（gate は対象の列を読まない）。
+#[test]
+fn pipe_gate_permit_lifts_the_gate_cap_without_reading_the_permit_rows() {
+    let fx = Fixture::new(1);
+    let (a, b) = (fx.run("s2-pa", "src/a.rs"), fx.run("s2-pb", "src/b.rs"));
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    fx.grant("s2-pb", BIG, FUTURE, RULING);
+    fx.assert_passed(&fx.gate(&a), "cap 1 でも許可で通る");
+    let off = "\n[[rule]]\nid = \"pipe.permit_rows\"\nkind = \"PipePermitRows\"\nvalue = [\"gate.token_cap\"]\nenabled = false\nruling = \"t\"\nruled_at = \"d\"\n";
+    let text = fs::read_to_string(&fx.rules).expect("manifest を読める");
+    let rules = fx.state.join("permit-off.toml");
+    fs::write(&rules, format!("{text}{off}")).expect("写しを書ける");
+    let out = gate_with_rules(&fx.repo, &fx.state, &b, &rules, &fx.lens);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "対象の列を不発効にしても通る: {} / {}", stdout_of(&out), stderr_of(&out));
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// 埋め込みの manifest の写しの `gate.token_cap` だけを 1 にした file（gate の `--rules` と器の lens の行の `--rules` が同じ写しを読む）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tight_copy(state: &Path) -> PathBuf {
+    let text = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../rules/manifest.toml")).expect("manifest を読める");
+    let head = "id = \"gate.token_cap\"\nkind = \"GateTokenCap\"\nvalue = ";
+    let (before, after) = text.split_once(head).expect("gate.token_cap の行が在る");
+    let (_, rest) = after.split_once('\n').expect("行が終わる");
+    let path = state.join("rules-cap1.toml");
+    fs::write(&path, format!("{before}{head}1\n{rest}")).expect("写しを書ける");
+    path
+}
+
+/// 回数を積み PASS を返す偽 claude と、gate の lens の行を**器の lens**（`--rules` つき）にしたものを返す（`max_turns_lens` と同じ作り）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn real_lens(state: &Path, rules: &Path) -> (PathBuf, String) {
+    let claude = state.join("permit-claude.sh");
+    let script = format!("#!/bin/sh\ncat >/dev/null\nprintf 'call\\n' >> '{}'\necho '{}'\n", state.join("permit-calls").display(), lens_verdict("PASS"));
+    fs::write(&claude, script).expect("偽 claude を書ける");
+    let mut perm = fs::metadata(&claude).expect("権限を読める").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perm, 0o755);
+    fs::set_permissions(&claude, perm).expect("実行可能にできる");
+    let line = format!(
+        "mkdir -p {{worktree}}/docs && : > {{worktree}}/docs/constitution.md && {} lens --contract {{contract}} --worktree {{worktree}} --rules {} --claude {}",
+        env!("CARGO_BIN_EXE_scribe2"),
+        rules.display(),
+        claude.display()
+    );
+    (claude, line)
+}
+
+/// 偽 claude が起きた回数。
+fn claude_calls(state: &Path) -> usize {
+    fs::read_to_string(state.join("permit-calls")).map_or(0, |text| text.lines().count())
+}
+
+/// (b) gate と器の lens の行の両方を cap 1 の manifest の写しにして、許可の便は PASS し偽 claude が 1 回起きる（lens が写しを読まなければ
+/// lens が「diff exceeds cap」を返し INCONCLUSIVE）。
+#[test]
+fn pipe_gate_permit_lifts_the_cap_of_the_lens_the_gate_starts() {
+    let fx = Fixture::new(1);
+    let a = fx.run("s2-pa", "src/a.rs");
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    let rules = tight_copy(&fx.state);
+    let (_, lens) = real_lens(&fx.state, &rules);
+    let out = gate_with_rules(&fx.repo, &fx.state, &a, &rules, &lens);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "写しの cap で lens も通る: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(claude_calls(&fx.state), 1, "偽 claude が 1 回起きた");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (c) 許可を持たない bead B の便は INCONCLUSIVE で manifest の文・permit 無し・lens も写しも無い。B を外した後、同じ歯の許可の bead A は PASS。
+#[test]
+fn pipe_gate_permit_does_not_reach_a_bead_without_one() {
+    let fx = Fixture::new(1);
+    let (a, b) = (fx.run("s2-pa", "src/a.rs"), fx.run("s2-pb", "src/b.rs"));
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    fx.assert_manifest_stop(&fx.gate(&b), &b, 1);
+    stop_run_ok(&fx.state, &b);
+    fx.assert_passed(&fx.gate(&a), "許可の bead は通る");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (d) 許可の値 2（diff より小さい）は INCONCLUSIVE で、文が「cap 2（上限の許可 gate.token_cap=2 ruling=<id>）を超えた」・`verdict.json` と detail が
+/// 同じ permit を持ち、lens は起きない。
+#[test]
+fn pipe_gate_permit_value_below_the_diff_names_the_permit_in_the_sentence() {
+    let fx = Fixture::new(1);
+    let a = fx.run("s2-pa", "src/a.rs");
+    fx.grant("s2-pa", 2, FUTURE, RULING);
+    let out = fx.gate(&a);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "許可の値も越える diff は INCONCLUSIVE: {}", stdout_of(&out));
+    let word = format!("gate.token_cap=2 ruling={RULING}");
+    let evidence = value_of(&verdict_pairs(&fx.state, &a), "evidence");
+    assert!(evidence.contains(&format!("cap 2（上限の許可 {word}）を超えた")), "許可の文: {evidence}");
+    fx.assert_used(&a, &word);
+    assert!(!fx.marker.exists(), "lens は起きない");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (e) 許可で PASS した周の detail の末尾・`verdict.json` の permit・`cap.txt` の source=permit と、偽 lens が FAIL を返す周の同じ記録と、
+/// 許可の無い周（cap 1000000 の manifest）の行 a の出所で終わる detail・permit の無い `verdict.json`・source=manifest の `cap.txt`。
+#[test]
+fn pipe_gate_permit_records_the_use_whatever_the_verdict_and_nothing_without_it() {
+    let fx = Fixture::new(1);
+    let (a, c, b) = (fx.run("s2-pa", "src/a.rs"), fx.run("s2-pc", "src/c.rs"), fx.run("s2-pb", "src/b.rs"));
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    fx.grant("s2-pc", BIG, FUTURE, RULING);
+    let word = format!("gate.token_cap={BIG} ruling={RULING}");
+    fx.assert_passed(&fx.gate(&a), "許可で PASS");
+    fx.assert_used(&a, &word);
+    let copy = fs::read_to_string(fx.dir(&a).join("cap.txt")).unwrap_or_default();
+    assert_eq!(copy, format!("gate.token_cap={BIG} source=permit ruling={RULING}\n"), "写しは許可の値");
+    let fail = fake_lens(&fx.state.join("fail-ran"), &lens_verdict("FAIL"));
+    let out = gate_with_rules(&fx.repo, &fx.state, &c, &fx.rules, &fail);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL は rc 1: {}", stdout_of(&out));
+    fx.assert_used(&c, &word);
+    let big = write_rules(&fx.state, "permit-big.toml", 1, BIG);
+    let out = gate_with_rules(&fx.repo, &fx.state, &b, &big, &fx.lens);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "許可の無い周も cap 1000000 で PASS: {}", stdout_of(&out));
+    let source = rules_source(&fx.repo, Some(&big.display().to_string()));
+    assert!(fx.detail(&b).ends_with(&format!(",rules:{source}")), "行 a の出所で終わる: {}", fx.detail(&b));
+    assert!(!verdict_pairs(&fx.state, &b).iter().any(|(key, _)| key == "permit"), "permit の key が無い");
+    let copy = fs::read_to_string(fx.dir(&b).join("cap.txt")).unwrap_or_default();
+    assert_eq!(copy, format!("gate.token_cap={BIG} source=manifest\n"), "写しは manifest の値");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (f) 期限が過去の許可だけを持つ便は INCONCLUSIVE で manifest の文。同じ歯で期限が未来の新しい許可を足して撃ち直すと PASS。
+#[test]
+fn pipe_gate_permit_expired_grant_falls_back_to_the_manifest() {
+    let fx = Fixture::new(1);
+    let a = fx.run("s2-pa", "src/a.rs");
+    fx.grant("s2-pa", BIG, PAST, RULING);
+    fx.assert_manifest_stop(&fx.gate(&a), &a, 1);
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    fx.assert_passed(&fx.gate(&a), "新しい許可で通る");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (g) 許可の後に A の別の便の `RunCreated` と段 Landed を足した後の A の便は INCONCLUSIVE で manifest の文。同じ歯の許可を持つ別の bead C の便は PASS。
+#[test]
+fn pipe_gate_permit_lapses_once_another_run_of_the_bead_landed() {
+    let fx = Fixture::new(1);
+    let (a, c) = (fx.run("s2-pa", "src/a.rs"), fx.run("s2-pc", "src/c.rs"));
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    fx.grant("s2-pc", BIG, FUTURE, RULING);
+    let state = fx.state.display().to_string();
+    for args in [vec!["--kind", "RunCreated"], vec!["--kind", "RunStage", "--stage", "Landed"]] {
+        let out = bin_cmd().args(["fleet", "record"]).args(&args).args(["--run", "s2-pa-old", "--bead", "s2-pa", "--state-dir", &state]).output().expect("binary を起動できる");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{args:?}: {}", stderr_of(&out));
+    }
+    fx.assert_manifest_stop(&fx.gate(&a), &a, 1);
+    fx.assert_passed(&fx.gate(&c), "別の bead の許可は着地に巻き込まれない");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (h) 許可の後に取り消しを持つ便は INCONCLUSIVE で manifest の文。同じ歯で新しい許可を足して撃ち直すと PASS。
+#[test]
+fn pipe_gate_permit_revoked_grant_falls_back_to_the_manifest() {
+    let fx = Fixture::new(1);
+    let a = fx.run("s2-pa", "src/a.rs");
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    append_permit(&fx.state, "s2-pa", &revoke_record(PERMIT_RULE));
+    fx.assert_manifest_stop(&fx.gate(&a), &a, 1);
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    fx.assert_passed(&fx.gate(&a), "新しい許可で通る");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (i) 値 1000000 の許可の後に値 2 の新しい許可（新しい裁定 id）を持つ便の文は新しい値と新しい id（古い値と古い id を持たない）。
+#[test]
+fn pipe_gate_permit_newest_entry_replaces_the_older_grant() {
+    let fx = Fixture::new(1);
+    let a = fx.run("s2-pa", "src/a.rs");
+    fx.grant("s2-pa", BIG, FUTURE, "s2-old.1");
+    fx.grant("s2-pa", 2, FUTURE, RULING);
+    let out = fx.gate(&a);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stdout_of(&out));
+    let evidence = value_of(&verdict_pairs(&fx.state, &a), "evidence");
+    assert!(evidence.contains(&format!("cap 2（上限の許可 gate.token_cap=2 ruling={RULING}）")), "新しい記帳の文: {evidence}");
+    assert!(!evidence.contains("s2-old.1") && !evidence.contains("1000000"), "古い値と古い id を持たない: {evidence}");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (j) 期限が未来の許可の後に期限が過去の新しい許可を持つ便は古い許可へ戻らず manifest の文。同じ歯で 3 つ目の許可を足すと PASS。
+#[test]
+fn pipe_gate_permit_expired_newest_entry_does_not_revive_the_older_grant() {
+    let fx = Fixture::new(1);
+    let a = fx.run("s2-pa", "src/a.rs");
+    fx.grant("s2-pa", BIG, FUTURE, "s2-old.1");
+    fx.grant("s2-pa", BIG, PAST, RULING);
+    fx.assert_manifest_stop(&fx.gate(&a), &a, 1);
+    fx.grant("s2-pa", BIG, FUTURE, "s2-third.1");
+    fx.assert_passed(&fx.gate(&a), "3 つ目の許可で通る");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (k) cap 10 の manifest と値 5 の許可（manifest 以下）は不効で「cap 10 を超えた」。同じ歯で値 1000000 の許可を足して撃ち直すと PASS。
+#[test]
+fn pipe_gate_permit_at_or_below_the_manifest_value_is_inert() {
+    let fx = Fixture::new(10);
+    let a = fx.run("s2-pa", "src/a.rs");
+    fx.grant("s2-pa", 5, FUTURE, RULING);
+    fx.assert_manifest_stop(&fx.gate(&a), &a, 10);
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    fx.assert_passed(&fx.gate(&a), "manifest を越える許可で通る");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (l) 許可で PASS した便の `review` の契約の写し（材料つき）に、器の lens を cap 1 の manifest の写しで撃つと「contract material exceeds cap」で
+/// 偽 claude は起きない（run dir の直下の `cap.txt` は許可の値のまま）。
+#[test]
+fn pipe_gate_permit_does_not_reach_the_contract_review_lens() {
+    let fx = Fixture::new(1);
+    let a = fx.run("s2-pa", "src/a.rs");
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    let rules = tight_copy(&fx.state);
+    let (claude, lens) = real_lens(&fx.state, &rules);
+    let out = gate_with_rules(&fx.repo, &fx.state, &a, &rules, &lens);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "許可で PASS: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(claude_calls(&fx.state), 1, "gate の lens で 1 回");
+    let review = review_dir(&fx.state, &a);
+    assert!(review.join("design.txt").is_file(), "前提: 審査の材料が在る");
+    let out = bin_cmd()
+        .args(["lens", "--contract"]).arg(review.join("contract.toml"))
+        .arg("--worktree").arg(&fx.state).arg("--rules").arg(&rules).arg("--claude").arg(&claude)
+        .output()
+        .expect("binary を起動できる");
+    assert!(stdout_of(&out).contains("contract material exceeds cap"), "材料は manifest の cap 1 を越える: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(claude_calls(&fx.state), 1, "審査の lens で偽 claude は起きない");
+    let copy = fs::read_to_string(fx.dir(&a).join("cap.txt")).unwrap_or_default();
+    assert!(copy.contains("source=permit"), "run dir の直下の写しは許可の値のまま: {copy}");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// `dir` の下の `name` という名の file / dir の path を全部拾う（symlink は辿らない）。
+fn named_under(dir: &Path, name: &str) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .flat_map(|entry| {
+            let path = entry.path();
+            let mut found = if entry.file_name() == name { vec![path.clone()] } else { Vec::new() };
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                found.extend(named_under(&path, name));
+            }
+            found
+        })
+        .collect()
+}
+
+/// (m) 許可で PASS した後の置き場の `cap.txt` は 1 本だけで、gate の契約の写しの隣（run dir の直下）に在り、`review` の下と run dir の外に無い。
+#[test]
+fn pipe_gate_permit_leaves_one_copy_beside_the_gate_contract() {
+    let fx = Fixture::new(1);
+    let a = fx.run("s2-pa", "src/a.rs");
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    fx.assert_passed(&fx.gate(&a), "許可で PASS");
+    assert_eq!(named_under(&fx.state, "cap.txt"), [fx.dir(&a).join("cap.txt")], "写しは run dir の直下の 1 本だけ");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (n) 許可を持つ便の event log の末尾に壊れた行を足すと rc 2 で、`verdict.json` も `cap.txt` も無く、lens も起きず、`Gated` の行が増えない。
+/// 同じ歯で壊れた行を除くと PASS。
+#[test]
+fn pipe_gate_permit_unreadable_event_log_stops_without_a_verdict() {
+    let fx = Fixture::new(1);
+    let a = fx.run("s2-pa", "src/a.rs");
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    let before = events_bytes(&fx.state);
+    let log = fx.state.join("fleet").join("events.jsonl");
+    fs::write(&log, [before.as_slice(), b"{not json\n"].concat()).expect("壊れた行を足せる");
+    let out = fx.gate(&a);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "読めない log は rc 2: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(!fx.dir(&a).join("verdict.json").exists() && !fx.dir(&a).join("cap.txt").exists() && !fx.marker.exists(), "判定も写しも lens も無い");
+    assert_eq!(events_bytes(&fx.state).len(), before.len() + b"{not json\n".len(), "log は 1 byte も増えない（Gated の行を書かない）");
+    fs::write(&log, &before).expect("壊れた行を除ける");
+    fx.assert_passed(&fx.gate(&a), "壊れた行を除けば通る");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (t) `cap.txt` の場所に dir を置いた許可の便は rc 2 で lens が起きず `verdict.json` が無い。同じ歯で dir を除くと PASS。
+#[test]
+fn pipe_gate_permit_unwritable_copy_stops_before_the_lens() {
+    let fx = Fixture::new(1);
+    let a = fx.run("s2-pa", "src/a.rs");
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    let copy = fx.dir(&a).join("cap.txt");
+    fs::create_dir(&copy).expect("写しの場所に dir を置ける");
+    let out = fx.gate(&a);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "写しを書けない周は rc 2: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(!fx.marker.exists() && !fx.dir(&a).join("verdict.json").exists(), "lens も判定も無い");
+    fs::remove_dir(&copy).expect("dir を除ける");
+    fx.assert_passed(&fx.gate(&a), "dir を除けば通る");
+    clean(&[&fx.repo, &fx.state]);
+}
+
+/// (u) 16 行以上の削除だけの run を持つ file の削除の便: 畳みの後の本文が manifest の cap（500）を超える diff でも、値 1000000 の許可の便は
+/// PASS し通知の行が ` pruned=` を持たず、同じ歯の許可の無い bead の同じ形の便は ` pruned=` を持つ。
+#[test]
+fn pipe_gate_permit_threshold_of_the_deletion_fold_follows_the_effective_cap() {
+    let fx = Fixture::new(500);
+    for file in ["src/gone_a.txt", "src/gone_b.txt"] {
+        let body: String = (0..14).map(|number| format!("    {file} body line {number:02} with some filler words\n")).collect();
+        fs::write(fx.repo.join(file), format!("block {{\n{body}}}\n")).expect("base の file を書ける");
+    }
+    git(&fx.repo, &["add", "-A"]);
+    git(&fx.repo, &["commit", "-q", "-m", "fold-base"]);
+    let mut ids = Vec::new();
+    for (bead, file) in [("s2-pa", "src/gone_a.txt"), ("s2-pb", "src/gone_b.txt")] {
+        let design = write_set_contract(&fx.repo, &format!("row-{bead}"), &[file]);
+        let id = intake_bead(&fx.repo, &fx.state, &design, bead);
+        let out = spawn_without_gate(&fx.repo, &fx.state, &id, &format!("git rm -q {file} && git commit -q -m runner"));
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
+        ids.push(id);
+    }
+    fx.grant("s2-pa", BIG, FUTURE, RULING);
+    let (permitted, plain) = (fx.gate(&ids[0]), fx.gate(&ids[1]));
+    fx.assert_passed(&permitted, "許可の便は畳まずに通る");
+    assert!(notice_lines(&fx.state, &ids[0]).iter().all(|line| !line.contains(" pruned=")), "許可の周は畳まない: {:?}", notice_lines(&fx.state, &ids[0]));
+    assert!(notice_lines(&fx.state, &ids[1]).iter().all(|line| line.contains(" pruned=")), "許可の無い周は畳む: {:?}", notice_lines(&fx.state, &ids[1]));
+    assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "畳んだ本文は manifest の cap に収まる: {}", stdout_of(&plain));
+    clean(&[&fx.repo, &fx.state]);
+}

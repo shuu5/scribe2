@@ -1422,3 +1422,79 @@ fn lens_constitution_key_reads_the_head_declaration_not_the_working_tree() {
     assert!(dir.join("called").exists(), "claude を呼ぶ");
     assert_eq!((prompt.matches(OLD_PHRASE).count(), prompt.contains("（木の file")), (1, false), "{prompt}");
 }
+
+// ───── gate が書く cap の写し（設計 limit-permit.md §20 行 d・接頭辞 `headless_lens_permit_cap_`） ─────
+
+/// cap 10 の manifest の diff の審査（11 byte の diff）を 1 回撃つ。契約の隣の `cap.txt` は呼び手が置く。
+fn permit_cap_lens(dir: &Path, contract: &Path, claude: &Path) -> Output {
+    let rules = rules_with_cap(dir, 10).display().to_string();
+    run_bin_owned(dir, &lens_args(contract, dir, &["--rules", &rules], claude), &[b'z'; 11])
+}
+
+/// (p) 契約の隣の `cap.txt`（`source=permit`・値 100）は cap 10 の manifest でも claude を呼んで判定を返し（写しが manifest より大きくても勝つ）、
+/// `source=manifest`・値 5 の写しと写しの無い周は「diff exceeds cap」。
+#[test]
+fn headless_lens_permit_cap_copy_beside_the_contract_wins_over_the_manifest() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"写しの cap の内側\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let copy = dir.join("cap.txt");
+    let exceeded = r#"{"verdict":"INCONCLUSIVE","evidence":"diff exceeds cap"}"#;
+    fs::write(&copy, "gate.token_cap=100 source=permit ruling=s2-rq9.1\n").expect("写しを書ける");
+    let out = permit_cap_lens(&dir, &contract, &claude);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "写しの cap の内側なので claude を呼ぶ");
+    assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"写しの cap の内側"}"#, "判定は claude の行");
+    fs::remove_file(dir.join("called")).expect("印を消せる");
+    fs::write(&copy, "gate.token_cap=5 source=manifest\n").expect("写しを書ける");
+    assert_eq!(stdout_of(&permit_cap_lens(&dir, &contract, &claude)).trim(), exceeded, "manifest の出所の写しの値 5 も勝つ");
+    fs::remove_file(&copy).expect("写しを消せる");
+    assert_eq!(stdout_of(&permit_cap_lens(&dir, &contract, &claude)).trim(), exceeded, "写しが無ければ manifest の 10");
+    assert!(!dir.join("called").exists(), "超えた周は claude を呼ばない");
+    clean(&[&dir]);
+}
+
+/// (q) 写しが dir・値が整数でない・`source=permit` で裁定 id が無い の 3 形は rc 2 で path を名指し、claude を呼ばない。
+#[test]
+fn headless_lens_permit_cap_unreadable_copy_is_refused_without_calling_claude() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let copy = dir.join("cap.txt");
+    let check = |why: &str| {
+        let out = permit_cap_lens(&dir, &contract, &claude);
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{why}: rc 2 / {}", stderr_of(&out));
+        assert!(stderr_of(&out).contains("lens: cap の写しを読めない") && stderr_of(&out).contains("cap.txt"), "{why}: path を名指す: {}", stderr_of(&out));
+        assert!(!dir.join("called").exists(), "{why}: claude を呼ばない");
+    };
+    fs::create_dir(&copy).expect("写しの場所に dir を置ける");
+    check("dir");
+    fs::remove_dir(&copy).expect("dir を除ける");
+    for (why, text) in [("整数でない値", "gate.token_cap=many source=manifest\n"), ("裁定 id の無い permit", "gate.token_cap=5 source=permit ruling=\n")] {
+        fs::write(&copy, text).expect("写しを書ける");
+        check(why);
+    }
+    clean(&[&dir]);
+}
+
+/// (r) memo の審査は写しを読まない: memo の材料の file の隣に値 100 の `source=permit` の写しを置き、cap 10 の manifest で `--stage memo` を撃つと
+/// 偽 claude が受けた prompt の材料は先頭 10 byte で切れている。同じ歯の diff の形は同じ dir の写しの値 100 で claude を呼ぶ。
+#[test]
+fn headless_lens_permit_cap_memo_stage_ignores_the_copy() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    fs::write(dir.join("cap.txt"), "gate.token_cap=100 source=permit ruling=s2-rq9.1\n").expect("写しを書ける");
+    let material = dir.join("material");
+    fs::write(&material, "abcdefghij-TAILMARK\n").expect("材料を書ける");
+    let rules = rules_with_cap(&dir, 10).display().to_string();
+    let out = run_bin_owned(&dir, &memo_args(&material, &dir, &["--rules", &rules], &claude), b"");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let prompt = slurp(&dir.join("stdin"));
+    assert!(prompt.contains("abcdefghij") && !prompt.contains("TAILMARK"), "材料は manifest の 10 byte で切れる: {prompt}");
+    fs::remove_file(dir.join("called")).expect("印を消せる");
+    let out = permit_cap_lens(&dir, &contract, &claude);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "同じ dir の diff の形は写しの値 100 で claude を呼ぶ");
+    clean(&[&dir]);
+}

@@ -88,6 +88,7 @@ use crate::hook::vessel::digest::fnv1a_64;
 use crate::pipe::confine;
 use crate::pipe::contract::Contract;
 use crate::pipe::declaration::{ConstitutionFiles, DECL_FILE};
+use crate::pipe::gate::cap_copy;
 use crate::pipe::move_proof::RULINGS_FILE;
 use crate::pipe::review::{base_block, index_block, outside_block, BASE_FILE, DESIGN_FILE, FINDING_KINDS, OUTSIDE_FILE, PROMISES_FILE};
 use crate::pipe::review::{INDEX_FILE, ITEMS_FILE};
@@ -257,6 +258,16 @@ fn rows_of(args: &[String], row: &str) -> Result<(u64, Model, Effort, u32), Stri
     Ok((cap, model, effort, turns))
 }
 
+/// [`rows_of`] の cap を、契約の写しの隣の cap の写し（gate が lens を起こす直前に書く・[`cap_copy`]）で置き換える。
+///
+/// manifest は今のとおり先に読む（行が解けない周は同じ `Err`）。写しが在ればその値が勝つ（manifest より小さくても大きくても・gate の周の
+/// 効く cap と lens の cap を 1 つにする）。無ければ manifest の値。在るのに読めない周は `Err`＝呼び手が claude を起こさず rc 2 で止まる。
+fn rows_copied(args: &[String], row: &str, contract: &Path) -> Result<(u64, Model, Effort, u32), String> {
+    let (cap, model, effort, turns) = rows_of(args, row)?;
+    let copied = cap_copy(contract).map_err(|reason| format!("cap の写しを読めない: {reason}"))?;
+    Ok((copied.unwrap_or(cap), model, effort, turns))
+}
+
 /// rules 行 [`ROW_TURNS`] の値（`--max-turns` に渡す整数）。0 は上限にならないので断る。
 fn turns_row(manifest: &Manifest) -> Result<u32, String> {
     match u32::try_from(int_row(manifest, ROW_TURNS)?) {
@@ -316,7 +327,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
     };
     // **cap が解けない周も claude を起こさない**（上限なしで走らせない＝C6）。model も同じ極性（版の既定へ
     // 黙って倒れない）。
-    let (cap, model, effort, turns) = match rows_of(args, row) {
+    let (cap, model, effort, turns) = match rows_copied(args, row, contract_path) {
         Ok(found) => found,
         Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")),
     };
