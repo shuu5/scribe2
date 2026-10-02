@@ -129,17 +129,18 @@ impl Completion {
 
     /// [`wait`] が周の間に眠る長さ（**周期は完了条件の性質**・設計 contract-source.md §50）。
     ///
-    /// [`Self::CiResult`] だけが外の API を撃つので欄 `every` と [`POLL`] の大きい方（0 の行で hot loop にしない）。
+    /// [`Self::CiResult`] は外の API を撃つので欄 `every` と [`POLL`] の大きい方（0 の行で hot loop にしない）。
+    /// [`Self::AccountFree`] は口座の待ち（reset まで分〜時間）なので [`ACCOUNT_POLL`]（設計 account-lifecycle.md §39 行 ae）。
     /// 他の全 variant は pid の生存・meminfo・札の読みで、周期は [`POLL`] のまま。
     fn period(&self) -> Duration {
         match self {
             Self::CiResult { every, .. } => (*every).max(POLL),
+            Self::AccountFree { .. } => ACCOUNT_POLL,
             Self::RunnerExited(_)
             | Self::SeatGone(_)
             | Self::SlotFree { .. }
             | Self::GroupGone(_)
             | Self::LandTurn { .. }
-            | Self::AccountFree { .. }
             | Self::LandWindow { .. }
             | Self::HostCalm { .. } => POLL,
         }
@@ -508,6 +509,9 @@ pub struct Timeout;
 
 /// 待つ間隔。
 const POLL: Duration = Duration::from_millis(20);
+
+/// [`Completion::AccountFree`] の周期（口座の開きは実測行の更新を待つだけで、20 ms で読み直す意味がない）。
+const ACCOUNT_POLL: Duration = Duration::from_secs(5);
 
 /// [`Completion`] が満たされるまで待つ。**これが唯一の待機実装である**。
 ///
@@ -921,21 +925,27 @@ mod tests {
             Completion::SlotFree { slots_dir: PathBuf::from("slots"), want: 1, job_mb: 1, reserve_mb: 1, cap: 1, cores: 1 },
             Completion::GroupGone(9),
             Completion::LandTurn { state_dir: PathBuf::from("state"), run: "r".to_owned() },
-            Completion::AccountFree {
-                reset_at: "2026-09-13T06:00:00Z".to_owned(),
-                state_dir: PathBuf::from("state"),
-                repo: PathBuf::from("repo"),
-                run: "r".to_owned(),
-                expected: Stage::RateLimited,
-                labels: Vec::new(),
-                model: None,
-                grouped: BTreeSet::new(),
-                park: BTreeSet::new(),
-            },
             Completion::LandWindow { state_dir: PathBuf::from("state"), repo: PathBuf::from("repo") },
             Completion::HostCalm { runnable_per_core: 4, blocked_per_core: 1 },
         ];
-        assert!(others.iter().all(|found| found.period() == poll), "他の全 variant は POLL: {others:?}");
+        assert!(others.iter().all(|found| found.period() == poll), "AccountFree の外の全 variant は POLL: {others:?}");
+    }
+
+    /// 行 ae: `AccountFree` の周期は 5 秒（`POLL` の 20 ms で口座を読み直さない）。
+    #[test]
+    fn fleet_wait_account_free_period_is_five_seconds() {
+        let found = Completion::AccountFree {
+            reset_at: "2026-09-13T06:00:00Z".to_owned(),
+            state_dir: PathBuf::from("state"),
+            repo: PathBuf::from("repo"),
+            run: "r".to_owned(),
+            expected: Stage::RateLimited,
+            labels: Vec::new(),
+            model: None,
+            grouped: BTreeSet::new(),
+            park: BTreeSet::new(),
+        };
+        assert_eq!(found.period(), Duration::from_secs(5));
     }
 
     /// (§50 形 3) 最初の評価は眠る前: 最初から success の CI は間隔 30 秒でも待たずに満たされ、照会は 1 回。
