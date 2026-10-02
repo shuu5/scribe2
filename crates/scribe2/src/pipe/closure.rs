@@ -48,6 +48,7 @@
 //! 歯 → `surfaces`・歯 1 本 1 行の nextest 行 → `verify`）、同じ [`derive_write_set`] を撃つ（導出の 1 本は増やさない）。
 //! `symbols` の名の実在は [`symbols_in_base`]（[`unresolved_names`] と同じ読み手）。
 
+use crate::pipe::index::flat::{query, Resolution, Resolved, Row, Site};
 use std::collections::BTreeSet;
 
 mod derive;
@@ -392,6 +393,42 @@ pub fn closure(types: &[String], sources: &[Source]) -> Result<BTreeSet<String>,
         found.extend(files);
     }
     Ok(found)
+}
+
+/// `touches` の型形の項目（fn 形と形の違う項目は除く）。索引を要する行（型の項目を持つ行）の判定と [`index_closure`] が読む 1 本。
+pub fn type_items(touches: &[String]) -> Vec<String> {
+    touches.iter().filter(|raw| touched(raw).is_some_and(|found| !found.fn_form)).cloned().collect()
+}
+
+/// 索引の閉包（設計 reverse-index.md §7 (b)・行 d）: `touches` の型の項目ごとに、行 a1 の表の問い（[`query`]）で解いた symbol の
+/// literal の役と pattern の役の site の file と、variant の symbol（型の symbol の直後に大文字で始まる名と `#` が 1 段続く字・
+/// rust-analyzer の SCIP の形・`.` で終わる欄と関連の const は数えない）の本体〔test でない〕の参照の site の file を集める
+/// （字面の閉包の形 1・2・6 を字でなく symbol で数える＝別名・`Self`・glob の越しの site が加わる）。解けない項目は数えず、複数に
+/// 解ける項目は全部の symbol を数える。形 3・形 4 と fn 形は字面のまま（ここでは数えない）。
+pub fn index_closure(rows: &[Row], touches: &[String]) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    for item in type_items(touches) {
+        let symbols = match query(rows, &item) {
+            Resolution::Unresolved => Vec::new(),
+            Resolution::One(one) => vec![one],
+            Resolution::Ambiguous(many) => many,
+        };
+        for Resolved { symbol, sites } in symbols {
+            let shaped = |site: &&Site| !site.definition && site.roles.iter().any(|role| role == "literal" || role == "pattern");
+            found.extend(sites.iter().filter(shaped).map(|site| site.path.clone()));
+            let built = |row: &&Row| !row.definition && !row.test && is_variant_of(&row.symbol, &symbol);
+            found.extend(rows.iter().filter(built).map(|row| row.path.clone()));
+        }
+    }
+    found
+}
+
+/// `symbol` が `ty` の symbol の variant か（`ty` の直後に大文字で始まる識別子と型の印 `#` が 1 段だけ続く字）。
+fn is_variant_of(symbol: &str, ty: &str) -> bool {
+    symbol
+        .strip_prefix(ty)
+        .and_then(|rest| rest.strip_suffix('#'))
+        .is_some_and(|name| name.starts_with(|found: char| found.is_ascii_uppercase()) && name.chars().all(is_ident_char))
 }
 
 /// `crate::module::Type`（型形）か `crate::module::snake_ident`（fn 形）を読む。形が違えば `None`。

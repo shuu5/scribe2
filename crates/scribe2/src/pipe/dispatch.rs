@@ -74,7 +74,7 @@ mod revive;
 /// code の索引の組み立ての口 `pipe index build` と状態の読み（床の検査の撃ち方を共用する兄弟・設計 reverse-index.md §4 の行 a2）。
 pub mod index_build;
 
-use candidates::{entry_of, is_input, marks_of, settle, siblings_of, tools};
+use candidates::{build_index, entry_of, indexed, is_input, marks_of, settle, siblings_of, tools};
 pub use revive::{admits_gated, advance, handoff};
 use revive::{progress_of, resume, revivals, revive_of};
 
@@ -540,7 +540,7 @@ fn measure(input: &Input<'_>) -> (Turn, Option<Read>) {
             launched: (!unreadable).then_some(marks.launched),
             events,
             closed: issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect(),
-            materials: Materials::of(input.repo, input.manifest, input.bd),
+            materials: Materials::of(input.repo, input.manifest, input.bd).map(|found| indexed(input, found)),
         };
         // 行の予約は周の 1 回の導き（読み済みの台帳と event log を借りる・記帳しない・設計 row-review.md §7）。兄弟の待ちの元の列も同じ導きから組む（§8）。
         let reserved = reserve::derive(input, &issues, &ledger.marks, &ledger.events, crate::seat::state::now_secs());
@@ -661,6 +661,8 @@ pub fn fire(input: &Input<'_>) -> Turn {
     if turn.unmeasured.is_some() {
         return turn;
     }
+    // **索引の組み立ては起こす側の周だけが裏で起こす**（設計 reverse-index.md §7 (b)・待たない・観測の口は起こさない）。
+    build_index(input, &turn);
     // **関門が開いた待ちの便は、driver の周なら段を前へ進めた周だけ起こす**（設計 §13・[`admits_gated`]）。
     // 段を読めない driver の周は 0 本（測れないを「前進」に読み替えない・fail-closed）。
     let progress = progress_of(input);

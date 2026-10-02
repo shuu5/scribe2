@@ -15,14 +15,15 @@ use super::super::admission::{self, Sizes};
 use super::super::cli::{crossings, generated, int_row, judge, live, Material, Materials};
 use super::super::contract::Contract;
 use super::super::gate::Verdict;
-use super::super::refuse::overlaps;
+use super::super::refuse::{overlaps, INDEX_BUILD_TRIGGERS};
 use super::super::review;
 use super::super::row_review::{self, Basis};
 use super::super::table::{self, read_rows, Pointer};
-use super::super::{contract_path, current, git_bytes, show_head};
+use super::super::{contract_path, current, git_bytes, git_line, show_head};
+use super::index_build::{status as index_status, Status as IndexStatus};
 use super::{
-    measure, reserve, Candidate, Input, Launch, Ledger, Marks, Read, Turn, Unmeasured, WaitReason, BLOCKS, DESIGN_KEY, DRIVE, MARK, OPEN,
-    ROW_JOB_MB, ROW_RESERVE_MB, SLOT,
+    measure, reserve, spawn_self, Candidate, Input, Launch, Ledger, Marks, Read, Turn, Unmeasured, WaitReason, BLOCKS, DESIGN_KEY, DRIVE, MARK,
+    OPEN, ROW_JOB_MB, ROW_RESERVE_MB, SLOT,
 };
 use crate::fleet::lifecycle::{self, Place, Round, Source};
 use crate::fleet::phase::Judged;
@@ -90,6 +91,36 @@ pub(super) fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>, ki
         Err(denial) => return wait(WaitReason::Admission { reason: denial.name }),
     };
     (at(None), Some((pointer, contract)))
+}
+
+/// 材料に base（`HEAD`）の commit の索引の状態を載せる（設計 reverse-index.md §7 (b)・状態の読みだけで撃たず待たない・`HEAD` を解けない周は
+/// 状態なしのまま）。観測の口（`dispatch ls`）と起こす側の周が同じ 1 本で載せる。
+pub(super) fn indexed(input: &Input<'_>, materials: Materials) -> Materials {
+    match git_line(input.repo, &["rev-parse", "HEAD"]) {
+        Some(sha) => materials.indexed(input.state_dir, input.repo, &sha),
+        None => materials,
+    }
+}
+
+/// 起こす側の 1 周だけが撃つ索引の組み立て（設計 reverse-index.md §7 (b)・[`fire`](super::fire) だけが呼ぶ＝観測の口は撃たない）: `HEAD` の
+/// 状態が absent で、起こす契機の語（[`INDEX_BUILD_TRIGGERS`]・文字列の列で引く）で受付の理由に待つ候補が在る周に、
+/// `pipe index build --ref <HEAD>` を [`spawn_self`] で裏に 1 本起こして待たない（撃ち中の印が 2 本目を止める）。
+/// 生きた印の周・failed の鍵（毎周の失敗を避ける）・契機の語で待つ候補の無い周は起こさない。
+pub(super) fn build_index(input: &Input<'_>, turn: &Turn) {
+    let waits = turn
+        .candidates
+        .iter()
+        .any(|candidate| matches!(&candidate.reason, Some(WaitReason::Admission { reason }) if INDEX_BUILD_TRIGGERS.contains(reason)));
+    let Some(sha) = git_line(input.repo, &["rev-parse", "HEAD"]).filter(|_| waits) else {
+        return;
+    };
+    if !matches!(index_status(input.state_dir, input.repo, &sha), IndexStatus::Absent) {
+        return;
+    }
+    // 規則の写し（`--rules`）は渡さない: 組み立てが読む rules 行 2 本は埋め込みの値で、列の写しは gate の上限の差し替え口である。
+    let argv = ["index", "build", "--repo", &input.repo.display().to_string(), "--state-dir", &input.state_dir.display().to_string(), "--ref", &sha]
+        .map(str::to_owned);
+    let _ = spawn_self(input.state_dir, &argv);
 }
 
 /// 兄弟の待ちの元 B 1 つ（設計 row-review.md §8・[`siblings_of`] が周の頭に 1 回組む）。

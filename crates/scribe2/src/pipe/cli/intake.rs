@@ -40,6 +40,7 @@ use crate::name::NAME;
 use crate::pipe::closure::{self, ClosureError, Source};
 use crate::pipe::contract::{Contract, ContractError, CLASS_ROW};
 use crate::pipe::declaration::{self, Ceiling, Effective, EntranceFlip, CEILING_ROW, DENIED_ROW};
+use crate::pipe::dispatch::index_build::{status as index_status, Status};
 use crate::pipe::refuse::{overlaps, Refuse, NEW_FILE};
 use crate::pipe::review::{self, FindingKind, Judgement, ROW_SAME_KIND_STOP};
 use crate::pipe::table::{self, ContractRow, TableError};
@@ -49,6 +50,7 @@ use crate::rules::RuleValue;
 use crate::seat::ledger::{timeout_of, DEFAULT_BD};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// 断りの組み立てと上限の余地の群（契約表の行 bl・純移動）。
 mod refusal;
@@ -58,6 +60,9 @@ use refusal::{DENIAL_ARGS, DENIAL_DECLARATION, DENIAL_GENERATED, DENIAL_RULES, D
 /// 裁定 id の引用の判定（設計 dispatcher.md §37・契約表の行 al）。断りの組み立ては [`exclude_unresolved_rulings`] が書く。
 mod ruling;
 use ruling::Ruled;
+
+/// 索引の状態の扱いと閉包の判定（設計 reverse-index.md §7 (b)・契約表の行 d）。断りの組み立ては [`exclude_unindexed`] が書く。
+mod index;
 
 /// host で同時に走る便（live な便）の本数の最大値を持つ rules 行（設計 gate-cost.md §24・値は読むだけ・C1）。
 const ROW_MAX_LIVE: &str = "pipe.max_live";
@@ -97,6 +102,8 @@ struct Intaken {
     write_set: Option<(WriteSet, usize)>,
     /// base の木で撃った周の欄（[`BaseRun::fact`]・名乗りの無い周は `None`＝1 行は従来の形・§56 形 5）。
     entrance: Option<String>,
+    /// 索引を作れない周（状態が failed）の尾 `index=unavailable:<語>`（touches に型の項目を持つ行だけ・設計 reverse-index.md §7 (b)）。
+    index: Option<String>,
 }
 
 /// 契約 file を読み込み、置き場へ写して run を起こし、**直後に審査の段を通す**（FR49・設計 contract-source.md
@@ -111,6 +118,9 @@ pub(super) fn intake(args: &[String], manifest: &Manifest, policy: LockPolicy) -
             }
             if let Some(fact) = found.entrance {
                 line.push_str(&format!(" {fact}"));
+            }
+            if let Some(tail) = found.index {
+                line.push_str(&format!(" {tail}"));
             }
             let mut reviewed = super::step::review_run(args, &found.id, manifest, policy);
             reviewed.out.insert(0, line);
@@ -134,9 +144,10 @@ pub(super) fn intake_line(args: &[String], id: &str) -> String {
 }
 
 /// intake の本体。**id を返す**のは `run` が続きの段へ渡すためである
-/// （自分の stdout を読み直して id を取る形にすると、表示を変えた瞬間に連鎖が壊れる）。
-pub(super) fn intake_id(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Result<String, Outcome> {
-    intake_run(args, manifest, policy).map(|found| found.id)
+/// （自分の stdout を読み直して id を取る形にすると、表示を変えた瞬間に連鎖が壊れる）。もう 1 つの値は受付の結果の行に足す索引の
+/// 尾（` index=unavailable:<語>`・先頭に空白を持ち、尾の無い周は空）で、`pipe run` の行は同じ尾を足すだけ。
+pub(super) fn intake_id(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Result<(String, String), Outcome> {
+    intake_run(args, manifest, policy).map(|found| (found.id, found.index.map_or_else(String::new, |tail| format!(" {tail}"))))
 }
 
 /// 受付の 1 周（id と write-set の弁別）= [`judge`] → [`create`]。
@@ -153,7 +164,7 @@ fn intake_run(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Resul
     // （§56 形 2・base の木の実走の長さで入口を塞がない）。lock の中の judge は freeze の結果を借りる。
     let ceiling = ceiling_of(manifest).map_err(|denial| denial.outcome)?;
     let bd = flag(args, "--bd").map_err(refused)?.unwrap_or(DEFAULT_BD);
-    let materials = Materials::read(&repo, &ceiling.borrow(), bd).map_err(|denial| denial.outcome)?;
+    let materials = Materials::read(&repo, &ceiling.borrow(), bd).map_err(|denial| denial.outcome)?.indexed(&state_dir, &repo, &sha);
     let (contract, body) = generated(&repo, &pointer, &materials).map_err(|denial| denial.outcome)?;
     let early = early(&repo, manifest, &contract, Some(&state_dir), &sha);
     // **入口の排他はここから**（ADR-0019 §2.1・設計 pipeline-conflict.md §2）: [`judge`] と [`create`] を
@@ -249,6 +260,9 @@ pub(in crate::pipe) struct Materials {
     classes: Vec<String>,
     /// 裁定 id の引用の判定の材料（台帳の client と、1 周に 1 回だけ読む宣言・台帳・線・設計 dispatcher.md §37 約束 5）。
     ruling: ruling::Rulings,
+    /// base の commit の索引の状態（state dir を持つ呼び手だけが [`Self::indexed`] で載せる・`None` = 状態なし＝字面の閉包だけで判じ
+    /// 尾も足さない・表は大きいので借りて持つ）。
+    index: Option<Arc<Status>>,
 }
 
 impl Materials {
@@ -278,7 +292,18 @@ impl Materials {
             declared,
             classes: ceiling.classes.to_vec(),
             ruling: ruling::Rulings::new(bd),
+            index: None,
         })
+    }
+
+    /// base（`sha`）の commit の索引の状態を載せる（行 a2 の状態の読み・読むだけで撃たず待たない・設計 reverse-index.md §7 (b)）。
+    pub(in crate::pipe) fn indexed(self, state_dir: &Path, repo: &Path, sha: &str) -> Self {
+        Self { index: Some(Arc::new(index_status(state_dir, repo, sha))), ..self }
+    }
+
+    /// 索引を作れない周の結果の行の尾（[`index::tail`]・`touches` は契約の touches）。
+    pub(in crate::pipe) fn index_tail(&self, touches: &[String]) -> Option<String> {
+        index::tail(self.index.as_deref(), touches)
     }
 
     /// rules 行の上限から材料を読む（列の入口・上限の読みと base の走査を 1 本にまとめた口）。
@@ -293,7 +318,8 @@ impl Materials {
     }
 
     /// 予想の base の写し（**口は 1 つ**・設計 dispatcher.md §27 形 2）: tracked に `add` を足して `remove` を除き、`bodies` の
-    /// `.rs` / `.snap` の本文で置き換える（消した file と置き換えた file の元の本文は落とす）。判定の関数は不変。
+    /// `.rs` / `.snap` の本文で置き換える（消した file と置き換えた file の元の本文は落とす）。判定の関数は不変。索引の状態は
+    /// 持ち越さない（予想の base は状態なし＝設計 reverse-index.md §7 (b)・元の材料の状態は変わらない）。
     pub(in crate::pipe) fn forecast(&self, add: &[String], remove: &[String], bodies: &[Source]) -> Self {
         let dropped = |path: &str| remove.iter().chain(bodies.iter().map(|found| &found.path)).any(|gone| gone == path);
         let swap = |list: &[Source], ext: &str| -> Vec<Source> {
@@ -303,7 +329,7 @@ impl Materials {
         let mut tracked: Vec<String> = self.tracked.iter().filter(|path| !remove.contains(path)).chain(add).cloned().collect();
         tracked.sort();
         tracked.dedup();
-        Self { tracked, sources: swap(&self.sources, ".rs"), snapshots: swap(&self.snapshots, ".snap"), ..self.clone() }
+        Self { tracked, sources: swap(&self.sources, ".rs"), snapshots: swap(&self.snapshots, ".snap"), index: None, ..self.clone() }
     }
 
     /// 閉包を測る base（`.rs` / `.snap` / tracked の 3 面を 1 つに束ねた借り）。
@@ -401,6 +427,7 @@ pub(in crate::pipe) fn generated(
         let refusals = findings.iter().map(|finding| finding.refuse().clone()).collect();
         return Err(Denial { refusals, ..denied(name, Outcome::failed(rc, lines)) });
     }
+    exclude_unindexed(&row, materials)?;
     let design = format!("{}#{}", pointer.path, pointer.id);
     // 行が `write-set` を持たない周（Derived の行・§3「write-set の導出」）は**導出値**を写しに書く。
     // 契約 file は write-set を 1 本以上要るので、空のまま書くと器が自分の生成物を読めない。
@@ -422,6 +449,21 @@ pub(in crate::pipe) fn generated(
         denied(DENIAL_GENERATED, unloadable(errors))
     })?;
     Ok((contract, body))
+}
+
+/// touches に型の項目を持つ行を、base の索引の状態で断る（設計 reverse-index.md §7 (b)・[`generated`] の表の検査が findings 0 で通った
+/// 後に撃つ＝表の検査の断りが先）。判定と閉じた結果は [`index::judge`]、ここは断りを組むだけ: 作り中は `index-building`・half は
+/// 宣言の不備と同じ `declaration`・閉包の不足は file に ` (索引)` を添えた `write-set-incomplete`。write-set を持つのは手で列挙した
+/// 行だけ（導出する行は足す手段が無いので閉包を測らない）。
+fn exclude_unindexed(row: &ContractRow, materials: &Materials) -> Result<(), Denial> {
+    let declared = row.creates.is_empty() && row.tests.is_empty() && row.also.is_empty() && !row.write_set.is_empty();
+    let write_set = declared.then_some(row.write_set.as_slice());
+    match index::judge(materials.index.as_deref(), &row.touches, write_set, &materials.sources) {
+        index::Indexed::Clear => Ok(()),
+        index::Indexed::Building(state) => Err(refuse(&Refuse::IndexBuilding { state: state.to_owned() }, &[])),
+        index::Indexed::Half(lines) => Err(denied(DENIAL_DECLARATION, Outcome::failed(RC_REFUSED, lines))),
+        index::Indexed::Missing(missing) => Err(refuse(&Refuse::WriteSetIncomplete { missing }, &[])),
+    }
 }
 
 /// 回答後の再開が写しを取り直す本文（設計 pipeline-question.md §11・契約表の行 a）。
@@ -759,7 +801,12 @@ fn create(
     );
     match emitted {
         Err(err) => Err(broken(err.to_string())),
-        Ok(()) => Ok(Intaken { id, write_set, entrance: base.map(BaseRun::fact) }),
+        Ok(()) => Ok(Intaken {
+            id,
+            write_set,
+            entrance: base.map(BaseRun::fact),
+            index: material.materials.index_tail(&material.contract.touches),
+        }),
     }
 }
 
@@ -1229,8 +1276,10 @@ mod tests {
     use crate::pipe::closure::Source;
     use crate::pipe::contract::Contract;
     use crate::pipe::declaration::TableFacts;
+    use crate::pipe::dispatch::index_build::Status;
     use crate::rules::manifest::Manifest;
     use std::collections::BTreeSet;
+    use std::sync::Arc;
 
     /// 受付の入口は**同時に 1 つしか通さない**（[`judge`] と [`create`] を 1 周として閉じる・ADR-0019 §2.1）。
     ///
@@ -1304,8 +1353,22 @@ mod tests {
             declared: Ok(Vec::new()),
             classes: Vec::new(),
             ruling: Rulings::new("bd"),
+            index: None,
         };
         (contract, materials)
+    }
+
+    /// (h) 予想の base の写し（`forecast`）は base の索引の状態を持ち越さず状態なしで、元の材料の状態は変わらない（状態を載せる
+    /// `indexed` を撃たず ready の状態を直に置く・写しは tracked と本文の置き換えだけを受ける）。
+    #[test]
+    fn pipe_intake_index_forecast_copy_drops_the_state_and_leaves_the_original_ready() {
+        let (_, materials) = short_of_room(1);
+        let ready = Materials { index: Some(Arc::new(Status::Ready(Vec::new()))), ..materials };
+        let added = ["crates/toy/src/added.rs".to_owned()];
+        let copy = ready.forecast(&added, &[], &[]);
+        assert!(copy.index.is_none(), "写しは状態なし");
+        assert!(matches!(ready.index.as_deref(), Some(Status::Ready(rows)) if rows.is_empty()), "元の材料は ready のまま");
+        assert!(copy.tracked.contains(&added[0]) && !ready.tracked.contains(&added[0]), "写しは tracked を重ね、元は動かない");
     }
 
     /// (a) 項目の解決に失敗した周は「解けない項目を**除いた**列」で数え直す: 余地の在る full.rs は通って余地の列に

@@ -16,18 +16,19 @@ mod waiting;
 // flip-check: moved s2-07l.686
 
 use super::{
-    ceiling_rules, clean, commit_rows, design_doc_rows, fake_lens, gate_once, git, implemented, intake_bead,
-    kind_count, lens_verdict, question_runner, questioned, repo_with_state, review_lens_pass, row_fields, run_pipe,
-    shim_path, stderr_of, run_id_of, stdout_of, value_of, verdict_pairs, worktree_of, write_contract, write_design,
-    DESIGN_FILE, HEALTH_PER_CORE_OPEN, IMPLEMENT, RC_BLOCKED,
+    bin_cmd, ceiling_rules, clean, commit_rows, design_doc_rows, fake_lens, gate_once, git, idxb_field, idxb_line, idxb_script,
+    idxb_word, implemented, intake_bead, intake_raw, kind_count, lens_verdict, question_runner, questioned, repo_with_state,
+    review_lens_pass, row_fields, run_pipe, shim_path, stderr_of, run_id_of, stdout_of, stop_run_ok, value_of, verdict_pairs,
+    worktree_of, write_contract, write_design, IdxPlace, DESIGN_FILE, HEALTH_PER_CORE_OPEN, IDXB_DECL, IDXB_SCIP, IMPLEMENT,
+    RC_BLOCKED,
 };
-use super::intake::{base_run_repo, cargo_calls, fake_cargo};
+use super::intake::{base_run_repo, cargo_calls, fake_cargo, ixc_place, ixc_plain_row, ixc_row, ixc_unbuild, IXC_FILES};
 use super::run_pipe_with_path;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
-use vessel::cli_outcome::RC_OK;
+use vessel::cli_outcome::{RC_OK, RC_REFUSED};
 
 /// 列の 1 行の書き出し（器の字面を借りない＝外形を測る側は自分で書く）。
 const LINE: &str = "[DISPATCH]";
@@ -3669,5 +3670,134 @@ fn pipe_dispatch_unreflected_names_an_unreadable_file_and_stays_silent_without_o
     assert_eq!(doctor_lines_with(&place, "unreflected="), Vec::<String>::new(), "0 件の周は行を出さない");
     fs::write(unreflected_path(&place), "not json\n").unwrap_or_else(|err| panic!("file を上書きできる: {err}"));
     assert_eq!(doctor_lines_with(&place, "unreflected="), ["unreflected=unreadable"], "読めない file");
+    clean(&[&place.repo, &place.state]);
+}
+
+// ───── 起動の列の索引の状態（設計 reverse-index.md §7 (b)・契約表の行 d・接頭辞 `pipe_dispatch_index_closure_`） ─────
+//
+// 偽の宣言と SCIP の書き手は `pipe.rs` の行 a1・a2 の歯の物（fixture は `intake.rs` の `ixc_place`）。`dispatch ls` の待ちの理由も測るので
+// 歯はこの file に置く。偽の宣言が呼ばれた回数（`IdxPlace::calls`）で、裏の組み立てを起こしたかを効果で測る（起こすのは子 process なので
+// 上限まで待ってから数え、起こさないことは待ってから数える）。
+
+/// 偽の宣言の SCIP の command が `want` 回以上呼ばれるまで待つ（上限 20 秒）。呼ばれた回数を返す。
+fn ixc_calls_reach(place: &IdxPlace, want: usize) -> usize {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while place.calls("scip") < want && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    place.calls("scip")
+}
+
+/// 裏の組み立てが起きないことを測るために少し待ってから数えた、偽の宣言の SCIP の command の呼ばれた回数。
+fn ixc_calls_settled(place: &IdxPlace) -> usize {
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    place.calls("scip")
+}
+
+/// 起こす側の 1 周（`--runner` の在る手動の 1 周）。偽の宣言と道具箱を積んだ PATH で撃つ（裏の組み立ては同じ PATH を継ぐ）。
+fn ixc_fire(place: &IdxPlace, bd: &str) -> Output {
+    let (state, repo) = (place.state.display().to_string(), place.repo.display().to_string());
+    let (rules, lens) = (dispatch_rules(&place.state), review_lens_pass(&place.state));
+    let args = ["dispatch", "--state-dir", &state, "--repo", &repo, "--rules", &rules, "--bd", bd, "--lens", &lens, "--runner", "true"];
+    run_pipe_with_path(&place.path(), &args)
+}
+
+/// 索引の閉包の歯の置き場（行 a: touches に型を持つ・write-set は型を宣言する file と別名の file / 行 n: touches を持たない）と台帳
+/// （bead `s2-toy.1` が行 a・`s2-toy.2` が行 n）。
+fn ixc_candidates(decl: &str) -> (IdxPlace, String) {
+    let (swatch, alias) = (IXC_FILES[0].0, IXC_FILES[1].0);
+    let place = ixc_place(&[ixc_row("a", "crate::swatch::Swatch", &[swatch, alias]), ixc_plain_row("n")], decl);
+    let bd = fake_bd(&place.state, &[issue("s2-toy.1", 2, "a"), issue("s2-toy.2", 2, "n")]);
+    (place, bd)
+}
+
+/// 台帳を bead `s2-toy.1`（行 a）だけにする（起こす側の周が touches を持たない候補を起こさない・同じ `bd` の path を使い続ける）。
+fn ixc_only_typed(place: &IdxPlace) -> String {
+    fake_bd(&place.state, &[issue("s2-toy.1", 2, "a")])
+}
+
+/// (e) absent の周に `dispatch ls` の touches の型を持つ候補が `reason=admission:index-building` で待ち偽の宣言を撃たず（回数 0）、touches の
+/// 型を持たない候補は待たない。`--runner` の 1 周が偽の宣言を 1 回だけ裏で撃ち（待たずに戻る）、組み立てが済めば同じ候補は待たない。生きた印の
+/// 周（building）の 2 周目は撃たない（回数 1 のまま・`dispatch ls` の理由は index-building のまま）。
+#[test]
+fn pipe_dispatch_index_closure_waits_on_absent_and_the_runner_turn_builds_once_in_the_background() {
+    let (place, bd) = ixc_candidates(IDXB_DECL);
+    let listed = ls(&place.repo, &place.state, &bd);
+    assert_eq!(reason_of(&listed, "s2-toy.1"), "admission:index-building", "absent の周は待つ: {}", told(&listed));
+    assert_eq!(reason_of(&listed, "s2-toy.2"), "-", "touches の型を持たない候補は待たない: {}", told(&listed));
+    assert_eq!(count_of(&listed), format!("{COUNT} total=2 ready=1"), "母集団 2 件のうち起こせるのは型を持たない 1 本");
+    assert_eq!(ixc_calls_settled(&place), 0, "観測の口は偽の宣言を撃たない（回数 0）");
+    let only = ixc_only_typed(&place);
+    let fired = ixc_fire(&place, &only);
+    assert_eq!(stdout_of(&fired).trim_end(), "dispatch=started:0,resumed:0,waiting:1", "待たずに戻り候補は待ちに残る: {}", told(&fired));
+    assert_eq!(ixc_calls_reach(&place, 1), 1, "起こす側の 1 周が偽の宣言を裏で撃つ");
+    assert_eq!(ixc_calls_settled(&place), 1, "1 回だけ（回数 1 のまま）");
+    let key = place.names().iter().find_map(|name| name.strip_suffix(".tsv").map(str::to_owned)).unwrap_or_default();
+    assert_eq!(key.len(), 16, "裏の組み立てが表を置いた: {:?}", place.names());
+    let ready = ls(&place.repo, &place.state, &only);
+    assert_eq!(reason_of(&ready, "s2-toy.1"), "-", "組み立てが済めば待たない（ready の周は索引の閉包で判じる）: {}", told(&ready));
+    ixc_unbuild(&place, &key);
+    assert!(fs::write(place.dir().join(format!("{key}.lock")), format!("{}\n", std::process::id())).is_ok(), "生きた持ち主の印を置く");
+    let building = ixc_fire(&place, &only);
+    assert_eq!(stdout_of(&building).trim_end(), "dispatch=started:0,resumed:0,waiting:1", "building の周は待つ: {}", told(&building));
+    assert_eq!(ixc_calls_settled(&place), 1, "生きた印の周は撃たない（回数 1 のまま）");
+    let waiting = ls(&place.repo, &place.state, &only);
+    assert_eq!(reason_of(&waiting, "s2-toy.1"), "admission:index-building", "building の周も同じ理由: {}", told(&waiting));
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (e) 別の置き場で同じ候補に `hold` の印を付けた absent の `--runner` の 1 周は撃たない（待つ理由が受付の理由でなく `hold`）。同じ周で
+/// touches の型を持たない候補は absent の周に待たずに起こされる。失敗の記録の周は候補が待たず（`reason=-` で `index=` の尾を持たない）、
+/// 組み立ても起こさない（失敗の鍵は列が起こし直さない）。
+#[test]
+fn pipe_dispatch_index_closure_hold_and_failed_state_and_plain_candidates_do_not_build() {
+    let (place, bd) = ixc_candidates(IDXB_DECL);
+    let held = run_pipe(&["dispatch", "hold", "s2-toy.1", "--state-dir", &place.state.display().to_string()]);
+    assert_eq!(held.status.code(), Some(i32::from(RC_OK)), "hold: {}", stderr_of(&held));
+    let listed = ls(&place.repo, &place.state, &bd);
+    assert!(reason_of(&listed, "s2-toy.1").starts_with("hold:"), "hold の理由: {}", told(&listed));
+    let fired = ixc_fire(&place, &bd);
+    assert_eq!(stdout_of(&fired).trim_end(), "dispatch=started:1,resumed:0,waiting:1", "型を持たない候補は absent の周に待たずに起きる: {}", told(&fired));
+    assert_eq!(created(&place.state, &["s2-toy.2"], 1), 1, "起こした便の RunCreated が 1 件");
+    assert_eq!(ixc_calls_settled(&place), 0, "hold の候補では撃たない（回数 0）");
+    clean(&[&place.repo, &place.state]);
+
+    let (place, bd) = ixc_candidates(IDXB_DECL);
+    idxb_script(&place, (IDXB_SCIP, "scip"), "exit 1\n");
+    let built = place.build(None, &[]);
+    assert_eq!(idxb_word(&idxb_line(&built)), "failed:rc", "失敗の記録を置く: {}", idxb_line(&built));
+    assert_eq!(idxb_field(&idxb_line(&built), "key").len(), 16, "鍵は 16 桁");
+    assert_eq!(place.calls("scip"), 1, "失敗した 1 回");
+    let listed = ls(&place.repo, &place.state, &bd);
+    assert_eq!(reason_of(&listed, "s2-toy.1"), "-", "failed の周は候補が待たない: {}", told(&listed));
+    assert!(!stdout_of(&listed).contains("index="), "候補の行は index= の尾を持たない: {}", stdout_of(&listed));
+    let only = ixc_only_typed(&place);
+    let fired = ixc_fire(&place, &only);
+    assert_eq!(stdout_of(&fired).trim_end(), "dispatch=started:1,resumed:0,waiting:0", "字面の閉包で通り起きる: {}", told(&fired));
+    assert_eq!(created(&place.state, &["s2-toy.1"], 1), 1, "起こした便の RunCreated が 1 件");
+    assert_eq!(ixc_calls_settled(&place), 1, "失敗の鍵は起こし直さない（回数 1 のまま）");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (g) 片方の key だけ宣言した repo で touches の型を持つ行の受付が rc 1 の `declaration` で key の名と行番号を名指し、`dispatch ls` の同じ
+/// 候補が `reason=admission:declaration` で待つ。touches の型を持たない行の受付と候補と contracts check は同じ repo で通る。
+#[test]
+fn pipe_dispatch_index_closure_half_declaration_refuses_and_waits_with_the_declaration_word() {
+    let half = "index-scip = [\"index-fake-scip {tree} {out}\"]\n";
+    let (place, bd) = ixc_candidates(half);
+    let refused = intake_raw(&place.repo, &place.state, &format!("{DESIGN_FILE}#a"), "s2-ixg");
+    let err = stderr_of(&refused);
+    assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "片方だけの宣言は型を持つ行の受付を断る: {err}");
+    assert!(err.contains("index-roles") && err.contains("line=4"), "key の名と行番号を名指す: {err}");
+    let listed = ls(&place.repo, &place.state, &bd);
+    assert_eq!(reason_of(&listed, "s2-toy.1"), "admission:declaration", "候補は同じ語で待つ: {}", told(&listed));
+    assert_eq!(reason_of(&listed, "s2-toy.2"), "-", "型を持たない候補は待たない: {}", told(&listed));
+    let plain = intake_raw(&place.repo, &place.state, &format!("{DESIGN_FILE}#n"), "s2-ixn");
+    assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "型を持たない行の受付は通る: {}", stderr_of(&plain));
+    stop_run_ok(&place.state, &run_id_of(&plain));
+    let rules = ceiling_rules(&place.state);
+    let checked = bin_cmd().args(["contracts", "check", "--rules", rules.as_str(), "--repo"]).arg(&place.repo).output();
+    assert_eq!(checked.map(|out| out.status.code()).ok().flatten(), Some(i32::from(RC_OK)), "contracts check は通る");
+    assert_eq!(ixc_calls_settled(&place), 0, "撃たない");
     clean(&[&place.repo, &place.state]);
 }

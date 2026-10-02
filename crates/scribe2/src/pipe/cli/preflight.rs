@@ -13,6 +13,8 @@
 //! の木で撃った結果・木は置き場の直下の一時の worktree で撃ち終えたら畳む・設計 pipeline.md §56）/
 //! `widen=<項目>@<doc>#<行 id>:<file,…>`（自分の行の § の本文が語として名指す型形の項目をほかの行が touches に持ち、その行の write-set が
 //! 自分の write-set の .rs の候補を覆わない組・項目の辞書順・読めない周は `widen=unmeasured:<理由>` の 1 行・rc と判定は変えない）/
+//! `index=unavailable:<語>`（索引を作れない周〔状態が failed〕で touches に型の項目を持つ行だけ・字面の閉包に縮退して通す・rc と判定は
+//! 変えない）/
 //! `refuse=<名>:<理由>`（judge の断り・全部・名は [`crate::pipe::refuse::Refuse::as_str`]）/ 末尾に
 //! `preflight: <ok|refused n=<件数>|broken>`。rc = 0（断り 0）/ 1（断り ≥ 1）/ 2（読めない = `RC_BROKEN` の周）。
 //! `--state-dir` が無く git 設定からも解けない周は `overlap=unmeasured` を出し、rc は他の断りで決める（測れないを 0 に
@@ -64,17 +66,21 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
         Ok(found) => found.unwrap_or(DEFAULT_BD),
         Err(reason) => return refused(reason),
     };
+    // 置き場は交差と重複 run の 2 検査と base の木の置き場と索引の状態の読みにだけ要る。解けない周は断りでなく `overlap=unmeasured`
+    // （base の木を撃つ名乗りの周は全行が測れない）で、索引の状態は載せない（状態なし＝字面の閉包だけ）。
+    let state_dir = state_dir_of(args).ok();
     let materials = match Materials::read(&repo, &ceiling.borrow(), bd) {
-        Ok(found) => found,
+        Ok(found) => match state_dir.as_deref() {
+            Some(dir) => found.indexed(dir, &repo, &sha),
+            None => found,
+        },
         Err(denial) => return tailed(denial),
     };
     let contract = match generated(&repo, &pointer, &materials) {
         Ok((found, _)) => found,
         Err(denial) => return tailed(denial),
     };
-    // 置き場は交差と重複 run の 2 検査と base の木の置き場にだけ要る。解けない周は断りでなく `overlap=unmeasured`（base の木を
-    // 撃つ名乗りの周は全行が測れない）。
-    let state_dir = state_dir_of(args).ok();
+    let index = materials.index_tail(&contract.touches);
     let early = early(&repo, manifest, &contract, state_dir.as_deref(), &sha);
     let material = Material {
         repo: &repo,
@@ -88,7 +94,7 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
     let entrance = early.base.as_ref().map(BaseRun::fact);
     let judged = judge(&material);
     let widen = widen_lines(&repo, &sha, &pointer, &contract.write_set);
-    render(&judged, state_dir.is_some(), entrance, widen)
+    render(&judged, state_dir.is_some(), (entrance, index), widen)
 }
 
 /// `widen=<項目>@<doc>#<行 id>:<file,…>`（設計 reverse-index.md の閉包の広がりの予想）: 自分の行の § の本文が語として名指す型形の項目を
@@ -154,8 +160,10 @@ fn tailed(denial: Denial) -> Outcome {
     outcome
 }
 
-/// judge の結果を 1 行 1 事実に描く。`measured` は置き場が在った（交差を撃った）か。`entrance` は base の木で撃った周の欄。
-fn render(judged: &Judged, measured: bool, entrance: Option<String>, widen: Vec<String>) -> Outcome {
+/// judge の結果を 1 行 1 事実に描く。`measured` は置き場が在った（交差を撃った）か。`facts` は base の木で撃った周の欄 `entrance` と、
+/// 索引を作れない周の尾 `index=unavailable:<語>`（設計 reverse-index.md §7 (b)）。
+fn render(judged: &Judged, measured: bool, facts: (Option<String>, Option<String>), widen: Vec<String>) -> Outcome {
+    let (entrance, index) = facts;
     let mut out: Vec<String> = Vec::new();
     if let Some((design, section)) = &judged.design {
         out.push(format!("design={design} section={section}"));
@@ -176,6 +184,7 @@ fn render(judged: &Judged, measured: bool, entrance: Option<String>, widen: Vec<
         out.extend(found.runs.iter().map(|(run, files)| format!("overlap={run}:{}", listed(files))));
     }
     out.extend(entrance);
+    out.extend(index);
     out.extend(widen);
     out.extend(judged.denials.iter().map(refuse_line));
     let broken = judged.denials.iter().any(|denial| denial.outcome.rc == RC_BROKEN);

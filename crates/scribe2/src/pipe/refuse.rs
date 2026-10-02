@@ -65,7 +65,12 @@ pub(crate) const REFUSALS: &[&str] = &[
     "max-live",
     "entrance-not-red",
     "ruling-unresolved",
+    "index-building",
 ];
+
+/// 起動の列の起こす側の 1 周が、受付の理由にこの語で待つ候補が在るとき、HEAD の code の索引の組み立てを裏で起こす契機の語
+/// （設計 reverse-index.md §7 (b)・文字列の列で引く＝待ちの理由の型を名指さない・行 e が `code-facts-unmeasured` を足す）。
+pub(crate) const INDEX_BUILD_TRIGGERS: &[&str] = &["index-building"];
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,6 +247,12 @@ pub(crate) enum Refuse {
         /// 台帳か線を読めなかった周の語（測れた周は `None`）。
         unmeasured: Option<String>,
     },
+    /// touches に型の項目を持つ行の受付が、base の code の索引の組み立てが終わっていない（状態が absent か building）ので
+    /// 断る（設計 reverse-index.md §7 (b)・受付が撃つ・起動の列は受付の理由 `index-building` で待たせる）。
+    IndexBuilding {
+        /// 索引の状態の語（`absent` か `building`）。
+        state: String,
+    },
 }
 
 impl Refuse {
@@ -272,6 +283,7 @@ impl Refuse {
             Self::MaxLive { .. } => "max-live",
             Self::EntranceNotRed { .. } => "entrance-not-red",
             Self::RulingUnresolved { .. } => "ruling-unresolved",
+            Self::IndexBuilding { .. } => "index-building",
         }
     }
 
@@ -345,6 +357,7 @@ impl Refuse {
                 format!("{} base で緑か測れない契約の検証行が {count} 本在る（deny の名乗り・行ごと {}）", self.as_str(), values.join(","))
             }
             Self::RulingUnresolved { ref section, ref row, ref unmeasured } => ruling_reason(self.as_str(), [section, row], unmeasured.as_deref()),
+            Self::IndexBuilding { ref state } => index_building_reason(self.as_str(), state),
         }
     }
 
@@ -372,7 +385,8 @@ impl Refuse {
             | Self::FindingUnaddressed { .. }
             | Self::MaxLive { .. }
             | Self::EntranceNotRed { .. }
-            | Self::RulingUnresolved { .. } => Evidence::Place,
+            | Self::RulingUnresolved { .. }
+            | Self::IndexBuilding { .. } => Evidence::Place,
             Self::ContractTable(ref found) => found.evidence(),
         }
     }
@@ -401,13 +415,19 @@ impl Refuse {
             | Self::PromisedFieldWritten { .. }
             | Self::PromiseSymbolUnresolved { .. }
             | Self::MaxLive { .. }
-            | Self::EntranceNotRed { .. } => RC_REFUSED,
+            | Self::EntranceNotRed { .. }
+            | Self::IndexBuilding { .. } => RC_REFUSED,
             Self::RulingUnresolved { ref unmeasured, .. } if unmeasured.is_some() => RC_BROKEN,
             Self::RulingUnresolved { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
             Self::ContractTable(ref found) => found.rc(),
         }
     }
+}
+
+/// 索引の組み立て中の断りの 1 行（設計 reverse-index.md §7 (b)・名と状態の語 `absent` か `building` を名指す）。
+fn index_building_reason(name: &str, state: &str) -> String {
+    format!("{name} code の索引が作り中（{state}）＝touches に型を持つ行は索引が ready になるまで受け付けない")
 }
 
 /// 裁定 id の引用の断りの 1 行（設計 dispatcher.md §37 約束 4）。測れた周は置き場（設計の節 → 契約表の行の順・空の置き場は書かない）
@@ -614,7 +634,7 @@ fn covers(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{covered, discern, normalize, overlaps, Certainty, ClosureError, Evidence, FindingKind, Refuse, REFUSALS};
+    use super::{covered, discern, normalize, overlaps, Certainty, ClosureError, Evidence, FindingKind, Refuse, INDEX_BUILD_TRIGGERS, REFUSALS};
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::pipe::table::TableError;
     use proptest::prelude::*;
@@ -666,6 +686,7 @@ mod tests {
                 row: vec!["policy:x".to_owned()],
                 unmeasured: None,
             },
+            Refuse::IndexBuilding { state: "absent".to_owned() },
         ]
     }
 
@@ -775,6 +796,7 @@ mod tests {
     }
 
     // flip-check: retroactive s2-07l.738.37.4
+    // flip-check: retroactive s2-07l.736.33.21.5
     /// 名前の slice は **宣言順**で、`as_str` の網羅 match と 1 対 1 である（ADR-0013 §2.1）。
     #[test]
     fn refuse_names_are_pinned_in_declaration_order() {
@@ -789,10 +811,11 @@ mod tests {
         assert_eq!(names.get(3).copied(), Some("write-set-unreadable"), "{names:?}");
         // 約束の行の 2 理由（設計 contract-source.md §33・`s2-07l.512`）が同時本数の上限（gate-cost.md §24・`s2-07l.398`）の
         // 手前に並び、base の木で撃った入口の断り（pipeline.md §56・`s2-07l.557`）がその次で、裁定 id の引用の断り（dispatcher.md
-        // §37・行 al）が末尾で、母集団は 24 値。
-        assert_eq!(REFUSALS.len(), 24, "母集団 24 値");
+        // §37・行 al）がその次で、索引の組み立て中の断り（reverse-index.md §7 (b)・行 d）が末尾で、母集団は 25 値。
+        assert_eq!(REFUSALS.len(), 25, "母集団 25 値");
+        assert_eq!(names.last().copied(), Some("index-building"), "末尾は索引の組み立て中");
         assert_eq!(
-            names.iter().rev().take(4).copied().collect::<Vec<&str>>(),
+            names.iter().rev().skip(1).take(4).copied().collect::<Vec<&str>>(),
             ["ruling-unresolved", "entrance-not-red", "max-live", "promise-symbol-unresolved"]
         );
         let entrance = samples().get(22).map(|found| (found.reason(), found.rc()));
@@ -811,9 +834,11 @@ mod tests {
     }
 
     // flip-check: retroactive s2-07l.738.37.4
+    // flip-check: retroactive s2-07l.736.33.21.5
     /// 在り処は `REFUSALS` の 23 語の母集団で 1 語に 1 つずつ決まる（設計 dispatcher.md §27 形 3・宣言順）: 行の字だけで
     /// 決まる 3 語・名指した file の 4 語（file は payload の字面）・本文の読み手の 7 語・置き場と host の 8 語・契約表の
-    /// 欠陥は理由の側（samples の `section-missing` は行）。名の 23 は歯を置いた時の語数で、行 al が置き場と host に 1 語足した（24 語）。
+    /// 欠陥は理由の側（samples の `section-missing` は行）。名の 23 は歯を置いた時の語数で、行 al が置き場と host に 1 語足し（24 語）、
+    /// 行 d が置き場と host に索引の組み立て中の 1 語を足した（25 語）。
     #[test]
     fn pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words() {
         let found: Vec<(&str, String)> = samples().iter().map(|refuse| (refuse.as_str(), refuse.evidence().render())).collect();
@@ -842,6 +867,7 @@ mod tests {
             ("max-live", "place"),
             ("entrance-not-red", "place"),
             ("ruling-unresolved", "place"),
+            ("index-building", "place"),
         ];
         let want: Vec<(&str, String)> = want.iter().map(|(name, at)| (*name, (*at).to_owned())).collect();
         assert_eq!(found, want, "母集団 {} 語の在り処", REFUSALS.len());
@@ -873,11 +899,13 @@ mod tests {
         assert_eq!(words, ["firm", "provisional", "unmeasured"], "結果の file の語");
     }
 
+    // flip-check: retroactive s2-07l.736.33.21.5
     /// 裁定 id の引用の断り（設計 dispatcher.md §37 約束 4）: 測れた周は rc 1 で本文が置き場ごとに id を全て名指し（置き場の順は
     /// 設計の節 → 契約表の行・片方が空の置き場は書かない）、測れない周は rc 2 で語を名指す。在り処はどちらも Place（台帳の状態に依る）。
+    /// 見本は名で引く（末尾の位置を取らない・行 d が見本の末尾に索引の組み立て中を足した）。
     #[test]
     fn refuse_ruling_names_every_id_per_place_and_keeps_two_rcs() {
-        let both = samples().pop();
+        let both = samples().into_iter().find(|found| found.as_str() == "ruling-unresolved");
         let both = both.as_ref();
         assert_eq!(
             both.map(Refuse::reason),
@@ -896,6 +924,32 @@ mod tests {
             assert_eq!(found.map(|refuse| refuse.evidence().render()), Some("place".to_owned()), "在り処は Place");
             assert_eq!(found.map(|refuse| refuse.reason().contains('\n')), Some(false), "理由は 1 行");
         }
+    }
+
+    /// 索引の組み立て中の断り（設計 reverse-index.md §7 (b)・行 d）: 語は `index-building`・在り処は置き場（予想の base では測れない）・rc 1 で、
+    /// 断りの 1 行は語と状態の語（absent と building の 2 つ）を名指す。見本は variant を名で組む（宣言順の位置を取らない）。
+    #[test]
+    fn refuse_index_building_names_the_state_word_and_stays_in_the_place() {
+        for state in ["absent", "building"] {
+            let found = Refuse::IndexBuilding { state: state.to_owned() };
+            assert_eq!(found.as_str(), "index-building", "語");
+            assert_eq!(found.evidence(), Evidence::Place, "在り処は置き場");
+            assert_eq!(found.rc(), RC_REFUSED, "rc 1");
+            let line = found.reason();
+            assert!(line.starts_with("index-building ") && line.contains(state) && !line.contains('\n'), "語と状態の語を名指す 1 行: {line}");
+            assert_eq!(discern(&found.evidence(), &["src/a.rs".to_owned()]), Certainty::Unmeasured, "予想の base では測れない");
+        }
+        let (absent, building) = (Refuse::IndexBuilding { state: "absent".to_owned() }, Refuse::IndexBuilding { state: "building".to_owned() });
+        assert_ne!(absent.reason(), building.reason(), "状態の語で 1 行が変わる");
+        assert!(REFUSALS.contains(&absent.as_str()), "語は REFUSALS に在る");
+    }
+
+    /// 索引の組み立てを裏で起こす契機の語の列は断りの file の 1 か所に在り、行 d の時点では `index-building` の 1 語で、その語は
+    /// 断りの語（[`REFUSALS`]）の 1 つである。
+    #[test]
+    fn refuse_index_building_trigger_words_are_the_one_word() {
+        assert_eq!(INDEX_BUILD_TRIGGERS, ["index-building"], "契機の語は 1 語");
+        assert!(INDEX_BUILD_TRIGGERS.iter().all(|word| REFUSALS.contains(word)), "契機の語は断りの語");
     }
 
     /// **rc は variant が持つ**: 読めない周だけ rc 2 で、残りは rc 1。理由は run / path を名乗る。

@@ -3036,3 +3036,271 @@ fn pipe_intake_ruling_order_puts_the_citation_before_the_overlap() {
     assert_eq!(names, ["refuse=ruling-unresolved", "refuse=write-set-overlap"], "{}", stdout_of(&checked));
     clean(&[&repo, &state]);
 }
+
+// ───── 受付の索引の閉包と索引の状態の扱い（設計 reverse-index.md §7 (b)・契約表の行 d・接頭辞 `pipe_intake_index_closure_`） ─────
+//
+// 偽の宣言（2 key の command を偽 script にする）と SCIP の書き手は `pipe.rs` の行 a1・a2 の歯の物を使い、この file の fixture は
+// 型 `crate::swatch::Swatch`（struct）・`crate::swatch::Shade`（enum）を別名の取り込みで使う file と、欄の term だけを参照する file の
+// SCIP と役の一致を書く。fixture の行は欄 `code-facts` を持たない。
+
+/// SCIP の symbol の頭（package は repo の中）。
+const IXC_PKG: &str = "rust-analyzer cargo k 0.1.0 ";
+
+/// 型を宣言する file（struct `Swatch` と enum `Shade`）。
+const IXC_SWATCH: &str = "pub struct Swatch {\n    pub hue: u8,\n}\n\npub enum Shade {\n    Light,\n    Dark(u8),\n}\n";
+
+/// `Swatch` を別名 `Sw` の取り込みで literal に組む file（字面の閉包は `Swatch {` を持たないので名指さない）。
+const IXC_ALIAS: &str = "use crate::swatch::Swatch as Sw;\n\npub fn make() -> Sw {\n    Sw { hue: 1 }\n}\n";
+
+/// `Shade` の variant だけを別名 `S` の取り込みで構築する file（型の名を字で持たない）。
+const IXC_SHADE_USER: &str = "use crate::swatch::Shade as S;\n\npub fn dark() -> S {\n    S::Dark(2)\n}\n";
+
+/// `Shade` の欄の名を持つ term（`.` で終わる字）だけを参照する file。
+const IXC_SHADE_FIELD: &str = "use crate::swatch::Shade;\n\npub fn label(shade: &Shade) -> u8 {\n    shade.label\n}\n";
+
+/// fixture の file（path・本文）。
+pub(super) const IXC_FILES: [(&str, &str); 4] = [
+    ("crates/toy/src/swatch.rs", IXC_SWATCH),
+    ("crates/toy/src/alias.rs", IXC_ALIAS),
+    ("crates/toy/src/shade_user.rs", IXC_SHADE_USER),
+    ("crates/toy/src/shade_field.rs", IXC_SHADE_FIELD),
+];
+
+/// fixture の SCIP（variant の symbol は rust-analyzer の形＝型の symbol の後ろに variant の名と `#`・欄は `.` で終わる字）。
+fn ixc_scip() -> Vec<u8> {
+    let sym = |name: &str| format!("{IXC_PKG}{name}");
+    let (swatch, shade) = (sym("swatch/Swatch#"), sym("swatch/Shade#"));
+    let (light, dark, label) = (sym("swatch/Shade#Light#"), sym("swatch/Shade#Dark#"), sym("swatch/Shade#label."));
+    let at = |body: &str, context: &str, inner: &str| scip_range(body, span_in(body, context, inner), false);
+    let whole = |body: &str, text: &str| scip_range(body, span_of(body, text, 0), false);
+    let (sw, al, su, sf) = (IXC_SWATCH, IXC_ALIAS, IXC_SHADE_USER, IXC_SHADE_FIELD);
+    let sw_occs = [
+        scip_occ(&at(sw, "struct Swatch", "Swatch"), &swatch, true, &whole(sw, "pub struct Swatch {\n    pub hue: u8,\n}")),
+        scip_occ(&at(sw, "enum Shade", "Shade"), &shade, true, &whole(sw, "pub enum Shade {\n    Light,\n    Dark(u8),\n}")),
+        scip_occ(&at(sw, "Light,", "Light"), &light, true, &[]),
+        scip_occ(&at(sw, "Dark(u8)", "Dark"), &dark, true, &[]),
+    ];
+    let al_occs = [
+        scip_occ(&at(al, "swatch::Swatch", "Swatch"), &swatch, false, &[]),
+        scip_occ(&at(al, "fn make", "make"), &sym("alias/make()."), true, &whole(al, "pub fn make() -> Sw {\n    Sw { hue: 1 }\n}")),
+        scip_occ(&at(al, "-> Sw", "Sw"), &swatch, false, &[]),
+        scip_occ(&at(al, "Sw { hue: 1 }", "Sw"), &swatch, false, &[]),
+    ];
+    let su_occs = [
+        scip_occ(&at(su, "swatch::Shade", "Shade"), &shade, false, &[]),
+        scip_occ(&at(su, "fn dark", "dark"), &sym("shade_user/dark()."), true, &whole(su, "pub fn dark() -> S {\n    S::Dark(2)\n}")),
+        scip_occ(&at(su, "-> S", "S"), &shade, false, &[]),
+        scip_occ(&at(su, "S::Dark", "S"), &shade, false, &[]),
+        scip_occ(&at(su, "Dark(2)", "Dark"), &dark, false, &[]),
+    ];
+    let sf_occs = [
+        scip_occ(&at(sf, "swatch::Shade", "Shade"), &shade, false, &[]),
+        scip_occ(&at(sf, "fn label", "label"), &sym("shade_field/label()."), true, &whole(sf, "pub fn label(shade: &Shade) -> u8 {\n    shade.label\n}")),
+        scip_occ(&at(sf, "&Shade", "Shade"), &shade, false, &[]),
+        scip_occ(&at(sf, "shade.label", "label"), &label, false, &[]),
+    ];
+    scip_index(
+        &[
+            scip_document(IXC_FILES[0].0, 1, &sw_occs, &[]),
+            scip_document(IXC_FILES[1].0, 1, &al_occs, &[]),
+            scip_document(IXC_FILES[2].0, 1, &su_occs, &[]),
+            scip_document(IXC_FILES[3].0, 1, &sf_occs, &[]),
+        ],
+        &[],
+    )
+}
+
+/// fixture の役の一致（別名の literal と取り込み・variant の構築の call）。
+fn ixc_roles() -> String {
+    let line = |rule: &str, (path, body): (&str, &str), needle: &str, name: Option<&str>| idx_role_line(rule, path, span_of(body, needle, 0), name);
+    [
+        line("use", IXC_FILES[1], "use crate::swatch::Swatch as Sw;", None),
+        line("literal", IXC_FILES[1], "Sw { hue: 1 }", Some("Sw")),
+        line("use", IXC_FILES[2], "use crate::swatch::Shade as S;", None),
+        line("call", IXC_FILES[2], "S::Dark(2)", None),
+    ]
+    .join("\n")
+        + "\n"
+}
+
+/// 索引の宣言（2 key の偽の command）を commit した toy repo と偽の command の置き場（行は `rows`・宣言は `decl`）。
+pub(super) fn ixc_place(rows: &[String], decl: &str) -> IdxPlace {
+    let vessel = format!("{DERIVE_VESSEL}{decl}");
+    let mut files: Vec<(&str, &str)> = vec![(".vessel.toml", vessel.as_str())];
+    files.extend(IXC_FILES);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(rows)), &files);
+    let place = IdxPlace { repo, state };
+    assert!(fs::create_dir_all(place.bin()).is_ok(), "偽の command の dir を作れる");
+    assert!(fs::write(place.state.join("idx.scip"), ixc_scip()).is_ok(), "SCIP の fixture を書ける");
+    assert!(fs::write(place.state.join("idx.roles"), ixc_roles()).is_ok(), "一致の fixture を書ける");
+    idxb_script(&place, (IDXB_SCIP, "scip"), &format!("cp '{}' \"$2\"\n", place.state.join("idx.scip").display()));
+    idxb_script(&place, (IDXB_ROLES, "roles"), &format!("cat '{}'\n", place.state.join("idx.roles").display()));
+    place
+}
+
+/// touches に型を持つ行（write-set は `write_set`）。
+pub(super) fn ixc_row(id: &str, touches: &str, write_set: &[&str]) -> String {
+    let quoted: Vec<String> = write_set.iter().map(|item| format!("\"{item}\"")).collect();
+    table_row(id, &[("touches", &format!("[\"{touches}\"]")), ("write-set", &format!("[{}]", quoted.join(", ")))])
+}
+
+/// touches を持たない行（索引を要しない行）。
+pub(super) fn ixc_plain_row(id: &str) -> String {
+    table_row(id, &[("write-set", "[\"src/lib.rs\"]")])
+}
+
+/// 設計 doc の行を書き換えて commit する（契約表の doc だけの変更は索引の鍵を動かさない）。
+fn ixc_recommit(place: &IdxPlace, rows: &[String]) {
+    write_design(&place.repo, &table_doc(&table_region(rows)));
+    git(&place.repo, &["add", "-A"]);
+    git(&place.repo, &["commit", "-q", "-m", "design-rows"]);
+}
+
+/// 索引を組んで ready にし、鍵を返す（built を要求する）。
+pub(super) fn ixc_built(place: &IdxPlace) -> String {
+    let out = place.build(None, &[]);
+    let line = idxb_line(&out);
+    assert_eq!(idxb_word(&line), "built", "索引を組める: {line} / {}", stderr_of(&out));
+    idxb_field(&line, "key")
+}
+
+/// 索引の置き場の鍵ごとの file（`tsv` と `rec`）を外す。
+pub(super) fn ixc_unbuild(place: &IdxPlace, key: &str) {
+    for suffix in ["tsv", "rec"] {
+        assert!(fs::remove_file(place.dir().join(format!("{key}.{suffix}"))).is_ok(), "{suffix} を外す");
+    }
+}
+
+/// 設計 pointer `docs/design/toy.md#<id>`。
+fn ixc_design(id: &str) -> String {
+    format!("{DESIGN_FILE}#{id}")
+}
+
+/// (a) touches の型を別名の取り込みで組む file X が write-set に無い行は、base の索引が ready の受付が `X (索引)` の
+/// write-set-incomplete で rc 1 に断り（run を作らない）、断りの 1 行は受付の形（`pipe: ` で始まり表の検査の `contracts:` の行を持たない）。
+/// X を write-set に足した同じ行は通る。同じ行の title に解けない名指しを足した commit は表の検査の断りだけで `X (索引)` を名指さない。
+/// 後半: 同じ repo から宣言の 2 key を外した commit の受付と contracts check は X の無い行を通し、結果の行に `index=` が無い。
+#[test]
+fn pipe_intake_index_closure_refuses_the_alias_file_outside_the_write_set_until_it_is_added() {
+    let (swatch, alias) = (IXC_FILES[0].0, IXC_FILES[1].0);
+    let short = ixc_row("a", "crate::swatch::Swatch", &[swatch]);
+    let place = ixc_place(std::slice::from_ref(&short), IDXB_DECL);
+    ixc_built(&place);
+    let (dirs, events) = (run_dirs(&place.state), event_count(&place.state));
+    let refused = intake_raw(&place.repo, &place.state, &ixc_design("a"), "s2-ixa");
+    let err = stderr_of(&refused);
+    assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "索引の閉包の不足は rc 1: {err}");
+    assert!(err.starts_with("pipe: ") && err.contains(&format!("{alias} (索引)")), "X に (索引) を添えて名指す: {err}");
+    assert!(!err.contains("contracts:") && !err.contains(IXC_FILES[2].0), "表の検査の行を持たず、ほかの file を名指さない: {err}");
+    assert_eq!((run_dirs(&place.state), event_count(&place.state)), (dirs, events), "run を作らない");
+    let checked = preflight_raw(&place.repo, &place.state, &ixc_design("a"), "s2-ixa", true);
+    assert_eq!(checked.status.code(), Some(i32::from(RC_REFUSED)), "preflight も同じ判定: {}{}", stdout_of(&checked), stderr_of(&checked));
+    assert!(stderr_of(&checked).contains(&format!("{alias} (索引)")), "preflight も X を名指す: {}", stderr_of(&checked));
+    ixc_recommit(&place, &[ixc_row("a", "crate::swatch::Swatch", &[swatch, alias])]);
+    let passed = intake_raw(&place.repo, &place.state, &ixc_design("a"), "s2-ixa-added");
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "X を足した行は通る: {}", stderr_of(&passed));
+    stop_run_ok(&place.state, &run_id_of(&passed));
+    // 同じ行（X は write-set に無い）の title に解けない名指しを足すと、表の検査の断りだけで断り X を名指さない。
+    let named = table_row("a", &[("touches", "[\"crate::swatch::Swatch\"]"), ("write-set", &format!("[\"{swatch}\"]")), ("title", "\"行 a `crate::nope::Missing`\"")]);
+    ixc_recommit(&place, &[named]);
+    let table = intake_raw(&place.repo, &place.state, &ixc_design("a"), "s2-ixa");
+    let err = stderr_of(&table);
+    assert_eq!(table.status.code(), Some(i32::from(RC_REFUSED)), "解けない名指しは rc 1: {err}");
+    assert!(err.contains("contracts:") && !err.contains("(索引)") && !err.contains(alias), "表の検査の断りだけ: {err}");
+    // 後半: 宣言の 2 key を外した commit は X の無い行を通す（索引を持たない repo は今のまま）。
+    let vessel = fs::read_to_string(place.repo.join(".vessel.toml")).unwrap_or_default().replace(IDXB_DECL, "");
+    assert!(fs::write(place.repo.join(".vessel.toml"), vessel).is_ok(), "宣言を書き換えられる");
+    ixc_recommit(&place, &[short]);
+    let bare = intake_raw(&place.repo, &place.state, &ixc_design("a"), "s2-ixa-bare");
+    assert_eq!(bare.status.code(), Some(i32::from(RC_OK)), "2 key の無い repo は X の無い行を通す: {}", stderr_of(&bare));
+    assert!(!stdout_of(&bare).lines().next().unwrap_or_default().contains("index="), "結果の行に index= が無い: {}", stdout_of(&bare));
+    let rules = ceiling_rules(&place.state);
+    let contracts = bin_cmd().args(["contracts", "check", "--rules", rules.as_str(), "--repo"]).arg(&place.repo).output();
+    assert_eq!(contracts.map(|out| out.status.code()).ok().flatten(), Some(i32::from(RC_OK)), "contracts check は今の字面の閉包のまま通る");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (i) variant の symbol を rust-analyzer の形（型の symbol の後ろに variant の名と `#`）で書く SCIP で、型の名を字で持たず variant だけを
+/// 別名の取り込みで構築する file Y と、同じ型の欄の名を持つ term（`.` で終わる字）だけを参照する file Z を置くと、Y と Z を write-set に
+/// 持たない行は `Y (索引)` で断られて Z を名指さず、Y を足した行は通る（variant を `.` で終わる字と読む実装は Y を数えず通して落ちる）。
+#[test]
+fn pipe_intake_index_closure_counts_the_variant_only_file_and_not_the_term_only_file() {
+    let (swatch, user, field) = (IXC_FILES[0].0, IXC_FILES[2].0, IXC_FILES[3].0);
+    let place = ixc_place(&[ixc_row("s", "crate::swatch::Shade", &[swatch])], IDXB_DECL);
+    ixc_built(&place);
+    let refused = intake_raw(&place.repo, &place.state, &ixc_design("s"), "s2-ixs");
+    let err = stderr_of(&refused);
+    assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "Y を欠く行は rc 1: {err}");
+    assert!(err.contains(&format!("{user} (索引)")), "variant だけを構築する Y を名指す: {err}");
+    assert!(!err.contains(field), "欄の term だけを参照する Z は名指さない: {err}");
+    ixc_recommit(&place, &[ixc_row("s", "crate::swatch::Shade", &[swatch, user])]);
+    let passed = intake_raw(&place.repo, &place.state, &ixc_design("s"), "s2-ixs");
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "Y を足した行は通る（Z は足さない）: {}", stderr_of(&passed));
+    stop_run_ok(&place.state, &run_id_of(&passed));
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (c) 失敗の記録を持つ鍵の周（failed:rc）の touches に型を持つ行は字面の閉包だけで判じて rc 0 で通り、受付の結果の行と preflight の出力が
+/// `index=unavailable:rc` を持つ。同じ鍵の周に同じ行で撃つ `pipe run`（lens を rc 1 の偽の command にして審査の段で止まる周）の stdout の
+/// 1 行目も `run=<id>` の後ろに同じ尾を持つ。touches の型を持たない行の受付の結果の行と preflight の出力は `index=` を持たない。
+#[test]
+fn pipe_intake_index_closure_failed_state_degrades_to_the_literal_closure_with_the_tail() {
+    let swatch = IXC_FILES[0].0;
+    let place = ixc_place(&[ixc_row("a", "crate::swatch::Swatch", &[swatch]), ixc_plain_row("n")], IDXB_DECL);
+    idxb_script(&place, (IDXB_SCIP, "scip"), "exit 1\n");
+    let built = place.build(None, &[]);
+    assert_eq!(idxb_word(&idxb_line(&built)), "failed:rc", "組み立ては失敗の記録を残す: {}", idxb_line(&built));
+    let taken = intake_raw(&place.repo, &place.state, &ixc_design("a"), "s2-ixc");
+    assert_eq!(taken.status.code(), Some(i32::from(RC_OK)), "failed の周は字面の閉包だけで判じて通る: {}", stderr_of(&taken));
+    let first = stdout_of(&taken).lines().next().unwrap_or_default().to_owned();
+    assert!(first.starts_with("run=") && first.ends_with(" index=unavailable:rc"), "受付の結果の行の尾: {first}");
+    stop_run_ok(&place.state, &run_id_of(&taken));
+    let checked = preflight_raw(&place.repo, &place.state, &ixc_design("a"), "s2-ixp", true);
+    assert_eq!(checked.status.code(), Some(i32::from(RC_OK)), "preflight も通る: {}{}", stdout_of(&checked), stderr_of(&checked));
+    assert_eq!(fact_lines(&checked, "index="), ["index=unavailable:rc"], "preflight の出力の尾: {}", stdout_of(&checked));
+    let marker = place.state.join("ixc-lens-ran");
+    let run = run_pipe(&[
+        "run", "--design", &ixc_design("a"), "--bead", "s2-ixr", "--repo", &place.repo.display().to_string(),
+        "--state-dir", &place.state.display().to_string(), "--rules", &ceiling_rules(&place.state), "--runner", "true",
+        "--lens", &fake_lens(&marker, "exit 1"),
+    ]);
+    let head = stdout_of(&run).lines().next().unwrap_or_default().to_owned();
+    assert_ne!(run.status.code(), Some(i32::from(RC_OK)), "審査の段で止まる: {}", stderr_of(&run));
+    assert!(head.starts_with("run=") && head.ends_with(" index=unavailable:rc") && !head.contains("write-set="), "pipe run の 1 行目も同じ尾（write-set の欄は足さない）: {head}");
+    let plain = intake_raw(&place.repo, &place.state, &ixc_design("n"), "s2-ixn");
+    assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&plain));
+    assert!(!stdout_of(&plain).lines().next().unwrap_or_default().contains("index="), "型を持たない行の結果の行は index= を持たない: {}", stdout_of(&plain));
+    stop_run_ok(&place.state, &run_id_of(&plain));
+    let plain_checked = preflight_raw(&place.repo, &place.state, &ixc_design("n"), "s2-ixq", true);
+    assert!(fact_lines(&plain_checked, "index=").is_empty(), "型を持たない行の preflight は index= を持たない: {}", stdout_of(&plain_checked));
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (d) absent の周（組み立て前）と生きた印の周（building）の touches に型を持つ行の受付は rc 1 の `index-building` で状態の語 absent と
+/// building を名指し、preflight も同じ。touches の型を持たない行は同じ 2 周で通る。
+#[test]
+fn pipe_intake_index_closure_refuses_while_the_index_is_absent_or_building_and_names_the_word() {
+    let swatch = IXC_FILES[0].0;
+    let place = ixc_place(&[ixc_row("a", "crate::swatch::Swatch", &[swatch]), ixc_plain_row("n")], IDXB_DECL);
+    let key = ixc_built(&place);
+    ixc_unbuild(&place, &key);
+    let live = place.dir().join(format!("{key}.lock"));
+    for (word, building) in [("absent", false), ("building", true)] {
+        if building {
+            assert!(fs::write(&live, format!("{}\n", std::process::id())).is_ok(), "生きた持ち主の印を置く");
+        }
+        let (dirs, events) = (run_dirs(&place.state), event_count(&place.state));
+        let refused = intake_raw(&place.repo, &place.state, &ixc_design("a"), "s2-ixd");
+        let err = stderr_of(&refused);
+        assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "{word}: 作り中は rc 1: {err}");
+        assert!(err.starts_with("pipe: index-building ") && err.contains(word), "{word}: 断りの名と状態の語: {err}");
+        assert_eq!((run_dirs(&place.state), event_count(&place.state)), (dirs, events), "{word}: run を作らない");
+        let checked = preflight_raw(&place.repo, &place.state, &ixc_design("a"), "s2-ixd", true);
+        assert_eq!(checked.status.code(), Some(i32::from(RC_REFUSED)), "{word}: preflight も断る: {}", stdout_of(&checked));
+        assert!(stderr_of(&checked).contains("index-building") && stderr_of(&checked).contains(word), "{word}: preflight の断り: {}", stderr_of(&checked));
+        let plain = intake_raw(&place.repo, &place.state, &ixc_design("n"), &format!("s2-ixn-{word}"));
+        assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "{word}: 型を持たない行は通る: {}", stderr_of(&plain));
+        stop_run_ok(&place.state, &run_id_of(&plain));
+    }
+    clean(&[&place.repo, &place.state]);
+}

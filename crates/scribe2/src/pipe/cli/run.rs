@@ -88,7 +88,7 @@ pub(super) fn run_all(
         Ok(found) => found.to_owned(),
         Err(reason) => return refused(reason),
     };
-    let id = match intake_id(args, manifest, policy) {
+    let (id, index) = match intake_id(args, manifest, policy) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
@@ -106,7 +106,8 @@ pub(super) fn run_all(
     };
     // **run id は落ちた周も stdout に出す**。`resume` がこの id を要るためで、
     // ここで黙ると続きから引けない便が置き場に残る。
-    let mut lines = vec![intake_line(args, &id)];
+    // 索引を作れない周の尾（` index=unavailable:<語>`）は受付の本体が返した字をそのまま足す（write-set の欄と base の木の欄は足さない）。
+    let mut lines = vec![format!("{}{index}", intake_line(args, &id))];
     // **段の通知は rc に依らず段の順で持つ**（設計 §21 (1)）: gate の `lens-input=…` のような行は
     // rc 0 の段が出すので、畳むときに捨てると連鎖で撃った周だけ理由が消える（`.286` の実測）。
     let mut notes: Vec<String> = Vec::new();
