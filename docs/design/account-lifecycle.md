@@ -649,6 +649,33 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
   3. 行 ab → 行 ac → 行 ad（表の `depends`）。3 行とも SRS の改訂の後に起こす（行 ab も FR58 の平易の層の字「器は credential を読みも書きもしない」と食い違うので、改訂の前に起こさない）。memo の昇格条件（再発か束 E の局面の設計 doc の後）の順位は台帳の priority のまま。
 - 着地の後: 行 ad の後に PATH の binary を `swap-binary.sh` で入れ替える（管理 tick の unit は PATH の binary を撃つ・入れ替えの前の tick は墓標の席に合図を送り続ける）。消費側の席へ 1 行で知らせる: doctor と `account ls` の `credential=` に `dead`・管理 tick の判定行と `tick-last` の `reason=` に `account-dead` が増える（key の名は変えない・群の行は変えない・板は語を読むだけで判定を写さない）。
 
+## 39. 口座の待ちは 5 秒の周期で読み直す — Completion の AccountFree の周期だけを POLL（20 ms）から 5 秒の定数へ分け、待つ driver が event log の全体を 20 ms ごとに replay し直さない（契約表の行 ae・[FR37](../../design-intent/spec/srs.html#FR37)・memo `s2-07l.743` と同じ型）
+
+やさしく言うと: 便に使える口座が全部上限に当たると、便の運転手（driver）は一番早く上限が戻る時刻まで待つ。今の待ちは 20 ms ごとに event log を全部読み直して「空いた口座が在るか」を判じるので、待つ間ずっと CPU を 1 本の 7〜8 割使う。口座の空きが変わるのは上限の戻る時刻か新しい計測の記録が来た時だけで、戻る時刻は待ちの期限が受け持つので、読み直しは 5 秒に 1 回で足りる。
+
+- 出所: 隣の project の設計席の知らせ（2026-10-02T13:4xZ・その置き場の driver が Reviewed の後の口座待ちで 66 分・CPU 約 60%）と、orchestrator が本 repo の置き場で測り直した値（下）。
+- 何が起きているか（main 6b7572a8・verified 2026-10-02T13:40Z）:
+  - 便に使える口座が全部上限に当たった周（7 日の窓が 4 口座とも 100%）、本 repo の置き場の driver 2 本（契約の審査を通った便・段は Reviewed）は経過 72 分で CPU 57 分（79%）と 53 分（74%）を使い、待ちの状態は hrtimer_nanosleep だった。
+  - 待ちの本体: `crates/scribe2/src/pipe/ratelimit.rs` の choose_or_wait が `crates/scribe2/src/fleet/wait.rs` の wait を Completion の AccountFree と期限（最も早い reset の時刻まで）で撃つ。wait の周期は Completion の period で、AccountFree には POLL（20 ms）を返す（[contract-source.md](./contract-source.md) §50 の行 bb の done (2)「他の全 variant には POLL」）。
+  - 1 周の観測は wait.rs の account_free で、置き場の event log を全部読み（store の read_all）replay して便の段と便用の選定を撃つ。LandTurn の印による省略（reuse）を持たない。本 repo の置き場の event log は 10 MB。
+  - 空きの判定が変わるのは (i) 便の段が動いた周（stop は driver の process を止めるので待ちから抜ける） (ii) 新しい計測の記録（AllowanceMeasured）が足された周 (iii) 口座の reset の時刻を過ぎた周の 3 つで、(iii) は待ちの期限が最も早い reset の時刻なので期限の Timeout が受け持つ（choose_or_wait は Timeout の後に計測から撃ち直す）。
+- 形（番号は行 ae の done と 1:1）:
+  1. **口座の待ちの周期**: wait.rs の POLL の隣に私有の定数 ACCOUNT_POLL（5 秒）を置き、Completion の period は AccountFree に ACCOUNT_POLL を返す。wait が眠る長さは今のまま period と期限までの残りの小さい方なので、reset の時刻が 5 秒より近い待ちは期限で起きる。
+  2. **他の variant は変えない**: CiResult は欄 every と POLL の大きい方、AccountFree の外の 7 つ（RunnerExited・SeatGone・SlotFree・GroupGone・LandTurn・LandWindow・HostCalm）は POLL のまま。§50 の歯 fleet_wait_ci_interval_period_is_every_only_for_ci_result は、others の列から AccountFree を外し、残りが POLL であることを測る形に書き換える（base でも緑なので retroactive の札を付ける）。
+  3. **期限の Timeout は今のまま**: 最も早い reset で待ちを抜けて計測から撃ち直す既存の e2e の歯（reset は計測の 2 秒後）が、本文を変えずに緑である（5 秒の周期でも眠りは期限で切れる）。
+- 歯（lib・wait.rs の歯の区間・接頭辞 fleet_wait_account_free_period_）:
+  - (a) fleet_wait_account_free_period_is_five_seconds: AccountFree を組み、period が Duration の 5 秒と等しい（定数の名でなく値で比べる）。base は 20 ms を返すので RED。
+  - 書き換える既存の歯: fleet_wait_ci_interval_period_is_every_only_for_ci_result（形 2・retroactive の札）。
+  - 変えない既存の歯: e2e の `crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs` の pipe_ratelimit_resume_waits_for_the_earliest_reset_then_remeasures（形 3・行の write-set はこの file を `=` の置き場だけで持つ）。
+- 変えないもの: choose_or_wait の判定行と stderr の字・期限の求め方・account_free の判定・LandTurn の周期と印（memo `s2-07l.743` の側）・CiResult の周期。
+- 却下:
+  - AccountFree にも LandTurn と同じ印の reuse を足す: log は他の席の打刻で絶えず伸び、印が変わるたびに全体を replay する（LandTurn の待ちが CPU の 30〜40% を使う memo `s2-07l.743` の型）。周期を分けるだけで 1 秒あたりの replay の回数は 250 分の 1 になる。
+  - 周期を rules 行にする: 値に裁定 id が要り、待ちの周期は完了条件の性質（§50）で運用の値ではない。
+- 限界:
+  - 空きの判定の反応は最大 5 秒遅れる（数時間の待ちに対して無視できる）。
+  - 1 周の replay は event log の大きさに比例し、log の伸びとともに重くなる。差分の読みは memo `s2-07l.743` の候補 (b) の側に残す。
+- ADR: 書かない（定数の周期を 1 つ足すだけで、on-disk の形・判定・出力を変えない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -941,4 +968,16 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat
 size = "M"
 growth = ["crates/scribe2/src/seat/tick.rs:40", "crates/scribe2-boundary/tests/e2e/seat/tick.rs:210"]
 done = "(1) front は移動の門と park の手の後・打刻の前に登録 row の口座を行 ab の credential_of（口座の dir は fleet の account_dir）で読み（停止の記録の読みは打刻の前へ移す）、dead の周は state.jsonl と梯子の記録を読まず（busy / state-stale / state-missing / state-unreadable / settling / record-unreadable で止めず）Front に dead の印を持って続け、群の判定（seat-heartbeat.md §9 の 1 本・鮮度の窓に 1 回まで・lock の内側）は今の judge の順で撃たれ、移った周は同じ周の移動の門が退避を撃つ (2) back は停止の記録の門（heartbeat-off）の直後・入力欄の門の前に dead の周を decision=noop reason=account-dead pointer=- step=- で返し key 0・梯子の記録 0 で、file は毎周読むので墓標でなくなった次の周から今の列に戻る (3) NoopReason に AccountDead（字面 account-dead）が宣言順の末尾に在り NOOP_REASONS も末尾で、判定行と tick-last にそのまま載る (4) awake の群の枝は群の今の口座（記録 > 種）が dead なら lock を取る前に群の判定の 1 本（judged・Front でなく anchor と rows の行と時刻を受け judge と awake の 2 か所から呼ぶ・鮮度の窓に 1 回まで）を撃って結果を判定行の judged= に載せ、群の今の口座を読み直して起こし（移った周は移り先）、群の外と park の区画の席の起こし直しは変えず、front は 60 行・cognitive complexity 15 の内 歯: e2e の seat_tick_tombstone_（seat/tick.rs・(j) judge_place を [10, 10] で組み row の口座 A〔群の種〕を墓標に書き換え打刻の最終行が 10 秒前の Busy・窓が claude で入力欄が空の周に judged=moved:<B> で同じ周に移動の門が撃たれる (k) 群の外の席の row の口座が墓標で最終行が 40 分前の Idle・入力欄が空の周は noop reason=account-dead pointer=- step=-・0 key・梯子の記録 0 で、pane が no prompt here の周も account-dead (l) (k) の credential を期限切れにした周は今どおり合図 1 行で、墓標の file を未来の期限の file に書き換えた次の周も合図 1 行 (m) (k) の席に停止の記録を置くと reason=heartbeat-off (n) 記録 B を先に置き row の口座 A を墓標・pane が claude・猶予 0 で decision=move・move=exit・judged=- (o) (n) で pane が shell なら move=launch・起動行が B の設定 dir・judged=- (p) row の口座 A〔種・記録なし〕を墓標・pane が shell で move=launch・judged=moved:<B>・起動行が B の設定 dir を持ち A の dir を持たない・群の記録 B・承認 event 1 (q) (p) で B も墓標なら move=launch・judged=none・起動行が A の設定 dir・群の記録なし・断りの event 1 (r) (p) の置き場に鮮度の窓の内側の判定の打刻を先に置くと move=launch・judged=-・起動行が A の設定 dir を持ち B の dir を持たない・群の記録なし）が base で RED（(j) は base の front が busy で止まり群の判定を撃たない・(k) は base が合図を送る・(p)(q) は base の awake が墓標の A で判定を撃たずに起こし judged=-・(l)(m)(n)(o)(r) は同じ file の不変の歯）、直した lib の seat_tick_reasons_are_unique_in_declaration_order（母集団 19 → 20・語の列の末尾に account-dead・noop と error の語 22 → 23）と seat_tick_tail_reasons_are_the_last_three_in_declaration_order（末尾 3 値の逆順が account-dead / heartbeat-off / group-locked・19 → 20）は base の本数で落ち、行 ac の seat_tick_judge_tombstone_ の (f)〜(h2) は判定行の理由の語を測らないので行 ad の後も緑、seat_tick_account_gate_ / seat_tick_judge_ / seat_tick_move_ / seat_tick_wake_ は字も期待も変えずに緑"
+
+[[contract]]
+id = "ae"
+title = "口座の待ちは 5 秒の周期で読み直す — Completion の AccountFree の周期だけを POLL（20 ms）から 5 秒の定数へ分け、他の variant の周期と期限の Timeout は変えない（§39 行 ae・FR37・memo s2-07l.743 の型）"
+req = ["FR37"]
+section = "39"
+write-set = ["crates/scribe2/src/fleet/wait.rs", "=crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet_wait_account_free_period_", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_wait_ci_interval_period_is_every_only_for_ci_result", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_ratelimit_resume_waits_for_the_earliest_reset_then_remeasures"]
+size = "S"
+growth = ["crates/scribe2/src/fleet/wait.rs:30"]
+done = "(1) wait.rs の Completion の period は AccountFree に 5 秒（POLL の隣の私有の定数 ACCOUNT_POLL）を返し、wait の眠りは今のまま period と期限までの残りの小さい方〔fleet_wait_account_free_period_is_five_seconds: AccountFree を組み period が Duration の 5 秒と値で等しい〕 (2) CiResult は欄 every と POLL の大きい方を返し、AccountFree の外の 7 つの variant（RunnerExited・SeatGone・SlotFree・GroupGone・LandTurn・LandWindow・HostCalm）は POLL を返す〔fleet_wait_ci_interval_period_is_every_only_for_ci_result を others の列から AccountFree を外した形に書き換え・base でも緑なので retroactive の札〕 (3) 最も早い reset の期限で待ちを抜けて計測から撃ち直す振る舞いは変わらない〔既存の歯 pipe_ratelimit_resume_waits_for_the_earliest_reset_then_remeasures が本文を変えずに緑〕 歯: (1) の歯は base で RED（base の AccountFree の period は 20 ms）"
+done-teeth = ["1:fleet_wait_account_free_period_is_five_seconds", "2:fleet_wait_ci_interval_period_is_every_only_for_ci_result", "3:=pipe_ratelimit_resume_waits_for_the_earliest_reset_then_remeasures"]
 <!-- contracts:end -->
