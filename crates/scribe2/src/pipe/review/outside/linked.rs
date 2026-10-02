@@ -12,7 +12,7 @@
 
 use super::super::base::ITEM_HEAD;
 use super::super::section_text;
-use super::{data_chunks, item_chunk, rs_chunks, Decl, Tree};
+use super::{data_chunks, Tree};
 use crate::pipe::closure::{mentioned_names, Mentioned};
 use crate::pipe::table::{self, ContractRow, Form};
 use std::cell::OnceCell;
@@ -123,7 +123,7 @@ impl Scope<'_> {
 }
 
 /// (g) → (h) → (i) の塊。`found` は契約の本文が既に名指した物（(i) から除く）。design が設計 pointer でない周は空。
-pub(super) fn linked_chunks(tree: &Tree<'_>, names: (&[Decl], &[&str]), found: &Mentioned, design: &str, bodies: &[&str]) -> Vec<String> {
+pub(super) fn linked_chunks(tree: &Tree<'_>, found: &Mentioned, design: &str, bodies: &[&str]) -> Vec<String> {
     let Ok(pointer) = table::parse_pointer(design) else {
         return Vec::new();
     };
@@ -157,7 +157,7 @@ pub(super) fn linked_chunks(tree: &Tree<'_>, names: (&[Decl], &[&str]), found: &
     let texts: Vec<String> = groups.iter().map(group_text).collect();
     chunks.extend(groups.iter().zip(&texts).map(|(group, text)| format!("{ITEM_HEAD}{} §{}\n{text}", group.path, group.section)));
     if !texts.is_empty() {
-        chunks.extend(named_chunks(tree, names, found, &pointer.path, &texts));
+        chunks.extend(named_chunks(tree, found, &pointer.path, &texts));
     }
     chunks
 }
@@ -172,17 +172,14 @@ fn group_text(group: &Group) -> String {
     body.chain(done).collect::<Vec<String>>().join("\n")
 }
 
-/// (i) 束ねた § の本文を名の照合に 1 回渡し、契約の本文が既に名指した名・file・dir を除いた残りを §51 形 3 の
-/// (a) → (b) → (c) の形で並べる（`doc` は契約の設計 doc＝(c) から除く）。
-fn named_chunks(tree: &Tree<'_>, names: (&[Decl], &[&str]), found: &Mentioned, doc: &str, texts: &[String]) -> Vec<String> {
+/// (i) 束ねた § の本文を名の照合に 1 回渡し、契約の本文が既に名指した file・dir を除いた残りの data file の鍵の塊だけを
+/// 並べる（`doc` は契約の設計 doc＝(c) から除く）。
+fn named_chunks(tree: &Tree<'_>, found: &Mentioned, doc: &str, texts: &[String]) -> Vec<String> {
     let bodies: Vec<&str> = texts.iter().map(String::as_str).collect();
-    let more = mentioned_names(&bodies, names.1, &tree.tracked);
+    let more = mentioned_names(&bodies, &[], &tree.tracked);
     let rest = |all: Vec<String>, known: &[String]| all.into_iter().filter(|item| !known.contains(item)).collect();
-    let rest = Mentioned { names: rest(more.names, &found.names), files: rest(more.files, &found.files), dirs: rest(more.dirs, &found.dirs) };
-    let mut chunks: Vec<String> = rest.names.iter().filter_map(|name| item_chunk(tree, names.0, name)).collect();
-    chunks.extend(rs_chunks(tree, &rest));
-    chunks.extend(data_chunks(tree, &rest, Some(doc), &bodies.join("\n")));
-    chunks
+    let rest = Mentioned { names: Vec::new(), files: rest(more.files, &found.files), dirs: rest(more.dirs, &found.dirs) };
+    data_chunks(tree, &rest, Some(doc), &bodies.join("\n"))
 }
 
 /// 参照 1 つを § に解く。doc の字なしの行 id が自分の doc の表に無ければ同じ dir の別の置き場を引く。`.toml` の置き場は

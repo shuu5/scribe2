@@ -234,27 +234,33 @@ fn pipe_review_base_place_only_item_is_read_in_base_txt() {
 
 // ───── write-set の外の材料（`s2-07l.430`・設計 contract-source.md §51・行 bc・接頭辞 `pipe_review_outside_`） ─────
 
-/// 受付から審査まで通した run の材料の dir に外の材料の file が在り、§ が backtick の外で名指した write-set の外の struct の
-/// 所在と可視性つきの宣言の行と field を持つ。名指しの無い既存の契約の材料の dir は 4 本のまま（歯
-/// `pipe_review_base_summary_file_names_every_write_set_item`）。
+/// 受付から審査まで通した run の外の材料 `outside.txt` は、§ が backtick の外で名指した write-set の外の struct の塊（頭
+/// `- ZqOuterShape:`）も、同じ § が名指したその struct の `.rs` の file の要約の塊（頭 `- crates/other/src/zq_shape.rs:`）も持たない
+/// （親 module の塊は残るので file の有無は測らない）。同じ § に data file の名指しを足した契約の `outside.txt` は data file の
+/// 鍵の塊を持つ。
 #[test]
-fn pipe_review_outside_material_carries_the_named_outside_struct() {
-    let row = derive_row("o", &[("write-set", "[\"crates/toy/src/tint.rs\"]"), ("section", "\"2\""), ("req", "[\"FR2\"]")]);
-    let doc = table_doc(&table_region(&[row])).replace("## 2. 型\n\n本文。", "## 2. 型\n\n節は ZqOuterShape の field を読む。");
+fn pipe_review_outside_trimmed_carries_no_outside_rs_chunk_but_keeps_the_data_file_keys() {
     let shape = "/// 外の形。\npub(crate) struct ZqOuterShape {\n    pub zq_width: u8,\n}\n";
-    let (repo, state) = derive_repo_with(&doc, &[("crates/other/src/zq_shape.rs", shape)]);
-    let out = intake_raw(&repo, &state, "docs/design/toy.md#o", "s2-o");
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
-    let dir = review_dir(&state, &run_id_of(&out));
-    assert_eq!(
-        dir_names(&dir),
-        ["base.txt", "contract.toml", "design.txt", "outside.txt", "requirements.txt"],
-        "外の材料の file が 1 本増える"
+    let outside_of = |section: &str, files: &[(&str, &str)]| {
+        let row = derive_row("o", &[("write-set", "[\"crates/toy/src/tint.rs\"]"), ("section", "\"2\""), ("req", "[\"FR2\"]")]);
+        let doc = table_doc(&table_region(&[row])).replace("## 2. 型\n\n本文。", &format!("## 2. 型\n\n{section}"));
+        let (repo, state) = derive_repo_with(&doc, files);
+        let out = intake_raw(&repo, &state, "docs/design/toy.md#o", "s2-o");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+        let outside = fs::read_to_string(review_dir(&state, &run_id_of(&out)).join("outside.txt")).unwrap_or_default();
+        clean(&[&repo, &state]);
+        outside
+    };
+    let plain = outside_of("節は ZqOuterShape の field を zq_shape.rs で読む。", &[("crates/other/src/zq_shape.rs", shape)]);
+    assert!(!plain.contains("- ZqOuterShape:"), "struct の塊は無い: {plain}");
+    assert!(!plain.contains("- crates/other/src/zq_shape.rs:"), "file の要約の塊は無い: {plain}");
+    let keyed = outside_of(
+        "節は ZqOuterShape の field を zq_shape.rs で読み、zq_keys.json の zq_key を読む。",
+        &[("crates/other/src/zq_shape.rs", shape), ("crates/other/zq_keys.json", "{\n  \"zq_key\": 1\n}\n")],
     );
-    let outside = fs::read_to_string(dir.join("outside.txt")).unwrap_or_default();
-    assert!(outside.contains("- ZqOuterShape: crates/other/src/zq_shape.rs:2\n  /// 外の形。\n"), "所在と doc 行: {outside}");
-    assert!(outside.contains("\n  pub(crate) struct ZqOuterShape {\n      pub zq_width: u8,\n  }"), "宣言の行と field: {outside}");
-    clean(&[&repo, &state]);
+    assert!(keyed.contains("- crates/other/zq_keys.json: 行数 3 / byte "), "data file の鍵の塊は在る: {keyed}");
+    assert!(keyed.contains("\n  行 2: \"zq_key\": 1"), "{keyed}");
+    assert!(!keyed.contains("- ZqOuterShape:") && !keyed.contains("- crates/other/zq_shape.rs:"), "{keyed}");
 }
 
 // ───── 審査の理由の閉じた型（`s2-07l.395`・設計 contract-source.md §22・SRS FR49・接頭辞 `pipe_review_kind_`） ─────

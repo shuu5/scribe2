@@ -452,7 +452,7 @@ mod tests {
 
     /// §55 形 7 / 8: 幅 120 を越える 250 字の行を持つ `.rs` の見出しは全体の畳んだ数の直後に幅と生の行の括弧を持ち、
     /// 越えない `.rs` の見出しは不変（母集団 = 2 項目の見出しを同じ assert で数える）。base の説明の 1 行は畳む式と括弧の
-    /// 意味を、外の材料の説明の 1 行は生の行を名乗る。
+    /// 意味を、外の材料の説明の 1 行は生の行だけを名乗る（畳んだ数の句は持たない）。
     #[test]
     fn review_base_lines_folded_count_names_the_raw_lines_only_when_they_differ() {
         let repo = scratch("lines");
@@ -469,7 +469,7 @@ mod tests {
         let base = preamble(base_block(&text, u64::MAX)).unwrap_or_default();
         assert!(base.contains("字数 ÷ 幅の切り上げ（最小 1・受付の上限の余地と同じ）") && base.contains("生の行と違う file は括弧に生の行"), "{base}");
         let outside = preamble(super::super::outside::outside_block("- x.json: 行数 1 / byte 2", u64::MAX)).unwrap_or_default();
-        assert!(outside.contains("生の行（wc -l と同じ）") && outside.contains("幅で畳んだ数"), "{outside}");
+        assert!(outside.contains("生の行（wc -l と同じ）") && !outside.contains("幅で畳んだ数"), "{outside}");
         let _ = std::fs::remove_dir_all(&repo);
     }
 }
