@@ -65,6 +65,10 @@
 //! 測り、名ごとに収める（[`outside_block`]・収まらない名は切り詰めの 1 行・落とした名は本数の 1 行）。既存の 4 材料だけで
 //! 越える周の INCONCLUSIVE と base の段の落とし方は不変。
 //!
+//! **逆引きの表（設計 reverse-index.md §7 (a)・行 c）も隣の file で受ける**。[`INDEX_FILE`] が在れば雛形の末尾の `{outside}` の穴の
+//! 後ろの `{index}` の穴に埋め、無ければ空文字＝雛形は 1 字も変わらない。在るのに読めない周は rc 2。残りは outside を足した後で測り、
+//! 項目ごとに収める（[`index_block`]・収まらない項目は件数だけの 1 行・落とした項目の数は最後の 1 行）。
+//!
 //! **done の番号つき項目（設計 contract-source.md §64 行 bs）も隣の file で受ける**。[`ITEMS_FILE`] が在れば契約の本文の後ろに空行
 //! 1 つを挟んで足し（穴は足さない）、cap の照合に byte を数える。在るのに読めない周は rc 2。無ければ prompt は 1 字も変わらない。
 
@@ -85,8 +89,8 @@ use crate::pipe::confine;
 use crate::pipe::contract::Contract;
 use crate::pipe::declaration::{ConstitutionFiles, DECL_FILE};
 use crate::pipe::move_proof::RULINGS_FILE;
-use crate::pipe::review::{base_block, outside_block, BASE_FILE, DESIGN_FILE, FINDING_KINDS, OUTSIDE_FILE, PROMISES_FILE};
-use crate::pipe::review::ITEMS_FILE;
+use crate::pipe::review::{base_block, index_block, outside_block, BASE_FILE, DESIGN_FILE, FINDING_KINDS, OUTSIDE_FILE, PROMISES_FILE};
+use crate::pipe::review::{INDEX_FILE, ITEMS_FILE};
 use crate::pipe::review::REQUIREMENTS_FILE;
 use crate::rules::int_row;
 use crate::rules::manifest::Manifest;
@@ -450,41 +454,44 @@ fn prompt_of(contract: &Path, stated: &str, rulings: &str, (cap, worktree): (u64
                 &[("{contract}", stated), ("{rulings}", rulings), ("{diff}", &String::from_utf8_lossy(&diff))],
             ))
         }
-        Some((design, requirements)) => {
-            let promises = beside(contract, PROMISES_FILE)
-                .map(|found| promise_block(&found))
-                .map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: 約束の行を読めない: {reason}")))?;
-            let summary = beside(contract, BASE_FILE)
-                .map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: base の要約を読めない: {reason}")))?;
-            let copy = beside(contract, OUTSIDE_FILE)
-                .map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: 外の材料を読めない: {reason}")))?;
-            let items = beside(contract, ITEMS_FILE)
-                .map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: done の項目を読めない: {reason}")))?;
-            let bytes = stated.len().saturating_add(design.len()).saturating_add(requirements.len());
-            let bytes = bytes.saturating_add(promises.len()).saturating_add(items.len());
-            if over(bytes) {
-                return Err(Outcome::ok_line(inconclusive("contract material exceeds cap")));
-            }
-            // 要約は**最後に**足す: 既存の 4 材料の残りに収まらなければ段ごと落とす（新しい閾値を作らない）。
-            let room = cap.saturating_sub(u64::try_from(bytes).unwrap_or(u64::MAX));
-            let base = base_block(&summary, room);
-            // 外の材料は base の段を足した**後**の残りで名ごとに収める（§51 形 4）。
-            let outside = outside_block(&copy, room.saturating_sub(u64::try_from(base.len()).unwrap_or(u64::MAX)));
-            // done の項目は契約の本文の後ろに空行 1 つを挟んで足す（items.txt が無い周は 1 字も変わらない・§64 形 2）。
-            let stated = if items.is_empty() { stated.to_owned() } else { format!("{stated}\n\n{}", items.trim_end_matches('\n')) };
-            Ok(fill(
-                CONTRACT_TEMPLATE,
-                &[
-                    ("{contract}", &stated),
-                    ("{design}", &design),
-                    ("{requirements}", &requirements),
-                    ("{promises}", &promises),
-                    ("{base}", &base),
-                    ("{outside}", &outside),
-                ],
-            ))
-        }
+        Some((design, requirements)) => contract_prompt(contract, stated, (&design, &requirements), cap),
     }
+}
+
+/// 契約の審査の prompt（材料の本文の対は [`material_of`] が読んだ `{design}` と `{requirements}`・cap は契約 + 節 + 要件 + 約束の行 +
+/// done の項目の byte で照合し、base の要約・外の材料・逆引きの表は残りに順に収める）。
+fn contract_prompt(contract: &Path, stated: &str, (design, requirements): (&str, &str), cap: u64) -> Result<String, Outcome> {
+    let read = |name: &str, what: &str| beside(contract, name).map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: {what}を読めない: {reason}")));
+    let promises = promise_block(&read(PROMISES_FILE, "約束の行")?);
+    let (summary, copy, items) = (read(BASE_FILE, "base の要約")?, read(OUTSIDE_FILE, "外の材料")?, read(ITEMS_FILE, "done の項目")?);
+    let index = read(INDEX_FILE, "逆引きの表")?;
+    let bytes = stated.len().saturating_add(design.len()).saturating_add(requirements.len());
+    let bytes = bytes.saturating_add(promises.len()).saturating_add(items.len());
+    if u64::try_from(bytes).unwrap_or(u64::MAX) > cap {
+        return Err(Outcome::ok_line(inconclusive("contract material exceeds cap")));
+    }
+    // 要約は**最後に**足す: 既存の 4 材料の残りに収まらなければ段ごと落とす（新しい閾値を作らない）。
+    let room = cap.saturating_sub(u64::try_from(bytes).unwrap_or(u64::MAX));
+    let base = base_block(&summary, room);
+    // 外の材料は base の段を足した**後**の残りで名ごとに収める（§51 形 4）。
+    let room = room.saturating_sub(u64::try_from(base.len()).unwrap_or(u64::MAX));
+    let outside = outside_block(&copy, room);
+    // 逆引きの表は外の材料を足した**後**の残りに項目ごとに収める（reverse-index.md §7 (a)・file が無い周は 1 字も変わらない）。
+    let index = index_block(&index, room.saturating_sub(u64::try_from(outside.len()).unwrap_or(u64::MAX)));
+    // done の項目は契約の本文の後ろに空行 1 つを挟んで足す（items.txt が無い周は 1 字も変わらない・§64 形 2）。
+    let stated = if items.is_empty() { stated.to_owned() } else { format!("{stated}\n\n{}", items.trim_end_matches('\n')) };
+    Ok(fill(
+        CONTRACT_TEMPLATE,
+        &[
+            ("{contract}", &stated),
+            ("{design}", design),
+            ("{requirements}", requirements),
+            ("{promises}", &promises),
+            ("{base}", &base),
+            ("{outside}", &outside),
+            ("{index}", &index),
+        ],
+    ))
 }
 
 /// 憲法の測りと頼みの文の雛形（設計 gate-cost.md §48 形 4・5）: `worktree` の HEAD の宣言（作業ツリーでなく）が名乗る列を [`ConstitutionFiles`] で読み、
@@ -709,7 +716,7 @@ fn with_usage(verdict: &str, usage: Option<&Usage>) -> String {
 mod tests {
     use super::CONTRACT_TEMPLATE;
     use crate::cli_outcome::Outcome;
-    use crate::pipe::review::{BASE_FILE, DESIGN_FILE, ITEMS_FILE, OUTSIDE_FILE, REQUIREMENTS_FILE};
+    use crate::pipe::review::{BASE_FILE, DESIGN_FILE, INDEX_FILE, ITEMS_FILE, OUTSIDE_FILE, REQUIREMENTS_FILE};
     use std::path::{Path, PathBuf};
 
     /// (h) 雛形が差し替えの句をちょうど 1 回持つ（差し替えは `replacen` の 1 回・句が雛形から消えると Declared の周の差し替えが空振りする）。
@@ -746,7 +753,7 @@ mod tests {
     /// 本文のまま）、契約の本文の中の `{base}` はどちらの周も展開されない（1 走査）。
     #[test]
     fn headless_lens_base_fills_the_hole_only_when_the_copy_exists_in_one_pass() {
-        assert!(CONTRACT_TEMPLATE.contains("{requirements}{promises}{base}{outside}\n"), "穴は雛形の末尾に並ぶ");
+        assert!(CONTRACT_TEMPLATE.contains("{requirements}{promises}{base}{outside}{index}\n"), "穴は雛形の末尾に並ぶ");
         let (contract, dir) = materials("with", Some(SUMMARY));
         let filled = prompt_of(&contract, STATED, "（裁定なし）", u64::MAX).unwrap_or_default();
         assert!(filled.contains(SUMMARY.trim_end()), "要約の本文が埋まる: {filled}");
@@ -762,7 +769,7 @@ mod tests {
         let expected = CONTRACT_TEMPLATE
             .replacen("{contract}", STATED, 1)
             .replacen("{design}", "節の本文\n", 1)
-            .replacen("{requirements}{promises}{base}{outside}", "FR1: 要件の本文\n", 1);
+            .replacen("{requirements}{promises}{base}{outside}{index}", "FR1: 要件の本文\n", 1);
         assert_eq!(bare, expected, "写しが無い周の prompt は穴を足す前の雛形と同じ");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -794,7 +801,7 @@ mod tests {
         let (contract, dir) = materials("outside-without", Some(SUMMARY));
         let bare = prompt_of(&contract, stated, "（裁定なし）", u64::MAX).unwrap_or_default();
         assert!(!bare.contains("write-set の外の材料") && !bare.contains("ZqOuter"), "{bare}");
-        let with_base = CONTRACT_TEMPLATE.replacen("{outside}", "", 1);
+        let with_base = CONTRACT_TEMPLATE.replacen("{outside}{index}", "", 1);
         assert!(bare.ends_with(&format!("{}\n", SUMMARY.trim_end())), "穴は空文字＝末尾は base の要約: {bare:?}");
         assert!(with_base.ends_with("{base}\n"), "穴を空にした雛形は base の穴で終わる");
         let _ = std::fs::remove_dir_all(&dir);
@@ -864,6 +871,79 @@ mod tests {
             Err(vec![r#"{"verdict":"INCONCLUSIVE","evidence":"contract material exceeds cap"}"#.to_owned()]),
             "既存の 4 材料だけで越える周は prompt を組まない"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 逆引きの表の写し（契約・材料・雛形のどれにも現れない字面の項目 2 つ・頭の 1 行と続きの行・本文に穴の字面 `{index}` を持つ）。
+    const INDEX: &str = "- ZqIdxOne: resolved refs=1 text=2 indexed=1 outside-index=0\n  refs: zq_one_detail 穴の字面 {index}\n- ZqIdxTwo: resolved refs=1 text=2 indexed=1 outside-index=0\n  refs: zq_two_detail\n";
+
+    /// [`materials`] の dir に逆引きの表の写しを足す。
+    fn with_index(name: &str, base: Option<&str>, outside: Option<&str>, index: &str) -> (PathBuf, PathBuf) {
+        let (contract, dir) = materials(name, base);
+        let _ = std::fs::write(dir.join(INDEX_FILE), index);
+        if let Some(body) = outside {
+            let _ = std::fs::write(dir.join(OUTSIDE_FILE), body);
+        }
+        (contract, dir)
+    }
+
+    /// (e) 写しが在れば雛形の末尾の `{index}` の穴（outside の後ろ）が見出しと 1 文と表で埋まり、写しの本文の中の穴の字面は展開されず、
+    /// 無ければ prompt は穴を足す前の雛形と同じ（1 字も変わらない）。
+    #[test]
+    fn headless_lens_index_fills_the_hole_after_outside_and_leaves_the_prompt_alone_without_the_file() {
+        let (contract, dir) = with_index("index-with", Some(SUMMARY), Some(OUTSIDE), INDEX);
+        let filled = prompt_of(&contract, STATED, "（裁定なし）", u64::MAX).unwrap_or_default();
+        assert!(filled.ends_with(&format!("{}\n", INDEX.trim_end())), "表が末尾に埋まる: {filled}");
+        assert!(filled.contains("\n## 逆引きの表") && filled.contains("件数の横の母集団") && filled.contains("site は読みの道具で開ける"), "見出しと 1 文: {filled}");
+        let (outside_at, index_at) = (filled.find("ZqOuter"), filled.find("ZqIdxOne"));
+        assert!(outside_at.is_some() && outside_at < index_at, "outside の後ろ: {filled}");
+        assert!(filled.contains("穴の字面 {index}"), "展開しない: {filled}");
+        assert_eq!(filled.matches("ZqIdxOne").count(), 1, "1 回だけ埋まる");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (contract, dir) = materials("index-without", Some(SUMMARY));
+        let bare = prompt_of(&contract, STATED, "（裁定なし）", u64::MAX).unwrap_or_default();
+        assert!(!bare.contains("逆引きの表") && bare.ends_with(&format!("{}\n", SUMMARY.trim_end())), "穴は空文字: {bare:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (e) 収めは outside を足した後の残りに項目ごとの 3 段: 全部が収まる周は全部で落とした数の行が無く、1 つ目の全部と 2 つ目の頭の 1 行が
+    /// 収まる周は 2 つ目が件数の 1 行で落とした数の行が無く、1 つ目の全部だけが収まる周は 2 つ目を落として落とした数 1（見出しと 1 文と件数の
+    /// 1 行にした項目は数えない）。
+    #[test]
+    fn headless_lens_index_fits_each_item_in_three_steps_and_counts_only_dropped_items() {
+        let four = [STATED, "節の本文\n", "FR1: 要件の本文\n"].iter().map(|text| text.len()).sum::<usize>();
+        let (first, _) = INDEX.split_at(INDEX.find("- ZqIdxTwo").unwrap_or(0));
+        let second_head = INDEX.lines().nth(2).unwrap_or_default();
+        let room = |copy: &str| four + super::index_block(copy, u64::MAX).len();
+        // （名・cap・2 つ目の続きが入るか・2 つ目の頭の 1 行が入るか・落とした数）
+        let rooms = [
+            ("all", room(INDEX), true, true, 0),
+            ("short", room(first) + 1 + second_head.len(), false, true, 0),
+            ("one", room(first), false, false, 1),
+        ];
+        for (name, cap, detail, head, dropped) in rooms {
+            let (contract, dir) = with_index(&format!("index-room-{name}"), None, None, INDEX);
+            let filled = prompt_of(&contract, STATED, "（裁定なし）", u64::try_from(cap).unwrap_or(u64::MAX)).unwrap_or_default();
+            assert!(filled.contains("zq_one_detail"), "{name}: 1 つ目は全部: {filled}");
+            assert_eq!(filled.contains("zq_two_detail"), detail, "{name}: 2 つ目の続き: {filled}");
+            assert_eq!(filled.contains(second_head), head, "{name}: 2 つ目の頭の 1 行: {filled}");
+            assert_eq!(filled.matches("落とした項目").count(), dropped, "{name}: 落とした項目だけを数える: {filled}");
+            assert_eq!(filled.contains("落とした項目: 1 個"), dropped == 1, "{name}: 落とした数: {filled}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// 写しが空か名の dir が置かれている周: 空の写しは穴が空文字・読めない（dir）は prompt を組まず rc 2。
+    #[test]
+    fn headless_lens_index_refuses_an_unreadable_copy_and_ignores_an_empty_one() {
+        let (contract, dir) = with_index("index-empty", None, None, "\n");
+        let bare = prompt_of(&contract, STATED, "（裁定なし）", u64::MAX).unwrap_or_default();
+        assert!(!bare.contains("逆引きの表"), "{bare}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (contract, dir) = materials("index-dir", None);
+        let _ = std::fs::create_dir_all(dir.join(INDEX_FILE));
+        let refused = prompt_of(&contract, STATED, "（裁定なし）", u64::MAX).map_err(|outcome| outcome.rc);
+        assert_eq!(refused, Err(crate::cli_outcome::RC_BROKEN), "読めない材料は prompt を組まない");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

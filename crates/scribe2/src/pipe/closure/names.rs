@@ -12,6 +12,7 @@
 //! 審査の材料の名指し（設計 §51 形 2・行 bc）は同じ読み手の 2 本目の口 [`mentioned_names`] で、backtick の中身の先頭の
 //! token と、backtick の外の識別子の形の語と、`/` か拡張子を持つ path 形の連なりを拾う（[`unresolved_names`] の判定は不変）。
 //! 本文の塊を渡す名指しの 3 形（§56・行 bi）は 3 本目の口 [`named_items`] で、impl は [`impl_line`] で読む。
+//! 逆引きの表の項目（reverse-index.md §6 形 4・行 c）は 4 本目の口 [`section_symbols`] で、同じ [`form_of`] の型の path 形と fn 形だけを返す。
 
 use super::{declares_type, heads, in_module, is_ident, is_ident_char, texts_of, touched, ClosureError, Source};
 use super::{IMPL_HEAD, KEYWORDS, PATH_CHARS, RS};
@@ -98,6 +99,26 @@ pub fn mentioned_names(texts: &[&str], candidates: &[&str], tracked: &[String]) 
         files.extend(hit.into_iter().cloned());
     }
     Mentioned { names: names.into_iter().collect(), files: files.into_iter().collect(), dirs: dirs.into_iter().collect() }
+}
+
+/// 逆引きの表の項目の口（reverse-index.md §6 形 4・行 c）: `texts` の backtick の中身を [`unresolved_names`] と同じ私有の
+/// [`form_of`]（`touches` の各項目の末尾の節を `touched` に渡す）で読み、型の path 形は中身の先頭の token（`::` の節の列のまま・
+/// `crate::` の頭を問わない）、fn 形は識別子を、本文の順と現れた順に重複を除いて返す。path 形・予約語の呼び出し・`pub(crate)` の
+/// ような可視性・大文字始まりの tuple variant の構築・`touches` の型の variant・末尾 `::` の module path は返さない。
+pub fn section_symbols(texts: &[&str], touches: &[String]) -> Vec<String> {
+    let touched: Vec<&str> = touches.iter().filter_map(|raw| raw.rsplit("::").next()).collect();
+    let mut found: Vec<String> = Vec::new();
+    for name in texts.iter().flat_map(|text| backticked(text)) {
+        let symbol = match form_of(name, &touched) {
+            Form::Type { .. } => head_of(name).0.to_owned(),
+            Form::Fn(ident) => ident,
+            Form::Path | Form::Prose => continue,
+        };
+        if !found.contains(&symbol) {
+            found.push(symbol);
+        }
+    }
+    found
 }
 
 /// 本文の塊を求める名指し 1 つ（§56 行 bi・[`named_items`] が返す）。
@@ -545,5 +566,20 @@ mod tests {
         assert_eq!(found.dirs, owned(&["crates/a/fixtures"]), "{found:?}");
         let bare = super::mentioned_names(&["pipe と fixtures と review"], &[], &tracked);
         assert_eq!((bare.files.len(), bare.dirs.len()), (0, 0), "素の 1 語は path にも dir にも解けない: {bare:?}");
+    }
+
+    /// 逆引きの表の項目（§6 形 4）: 型の path 形（`crate::` の頭の有無を問わない）と fn 形（識別子・引数付きの呼び出しの頭）を本文の
+    /// 順に重複なしで返し、引数付きの予約語の呼び出し・`pub(crate)`・大文字始まりの tuple variant の構築・touches の型の variant・
+    /// path 形・末尾 `::` の module path・glob は返さない。touches は `crate::<module>::<Type>` の形で渡す（末尾の節が型）。
+    #[test]
+    fn closure_names_section_symbols_reads_type_path_and_fn_forms_in_order_without_prose() {
+        let touches = owned(&["crate::tint::Tint"]);
+        let body = "`crate::pipe::Row` と `Shape::Dot { x: 1 }` と `parse_pointer(text)` と `Tint::Warm` と `Some(x)` と `pub(crate)` と `if (a)` と `match(x)` と \
+                    `pipe/closure.rs` と `crate::pipe::` と `crate::tint::*` と `crate::pipe::Row` と `Shape::Dot` と `fold()`";
+        let found = super::section_symbols(&[body], &touches);
+        assert_eq!(found, owned(&["crate::pipe::Row", "Shape::Dot", "parse_pointer", "fold"]), "{found:?}");
+        let two = super::section_symbols(&["`first()`", "`Left::Right` と `first`"], &[]);
+        assert_eq!(two, owned(&["first", "Left::Right"]), "本文をまたいでも順と重複なし: {two:?}");
+        assert!(super::section_symbols(&["散文だけ"], &touches).is_empty(), "backtick の無い本文は空");
     }
 }
