@@ -19,7 +19,7 @@ use std::process::Stdio;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling bind --repo R --state-dir S --question ID --utterance TS [--bd B]|ruling answer --repo R --state-dir S --question ID [--bd B] (stdin: WORDS)|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F] [--bd B]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat default --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|deliver --state-dir S --target S:W --ruling ID|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling bind --repo R --state-dir S --question ID --utterance TS [--bd B]|ruling answer --repo R --state-dir S --question ID [--bd B] (stdin: WORDS)|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F] [--bd B]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F] [--bd B]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F] [--bd B]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat default --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|deliver --state-dir S --target S:W --ruling ID|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
@@ -128,6 +128,7 @@ const ALLOWED_TICK_UNIT: &[cli_args::Allowed] = &[
     value("--unit-dir"),
     value("--binary"),
     value("--rules"),
+    value("--bd"),
 ];
 /// `seat tick status`（最後の周の打刻と健全・設計 seat-heartbeat.md §12 行 p 形 2・`--target` は任意・pane を読まないので tmux の flag は受けない）。
 const ALLOWED_TICK_STATUS: &[cli_args::Allowed] = &[value("--state-dir"), value("--target"), value("--rules")];
@@ -382,16 +383,17 @@ fn deliver_of(args: &[String]) -> Outcome {
 }
 
 /// `seat tick install|uninstall`（設計 seat-heartbeat.md §3）: `--state-dir` / `S:W` の `--target` / `--unit-dir` / `--binary` は必須で、
-/// 値欠けと空文字は使い方の誤り（`--rules` も同じ）。撤去も同じ引数で導出し直して比べる＝どちらの口も同じ引数の形。
+/// 値欠けと空文字は使い方の誤り（`--rules` と `--bd` も同じ）。撤去も同じ引数で導出し直して比べる＝どちらの口も同じ引数の形。
 fn tick_unit_of(verb: Verb, args: &[String]) -> Outcome {
     let [state_dir, target, unit_dir, binary] = ["--state-dir", "--target", "--unit-dir", "--binary"].map(|name| required_nonempty(args, name));
-    let (Ok(state_dir), Ok(target), Ok(unit_dir), Ok(binary), Ok(rules)) = (state_dir, target, unit_dir, binary, nonempty(args, "--rules")) else {
+    let [rules, bd] = ["--rules", "--bd"].map(|name| nonempty(args, name));
+    let (Ok(state_dir), Ok(target), Ok(unit_dir), Ok(binary), Ok(rules), Ok(bd)) = (state_dir, target, unit_dir, binary, rules, bd) else {
         return refused_usage();
     };
     if !target_well_formed(target) {
         return refused_usage();
     }
-    let flags = super::tick::install::Flags { state_dir, target, unit_dir, binary, rules };
+    let flags = super::tick::install::Flags { state_dir, target, unit_dir, binary, rules, bd };
     super::tick::install::run(verb, &flags, crate::rules::cli::open(args))
 }
 

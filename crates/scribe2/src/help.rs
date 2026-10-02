@@ -93,6 +93,7 @@ pub const TABLE: &[Entry] = &[
             ("--repo R", "Repo root for the init line and the ledger lines (else the cwd)."),
             ("--bin B", "Program resolved for the host guard line (else the vessel name)."),
             ("--unit-dir U", "With --binary PATH: adds the tick unit word to each seat row."),
+            ("--bd B", "With --unit-dir and --binary: the ledger client the tick unit carries."),
         ],
         examples: &["{NAME} doctor", "{NAME} doctor --state-dir STATE --repo ."],
         see: &["docs/design/host-init.md", "docs/design/consumer-sync.md"],
@@ -345,7 +346,7 @@ pub const TABLE: &[Entry] = &[
             "installs its timer, and retires seats. 'seat <label>' starts a session under that",
             "account in the current terminal.",
         ],
-        form: "seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling bind --repo R --state-dir S --question ID --utterance TS [--bd B]|ruling answer --repo R --state-dir S --question ID [--bd B] (stdin: WORDS)|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F] [--bd B]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat default --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|deliver --state-dir S --target S:W --ruling ID|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]",
+        form: "seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling bind --repo R --state-dir S --question ID --utterance TS [--bd B]|ruling answer --repo R --state-dir S --question ID [--bd B] (stdin: WORDS)|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F] [--bd B]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F] [--bd B]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F] [--bd B]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat default --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|deliver --state-dir S --target S:W --ruling ID|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]",
         subcommands: &[
             ("register", "Record a seat row: target, role, account and launch file."),
             ("launch", "Open a tmux window and start a seat with its role."),
