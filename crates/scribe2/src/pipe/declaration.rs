@@ -26,8 +26,8 @@ pub use crate_roots::{crate_of, fixed_roots, with_fixed, CrateFile, RootsAtHead}
 pub use entrance_flip::{measure_named, EntranceFlip};
 use entrance_flip::{entrance_of, KEY as ENTRANCE_KEY};
 pub use optional_keys::{close_check, close_check_at_sha, requirements_at_sha, floor_check_at, question_route, table_facts, table_facts_named, terminal_facts, CloseCheck, QuestionRoute, TableFacts, TerminalFacts};
-pub use optional_keys::{index_at, row_review_at, ruling_keys_at, IndexLines, RulingKeys, TablePlaces, CI_SHA_HOLE, DEFAULT_CI_CMD, DEFAULT_REQUIREMENTS};
-use optional_keys::{ci_cmd_of, close_check_of, contract_tables_of, floor_check_of, index_keys_of, question_route_of, read_only_keys_of, remote_of, requirements_of, row_review_of, ruling_check_of, ruling_fixtures_of, IndexKeys, DECLARED_KEYS, OPTIONAL_KEYS, RULING_FIXTURES_KEY};
+pub use optional_keys::{index_at, row_review_at, ruling_keys_at, ConstitutionFiles, IndexLines, RulingKeys, TablePlaces, CI_SHA_HOLE, DEFAULT_CI_CMD, DEFAULT_CONSTITUTION, DEFAULT_REQUIREMENTS};
+use optional_keys::{ci_cmd_of, close_check_of, constitution_of, contract_tables_of, floor_check_of, index_keys_of, question_route_of, read_only_keys_of, remote_of, requirements_of, row_review_of, ruling_check_of, ruling_fixtures_of, IndexKeys, DECLARED_KEYS, OPTIONAL_KEYS, RULING_FIXTURES_KEY};
 pub use write_set::{headroom_shortfalls, headroom_shortfalls_under, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
 pub(crate) use write_set::is_under;
 
@@ -319,6 +319,8 @@ pub struct Declared {
     row_review: Option<bool>,
     /// 契約表の置き場の項目と key の行番号（任意 key `contract-tables`・無ければ `None`・設計 contract-source.md §69）。
     contract_tables: Option<(Vec<String>, u64)>,
+    /// 憲法の file の列と key の行番号（任意 key `constitution`・無ければ `None`＝既定の 1 本・設計 gate-cost.md §48）。
+    constitution: Option<(Vec<String>, u64)>,
     /// 索引の宣言の 2 key（任意・片方だけでも読む・設計 reverse-index.md §4 形 1）。
     index: IndexKeys,
 }
@@ -563,6 +565,7 @@ impl Declared {
         read_only_keys_of(&found, &mut errors);
         let index = index_keys_of(&found, &mut errors);
         let contract_tables = contract_tables_of(&found, &mut errors);
+        let constitution = constitution_of(&found, &mut errors);
         if schema != Some(SCHEMA_VERSION) {
             errors.push(DeclError::new(
                 0,
@@ -590,6 +593,7 @@ impl Declared {
                 ruling_fixtures,
                 row_review,
                 contract_tables,
+                constitution,
                 index,
             })
         } else {
@@ -1254,8 +1258,8 @@ mod tests {
     }
 
     /// 先頭語 `cargo` の行を持たない宣言（`sh` / `git` だけの toy repo）は分類だけで断らない（§7「Rust 固有の検査を
-    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列は 10 本に §54 と vessel-hook.md §20 と ledger-form.md §16 と dispatcher.md §34 と contract-source.md §62 の任意 key 各 1 本と dispatcher.md §36 の任意 key 2 本と contract-source.md §67 の任意 key 3 本と row-review.md §4 の任意 key 1 本と contract-source.md §69 の任意 key 1 本を足した 22 本）。
-    // flip-check: retroactive s2-07l.738.37.3
+    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列は 10 本に §54 と vessel-hook.md §20 と ledger-form.md §16 と dispatcher.md §34 と contract-source.md §62 の任意 key 各 1 本と dispatcher.md §36 の任意 key 2 本と contract-source.md §67 の任意 key 3 本と row-review.md §4 の任意 key 1 本と contract-source.md §69 の任意 key 1 本と gate-cost.md §48 の任意 key 1 本を足した 23 本）。
+    // flip-check: retroactive s2-07l.738.43.10
     #[test]
     fn declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema() {
         assert!(measured(r#"["git", "sh"]"#, r#"["git rev-parse --verify {base}", "sh verify.sh"]"#).is_ok(), "sh / git だけは通る");
@@ -1286,8 +1290,9 @@ mod tests {
                 "index-roles",
                 "row-review",
                 "contract-tables",
+                "constitution",
             ],
-            "宣言 file の key の列は動かない（末尾の任意 key は §54・ADR-0054 と vessel-hook.md §20・ADR-0084 と ledger-form.md §16・ADR-0097 と dispatcher.md §34 と contract-source.md §62 と dispatcher.md §36・ADR-0083 と contract-source.md §67 の 3 本と row-review.md §4 の 1 本と contract-source.md §69 の 1 本）"
+            "宣言 file の key の列は動かない（末尾の任意 key は §54・ADR-0054 と vessel-hook.md §20・ADR-0084 と ledger-form.md §16・ADR-0097 と dispatcher.md §34 と contract-source.md §62 と dispatcher.md §36・ADR-0083 と contract-source.md §67 の 3 本と row-review.md §4 の 1 本と contract-source.md §69 の 1 本と gate-cost.md §48・ADR-0110 の 1 本）"
         );
     }
 

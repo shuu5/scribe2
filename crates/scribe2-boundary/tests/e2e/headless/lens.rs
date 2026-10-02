@@ -1303,3 +1303,122 @@ fn headless_lens_constitution_is_measured_only_after_the_cap_and_only_for_a_diff
     assert!(dir.join("called").exists(), "memo の段は憲法が無くても claude を呼ぶ");
     clean(&[&dir, &tree]);
 }
+
+// ───── 憲法の置き場の宣言（設計 gate-cost.md §48・接頭辞 `lens_constitution_key_`） ─────
+
+/// 雛形が憲法の path を名指す今の句（宣言の key が列を名乗らない周に prompt に 1 回在る）。
+const OLD_PHRASE: &str = "（起動 cwd の生成 file `docs/constitution.md`）";
+
+/// 使い捨ての git の木: 必須の 3 key の宣言に `extra` を足して commit し、その後で `files`（`/` で終わる項目は dir）を置く（置き場は commit しない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn key_tree(extra: &str, files: &[&str]) -> TmpDir {
+    let tree = tmp();
+    let text = format!("schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git diff --quiet\"]\n{extra}");
+    fs::write(tree.join(".vessel.toml"), text).expect("宣言を書ける");
+    let commit = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "c"];
+    for args in [&["init", "-q", "-b", "main"][..], &["add", "-A"], &commit] {
+        let done = Command::new("git").arg("-C").arg(&*tree).args(args).output().expect("git を起動できる");
+        assert!(done.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&done.stderr));
+    }
+    for file in files {
+        let path = tree.join(file);
+        if file.ends_with('/') {
+            fs::create_dir_all(&path).expect("dir を置ける");
+        } else {
+            fs::create_dir_all(path.parent().expect("親が在る")).and_then(|()| fs::write(&path, "憲法\n")).expect("file を置ける");
+        }
+    }
+    tree
+}
+
+/// 木の `worktree` で lens を `diff` で 1 回撃ち、claude の stdin に渡った prompt（呼ばれなければ空）と stdout の 1 行を返す。
+fn key_lens(dir: &Path, contract: &Path, worktree: &Path, diff: &[u8]) -> (String, String) {
+    let claude = fake_claude(dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+    let rules = rules_with_cap(dir, 4096).display().to_string();
+    let out = run_bin_owned(dir, &lens_args(contract, worktree, &["--rules", &rules], &claude), diff);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    (slurp(&dir.join("stdin")), stdout_of(&out).trim().to_owned())
+}
+
+/// 宣言の key を足した木で lens を撃ち、claude を呼ばなかった周の 1 行の判定を返す（呼んだ周は `called` が在る）。
+fn stopped_line(extra: &str, files: &[&str]) -> (String, bool) {
+    let (dir, contract) = constitution_bare_contract();
+    let tree = key_tree(extra, files);
+    let (_, line) = key_lens(&dir, &contract, &tree, b"--- a\n+++ b\n");
+    (line, dir.join("called").exists())
+}
+
+/// (a) key が `spec/c.yaml` 1 本で file が在り `docs/constitution.md` が無い周は claude を呼び（既定に足さない）、prompt の句は「（木の file `spec/c.yaml`）」に
+/// 差し替わる。diff の本文が持つ今の句は書き換えない（差し替えてから 1 走査で埋める）。
+#[test]
+fn lens_constitution_key_replaces_the_default_and_names_the_declared_file() {
+    let (dir, contract) = constitution_bare_contract();
+    let tree = key_tree("constitution = [\"spec/c.yaml\"]\n", &["spec/c.yaml"]);
+    assert!(tree.join("spec/c.yaml").is_file() && !tree.join("docs/constitution.md").exists(), "fixture の置き場");
+    let (prompt, line) = key_lens(&dir, &contract, &tree, format!("--- a\n+++ b\n+{OLD_PHRASE}\n").as_bytes());
+    assert_eq!(line, r#"{"verdict":"PASS","evidence":"ok"}"#, "claude を呼ぶ");
+    assert_eq!(prompt.matches("（木の file `spec/c.yaml`）").count(), 1, "差し替えた句: {prompt}");
+    assert_eq!(prompt.matches(OLD_PHRASE).count(), 1, "今の句は diff の本文の分だけ");
+}
+
+/// (b) key が `spec/c.yaml` 1 本で file が無く `docs/constitution.md` が在る周は、既定を測らず `spec/c.yaml` の absent で止まり claude を呼ばない。
+#[test]
+fn lens_constitution_key_stops_on_the_declared_file_even_when_the_default_exists() {
+    let (line, called) = stopped_line("constitution = [\"spec/c.yaml\"]\n", &["docs/constitution.md"]);
+    let want = r#"{"verdict":"INCONCLUSIVE","evidence":"constitution file absent: spec/c.yaml (place the constitution or a pointer to it)"}"#;
+    assert_eq!((line.as_str(), called), (want, false));
+}
+
+/// (c) (i) 列 `spec/c.yaml`・`spec/d`・`spec/e.yaml` で `spec/d` が dir・`spec/e.yaml` が無い周は先頭から見て最初の不備 `spec/d` の unreadable で止まる。
+/// (ii) 列 `spec/d.yaml`・`spec/c.yaml`・`spec/d.yaml` で 2 file とも在る周は claude を呼び、句は書いた順で重複を除いた 1 回。
+#[test]
+fn lens_constitution_key_measures_the_list_in_order_and_names_the_first_failure() {
+    let (line, called) = stopped_line("constitution = [\"spec/c.yaml\", \"spec/d\", \"spec/e.yaml\"]\n", &["spec/c.yaml", "spec/d/"]);
+    let want = r#"{"verdict":"INCONCLUSIVE","evidence":"constitution file unreadable: spec/d"}"#;
+    assert_eq!((line.as_str(), called), (want, false));
+    let (dir, contract) = constitution_bare_contract();
+    let tree = key_tree("constitution = [\"spec/d.yaml\", \"spec/c.yaml\", \"spec/d.yaml\"]\n", &["spec/c.yaml", "spec/d.yaml"]);
+    let (prompt, _) = key_lens(&dir, &contract, &tree, b"--- a\n+++ b\n");
+    assert!(dir.join("called").exists(), "全部が在る周は claude を呼ぶ");
+    assert_eq!(prompt.matches("（木の file `spec/d.yaml`・`spec/c.yaml`）").count(), 1, "書いた順・重複は除く: {prompt}");
+}
+
+/// (d) key の値を文字列にした宣言（`docs/constitution.md` は在る）: (i) diff の審査は declaration unreadable で止まり claude を呼ばない・(iv) cap を超える周は
+/// 宣言を読まずに今どおり `diff exceeds cap`・(ii) 契約の審査と (iii) `--stage memo` は claude を呼ぶ。
+#[test]
+fn lens_constitution_key_unreadable_declaration_stops_only_the_diff_review_after_the_cap() {
+    let (line, called) = stopped_line("constitution = \"spec/c.yaml\"\n", &["docs/constitution.md"]);
+    let want = r#"{"verdict":"INCONCLUSIVE","evidence":"constitution declaration unreadable: .vessel.toml"}"#;
+    assert_eq!((line.as_str(), called), (want, false));
+    let (dir, contract) = constitution_bare_contract();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+    let tree = key_tree("constitution = \"spec/c.yaml\"\n", &["docs/constitution.md"]);
+    let out = constitution_lens(&dir, &contract, &tree, &claude, 4);
+    assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"INCONCLUSIVE","evidence":"diff exceeds cap"}"#, "(iv): {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "(iv) claude を呼ばない");
+    material_in(&dir, Some(CONTRACT_DESIGN), Some(CONTRACT_REQUIREMENTS));
+    let out = constitution_lens(&dir, &contract, &tree, &claude, 4096);
+    assert!(stdout_of(&out).contains("PASS") && dir.join("called").exists(), "(ii) 契約の審査は claude を呼ぶ: {}", stderr_of(&out));
+    fs::remove_file(dir.join("called")).expect("印を消せる");
+    let material = dir.join("material");
+    fs::write(&material, "# memo\n").expect("材料を書ける");
+    let rules = rules_with_cap(&dir, 4096).display().to_string();
+    let out = run_bin_owned(&dir, &memo_args(&material, &tree, &["--rules", &rules], &claude), b"");
+    assert!(stdout_of(&out).contains("PASS") && dir.join("called").exists(), "(iii) memo の段は claude を呼ぶ: {}", stderr_of(&out));
+}
+
+/// (e) key の無い宣言を commit し、作業ツリーの `.vessel.toml` にだけ key を書き足した周（`docs/constitution.md` と `spec/c.yaml` は在る）は、
+/// HEAD の宣言を読むので claude を呼び、prompt の句は今のまま 1 回。
+#[test]
+fn lens_constitution_key_reads_the_head_declaration_not_the_working_tree() {
+    let (dir, contract) = constitution_bare_contract();
+    let tree = key_tree("", &["docs/constitution.md", "spec/c.yaml"]);
+    let committed = fs::read_to_string(tree.join(".vessel.toml")).expect("宣言を読める");
+    fs::write(tree.join(".vessel.toml"), format!("{committed}constitution = [\"spec/c.yaml\"]\n")).expect("作業ツリーの宣言を書ける");
+    let (prompt, _) = key_lens(&dir, &contract, &tree, b"--- a\n+++ b\n");
+    assert!(dir.join("called").exists(), "claude を呼ぶ");
+    assert_eq!((prompt.matches(OLD_PHRASE).count(), prompt.contains("（木の file")), (1, false), "{prompt}");
+}
