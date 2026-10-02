@@ -43,4 +43,4 @@
 {design}
 
 ## 契約が満たす要件
-{requirements}{promises}{base}{outside}
+{requirements}{promises}{base}{outside}{index}

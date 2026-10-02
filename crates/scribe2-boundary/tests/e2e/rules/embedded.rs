@@ -849,7 +849,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 108, "埋め込み manifest の行数（母集団・`.738.42.6` で +1〔管理 tick の全部の書き直しの下限〕・`.736.33.23.3` で +1〔終わりの門の起こし直しの回数〕・`.736.33.21.2` で +2〔索引の置き場の量の上限と待ちの上限〕・`.738.39.3` で +3〔memo の notes の上限と審査の間隔と本数〕・`.736.33.17` で +1〔行の予約の期限〕・`.736.33.23.1` で +1〔lens の turn の上限〕・`.738.38.7` で +14〔局面の出力の窓 1 行と年齢の 13 行〕・`.736.30` で +2〔席の起草の置き場の量の上限と組み立て中の窓〕・`.738.37.1` で +1〔床の検査の待ちの上限〕・`.738.18` で +2〔公開の配線の締め切りと読む上限〕・`.736.25` で +1〔席の起草の置き場の書きの線〕・`.736.19` で +2〔lens の model と先撃ちの lens の model〕・`.696` で +1〔公開の見張りの行〕・`.718` で +1〔事前審査の先撃ちの 1 周の本数〕・`.717` で +1〔事前審査の確定の束の段の上げ〕・`.719` で +1〔台帳のグラフの直下の open の子の上限〕・`.704` で +1〔heartbeat の段の上げ〕・`.694` で +1〔終端の CI の照合の間隔〕・`.627` で +1〔席の箱〕・`.651` で +1〔退避の猶予〕・`.637` で -2 +1〔梯子の係数と上限の行の退役と梯子の列の行〕・`.600` で +1〔境界 crate の上限 R-C4-5〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の行 4 本〕・`.172` で +1〔便ごとの token 消費の検出線 R-C6-1〕・`.574` で +4〔host の見張りの種類ごとの行〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の窓ごとの行〕）");
+    assert_eq!(manifest.rows().len(), 110, "埋め込み manifest の行数（母集団・`.742.4` で +2〔上限の許可の対象の列と期限の上限〕・`.738.42.6` で +1〔管理 tick の全部の書き直しの下限〕・`.736.33.23.3` で +1〔終わりの門の起こし直しの回数〕・`.736.33.21.2` で +2〔索引の置き場の量の上限と待ちの上限〕・`.738.39.3` で +3〔memo の notes の上限と審査の間隔と本数〕・`.736.33.17` で +1〔行の予約の期限〕・`.736.33.23.1` で +1〔lens の turn の上限〕・`.738.38.7` で +14〔局面の出力の窓 1 行と年齢の 13 行〕・`.736.30` で +2〔席の起草の置き場の量の上限と組み立て中の窓〕・`.738.37.1` で +1〔床の検査の待ちの上限〕・`.738.18` で +2〔公開の配線の締め切りと読む上限〕・`.736.25` で +1〔席の起草の置き場の書きの線〕・`.736.19` で +2〔lens の model と先撃ちの lens の model〕・`.696` で +1〔公開の見張りの行〕・`.718` で +1〔事前審査の先撃ちの 1 周の本数〕・`.717` で +1〔事前審査の確定の束の段の上げ〕・`.719` で +1〔台帳のグラフの直下の open の子の上限〕・`.704` で +1〔heartbeat の段の上げ〕・`.694` で +1〔終端の CI の照合の間隔〕・`.627` で +1〔席の箱〕・`.651` で +1〔退避の猶予〕・`.637` で -2 +1〔梯子の係数と上限の行の退役と梯子の列の行〕・`.600` で +1〔境界 crate の上限 R-C4-5〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の行 4 本〕・`.172` で +1〔便ごとの token 消費の検出線 R-C6-1〕・`.574` で +4〔host の見張りの種類ごとの行〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の窓ごとの行〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -906,7 +906,7 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
     assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.696` の公開の見張り）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 94, "kind の母集団（`.738.42.6` で +1〔管理 tick の全部の書き直しの下限〕・`.736.33.23.3` で +1〔終わりの門の起こし直しの回数〕・`.736.33.21.2` で +2〔索引の置き場の量の上限と待ちの上限〕・`.738.39.3` で +3〔memo の notes の上限と審査の間隔と本数〕・`.736.33.17` で +1〔行の予約の期限〕・`.736.33.23.1` で +1〔lens の turn の上限〕・`.738.38.7` で +2〔局面の出力の窓と年齢の 2 種〕・`.736.30` で +2〔席の起草の置き場の量の上限と組み立て中の窓〕・`.738.37.1` で +1〔床の検査の待ちの上限〕・`.738.18` で +2〔公開の配線の締め切りと読む上限〕・`.736.25` で +1〔席の起草の置き場の書きの線〕・`.736.19` で +2〔lens の model と先撃ちの lens の model〕・`.696` で +1〔公開の見張りの行〕・`.718` で +1〔事前審査の先撃ちの 1 周の本数〕・`.717` で +1〔事前審査の確定の束の段の上げ〕・`.719` で +1〔台帳のグラフの直下の open の子の上限〕・`.704` で +1〔heartbeat の段の上げ〕・`.694` で +1〔終端の CI の照合の間隔〕・`.627` で +1〔席の箱〕・`.651` で +1〔退避の猶予〕・`.637` で -2 +1〔梯子の係数と上限の 2 種の退役と梯子の列の 1 種〕・`.600` で +1〔境界 crate の上限〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の 4 種〕・`.172` で +1〔便ごとの token 消費の検出線〕・`.574` で +2〔host の見張りの語列と rm の守る集合〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の 3 種〕）");
+    assert_eq!(kinds, 96, "kind の母集団（`.742.4` で +2〔上限の許可の対象の列と期限の上限〕・`.738.42.6` で +1〔管理 tick の全部の書き直しの下限〕・`.736.33.23.3` で +1〔終わりの門の起こし直しの回数〕・`.736.33.21.2` で +2〔索引の置き場の量の上限と待ちの上限〕・`.738.39.3` で +3〔memo の notes の上限と審査の間隔と本数〕・`.736.33.17` で +1〔行の予約の期限〕・`.736.33.23.1` で +1〔lens の turn の上限〕・`.738.38.7` で +2〔局面の出力の窓と年齢の 2 種〕・`.736.30` で +2〔席の起草の置き場の量の上限と組み立て中の窓〕・`.738.37.1` で +1〔床の検査の待ちの上限〕・`.738.18` で +2〔公開の配線の締め切りと読む上限〕・`.736.25` で +1〔席の起草の置き場の書きの線〕・`.736.19` で +2〔lens の model と先撃ちの lens の model〕・`.696` で +1〔公開の見張りの行〕・`.718` で +1〔事前審査の先撃ちの 1 周の本数〕・`.717` で +1〔事前審査の確定の束の段の上げ〕・`.719` で +1〔台帳のグラフの直下の open の子の上限〕・`.704` で +1〔heartbeat の段の上げ〕・`.694` で +1〔終端の CI の照合の間隔〕・`.627` で +1〔席の箱〕・`.651` で +1〔退避の猶予〕・`.637` で -2 +1〔梯子の係数と上限の 2 種の退役と梯子の列の 1 種〕・`.600` で +1〔境界 crate の上限〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の 4 種〕・`.172` で +1〔便ごとの token 消費の検出線〕・`.574` で +2〔host の見張りの語列と rm の守る集合〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の 3 種〕）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・
@@ -1171,4 +1171,92 @@ fn rules_memo_rows_are_the_last_three_kinds_and_rows() {
     assert_eq!(kinds, [&RuleKind::MemoNotesMaxBytes, &RuleKind::MemoTriageIntervalH, &RuleKind::MemoTriagePerRound], "kind は ALL の末尾の 2 つの前の 3 つ・この順（母集団 {} 種）", ALL.len());
     let rows: Vec<&str> = manifest.rows().iter().rev().skip(2).take(3).rev().map(|found| found.id.as_str()).collect();
     assert_eq!(rows, ["memo.notes_max_bytes", "memo.triage_interval_h", "memo.triage_per_round"], "行は manifest の末尾の 2 行の前の 3 行・この順（母集団 {} 行）", manifest.rows().len());
+}
+
+/// 上限の許可の 2 行（設計 limit-permit.md §18 歯 (a)・契約表の行 b）: 埋め込みの manifest が `pipe.permit_rows`（List・
+/// `["gate.token_cap"]`）と `pipe.permit_max_h`（Int・24）を発効で持ち、裁定の字と日付がそれぞれ決まり、kind は字面から引けて `ALL` と
+/// manifest の行の両方で `LensMaxTurns`（`lens.max_turns`）の直後・`HookBudgetMs`（`hook.budget_ms`）の前にこの順で並び、
+/// 裁定の字はそれぞれ 1 行だけが持ち、形の違う値は「形と合わない」で断られる。
+#[test]
+fn rules_permit_embedded_rows_carry_the_ruled_values_and_sit_after_lens_max_turns() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let want = [
+        ("pipe.permit_rows", "PipePermitRows", RuleKind::PipePermitRows, ValueShape::List, "user 2026-10-01T01:05Z 項 permit-rows"),
+        ("pipe.permit_max_h", "PipePermitMaxH", RuleKind::PipePermitMaxH, ValueShape::Int, "user 2026-10-01T01:24Z 項 permit-max-h"),
+    ];
+    for (id, name, kind, shape, ruling) in want {
+        let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+        assert_eq!((row.kind, row.kind.shape()), (kind, shape), "{id} の kind と形");
+        assert_eq!(RuleKind::parse(name), Some(kind), "{name} を字面から引ける");
+        assert!(row.enabled, "{id} は既定で効く");
+        assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), (ruling, "2026-10-01"), "{id} の裁定 id と裁定日");
+        let owners = manifest.rows().iter().filter(|found| found.ruling == ruling).count();
+        assert_eq!(owners, 1, "{id} の裁定の字を持つ行は 1 本だけ（new-row-reuses-ruling）");
+        assert_eq!(manifest.rows().iter().filter(|found| found.kind == kind).count(), 1, "{id} の kind の行は 1 本");
+    }
+    assert_eq!(vessel::rules::list_row(&manifest, "pipe.permit_rows"), Ok(&["gate.token_cap".to_owned()][..]), "列の読み手で値が取れる");
+    assert_eq!(int_row(&manifest, "pipe.permit_max_h"), Ok(24), "整数の読み手で 24 が取れる");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::LensMaxTurns).expect("LensMaxTurns は ALL に在る");
+    let after: Vec<&RuleKind> = ALL.iter().skip(at).take(4).collect();
+    let order = [&RuleKind::LensMaxTurns, &RuleKind::PipePermitRows, &RuleKind::PipePermitMaxH, &RuleKind::HookBudgetMs];
+    assert_eq!(after, order, "ALL の宣言順（母集団 {} 種）", ALL.len());
+    let ids: Vec<&str> = manifest.rows().iter().map(|found| found.id.as_str()).collect();
+    let at = ids.iter().position(|id| *id == "lens.max_turns").expect("lens.max_turns は manifest に在る");
+    let rows: Vec<&&str> = ids.iter().skip(at).take(4).collect();
+    assert_eq!(rows, [&"lens.max_turns", &"pipe.permit_rows", &"pipe.permit_max_h", &"hook.budget_ms"], "manifest の行の並び（母集団 {} 行）", ids.len());
+    let wrong = rejected(&one_row(RuleKind::PipePermitRows, "1")).expect("整数の値の fixture が受理された");
+    assert!(wrong.join("\n").contains("形と合わない"), "列の行に整数: {wrong:?}");
+    let wrong = rejected(&one_row(RuleKind::PipePermitMaxH, "\"x\"")).expect("文字列の値の fixture が受理された");
+    assert!(wrong.join("\n").contains("形と合わない"), "整数の行に文字列: {wrong:?}");
+}
+
+/// 許可の読み手を持つ kind の分け（§18 歯 (b)）: `ALL` のうち分けが true の kind がちょうど `GateTokenCap` 1 つ（母集団は `ALL` の数・
+/// 同じ作業ごとの消費の `RunTokenCeiling` も false）。
+#[test]
+fn rules_permit_reader_kinds_are_exactly_gate_token_cap() {
+    let readers: Vec<&RuleKind> = ALL.iter().filter(|kind| kind.has_permit_reader()).collect();
+    assert_eq!(readers, [&RuleKind::GateTokenCap], "分けが true の kind（母集団 {} 種）", ALL.len());
+    assert!(!RuleKind::RunTokenCeiling.has_permit_reader(), "R-C6-1 は読み手が無い");
+}
+
+/// 対象の列の要素の行ごとの閉じ（§18 歯 (c)）: 名指される 5 行と対象の列の行だけの fixture で、`["gate.token_cap"]` は読め、
+/// 4 つの断りの要素と無い行 1 つをそれぞれ `gate.token_cap` と並べた値は、断りがちょうど 1 件でその要素の字・kind の列・対象の列の行の行番号を
+/// 名指し `gate.token_cap` を名指さない。対象の列の行を `enabled = false` にしても同じく断る。
+#[test]
+fn rules_permit_rows_value_is_closed_over_kinds_with_a_permit_reader() {
+    let row = |id: &str, kind: &str, value: &str, enabled: bool| {
+        format!("[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"2026-10-01\"\n\n")
+    };
+    let fixture = |elements: &str, enabled: bool| {
+        let model = format!("\"{}\"", Model::Fable.alias());
+        let mut text = String::from("schema = 1\n\n");
+        text.push_str(&row("gate.token_cap", "GateTokenCap", "1", true));
+        text.push_str(&row("review.same_kind_stop", "ReviewSameKindStop", "1", true));
+        text.push_str(&row("pipe.max_live", "PipeMaxLive", "1", true));
+        text.push_str(&row("R-C4-1", "CoreLines", "1", true));
+        text.push_str(&row("runner.model", "RunnerModel", &model, true));
+        text.push_str(&row("pipe.permit_rows", "PipePermitRows", elements, enabled));
+        text
+    };
+    let line_of = |text: &str| text.lines().position(|found| found == "id = \"pipe.permit_rows\"").expect("対象の列の行が在る");
+    let passed = parsed(&fixture("[\"gate.token_cap\"]", true)).expect("分けが true の kind の行 id だけの値は通る");
+    assert_eq!(vessel::rules::list_row(&passed, "pipe.permit_rows"), Ok(&["gate.token_cap".to_owned()][..]), "値は読める");
+    for (element, why) in [
+        ("review.same_kind_stop", "読み手を持たない"),
+        ("pipe.max_live", "読み手を持たない"),
+        ("R-C4-1", "読み手を持たない"),
+        ("runner.model", "読み手を持たない"),
+        ("nope.row", "行の id でない"),
+    ] {
+        for enabled in [true, false] {
+            let text = fixture(&format!("[\"gate.token_cap\", \"{element}\"]"), enabled);
+            let errors = rejected(&text).unwrap_or_else(|rows| panic!("{element} を並べた値が受理された（{rows} 行）"));
+            assert_eq!(errors.len(), 1, "{element}（enabled={enabled}）の断りはちょうど 1 件: {errors:?}");
+            let first = errors.first().map(String::as_str).unwrap_or_default();
+            assert!(first.contains(&format!("\"{element}\"")), "要素の字 {element}（{why}）: {first}");
+            assert!(first.contains("GateTokenCap"), "kind の列: {first}");
+            assert!(first.contains(&format!("line={}", line_of(&text))), "対象の列の行の行番号: {first}");
+            assert!(!first.contains("gate.token_cap"), "通る要素は名指さない: {first}");
+        }
+    }
 }

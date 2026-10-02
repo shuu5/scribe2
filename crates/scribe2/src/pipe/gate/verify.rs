@@ -409,10 +409,9 @@ fn check_write_set(checks: &Checks<'_>) -> Step {
         return unwrapped(cmd, -1, "diff の path を読めない".to_owned());
     };
     let text = String::from_utf8_lossy(&bytes);
-    let outside: Vec<&str> = text
-        .split('\0')
-        .filter(|path| !path.is_empty() && !listed(path, &checks.contract.write_set))
-        .collect();
+    let paths: Vec<&str> = text.split('\0').filter(|path| !path.is_empty()).collect();
+    let outside: Vec<&str> = paths.iter().copied().filter(|path| !listed(path, &checks.contract.write_set)).collect();
+    let placed: Vec<&str> = paths.iter().copied().filter(|path| place_only(path, &checks.contract.write_set)).collect();
     let broken = match head_tree(checks) {
         Ok(tree) => {
             let names: Vec<&str> = tree.names.iter().map(String::as_str).collect();
@@ -428,6 +427,9 @@ fn check_write_set(checks: &Checks<'_>) -> Step {
     let mut lines: Vec<String> = Vec::new();
     if !outside.is_empty() {
         lines.push(format!("契約の write-set の外へ出た path:\n{}", outside.join("\n")));
+    }
+    if !placed.is_empty() {
+        lines.push(format!("契約の write-set の = の file が便の diff に在る:\n{}", placed.join("\n")));
     }
     lines.extend(broken.sections());
     let rc = i32::from(!lines.is_empty());
@@ -547,11 +549,20 @@ fn in_tree(tree: &[String], path: &str) -> bool {
 /// 項目は [`refuse::normalize`] に通してから比べる（接頭辞 `+` / `-` は受付の宣言であって path の一部ではない
 /// ＝diff の素の path と照合する・設計 contract-source.md §3・剥がす規則を 2 か所に持たない・`s2-07l.291`）。
 fn listed(path: &str, write_set: &[String]) -> bool {
-    write_set.iter().any(|entry| {
-        let plain = refuse::normalize(entry);
-        let trimmed = plain.trim_end_matches('/');
-        path == trimmed || path.starts_with(&format!("{trimmed}/"))
-    })
+    write_set.iter().any(|entry| covers(path, entry))
+}
+
+/// path が write-set の置き場だけの項目（`=`・中身を変えない）のいずれかに含まれるか（照合は [`listed`] と同じ [`covers`]）。
+/// diff に在れば便が中身を変えた＝段 ① が名指して落とす。
+fn place_only(path: &str, write_set: &[String]) -> bool {
+    write_set.iter().filter(|entry| entry.starts_with(refuse::PLACE_ONLY_FILE)).any(|entry| covers(path, entry))
+}
+
+/// path が項目 1 つ（接頭辞を剥がした file の一致 か dir の prefix）に含まれるか。
+fn covers(path: &str, entry: &str) -> bool {
+    let plain = refuse::normalize(entry);
+    let trimmed = plain.trim_end_matches('/');
+    path == trimmed || path.starts_with(&format!("{trimmed}/"))
 }
 
 /// 段①（write-set 照合）を**読めなかった**段か（`s2-07l.65`）。

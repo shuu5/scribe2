@@ -3111,3 +3111,550 @@ fn pipe_review_row_reuse_reads_the_version_only_when_a_same_digest_actual_pass_e
         clean(&[&place.repo, &place.state]);
     }
 }
+
+// ───── 逆引きの表と審査の材料 index.txt（設計 reverse-index.md §6・§7 (a)・契約表の行 c・接頭辞 `pipe_index_show_`） ─────
+//
+// 小さな crate の fixture（別名の取り込み・`Self` の literal・glob の取り込み・`pub use` の再輸出・test の module の file・doc の link・文字列の
+// 取り込み・別 module の同名の型・toml の名指し）を、行 a1 の歯の file（pipe.rs）の SCIP の書き手で SCIP と一致の列にし、行 a2 の歯の偽の宣言
+// （`IdxPlace`）が写す。撃つ口は実 binary の `pipe index show` と `pipe intake`（審査の材料）。
+
+/// 本体の file（型 `Gadget`・doc の link・`Self` の literal・文字列の取り込み・test の module の宣言）。
+const GX_SHAPE_RS: &str = "crates/toy/src/shape.rs";
+const GX_SHAPE: &str = "/// 見る: [`Gadget`] の話\npub struct Gadget { pub x: u8 }\nimpl Gadget {\n    pub fn new() -> Self {\n        Self { x: 0 }\n    }\n}\npub fn make() -> Gadget {\n    Gadget { x: 1 }\n}\nfn describe() -> String { format!(\"{Gadget}\") }\n#[cfg(test)]\nmod tests;\n";
+
+/// test の module の file（`#[cfg(test)] mod tests;` の先）。
+const GX_TESTS_RS: &str = "crates/toy/src/shape/tests.rs";
+const GX_TESTS: &str = "fn builds() { let _ = crate::shape::make(); let _ = crate::shape::Gadget { x: 2 }; }\n";
+
+/// 別名の取り込み・glob の取り込み・match の pattern・呼び出しを持つ file（`run` は別 module にも在る）。
+const GX_USER_RS: &str = "crates/toy/src/user.rs";
+const GX_USER: &str = "use crate::shape::Gadget as Widget;\nuse crate::shape::*;\npub fn assemble() -> Widget { let _ = make(); Widget { x: 3 } }\npub fn route(g: Gadget) -> u8 {\n    match g {\n        Gadget { x } => x,\n    }\n}\npub fn run() {}\n";
+
+/// `pub use` の再輸出と module の宣言。
+const GX_LIB_RS: &str = "crates/toy/src/lib.rs";
+const GX_LIB: &str = "pub use crate::shape::Gadget;\npub(crate) mod shape;\nmod user;\nmod other;\n";
+
+/// 別 module の同名の型と同名の fn。
+const GX_OTHER_RS: &str = "crates/toy/src/other.rs";
+const GX_OTHER: &str = "pub struct Gadget;\nfn other(_: Gadget) {}\npub fn run() {}\n";
+
+/// toml に現れる名（索引の外）。
+const GX_TOML_PATH: &str = "config/gadget.toml";
+const GX_TOML: &str = "[shape]\nkind = \"Gadget\"\n";
+
+/// fixture の file（相対 path と本文）。
+const GX_FILES: [(&str, &str); 6] = [(GX_SHAPE_RS, GX_SHAPE), (GX_TESTS_RS, GX_TESTS), (GX_USER_RS, GX_USER), (GX_LIB_RS, GX_LIB), (GX_OTHER_RS, GX_OTHER), (GX_TOML_PATH, GX_TOML)];
+
+const GX_GADGET: &str = "rust-analyzer cargo toy 0.1.0 shape/Gadget#";
+const GX_NEW: &str = "rust-analyzer cargo toy 0.1.0 shape/Gadget#new().";
+const GX_MAKE: &str = "rust-analyzer cargo toy 0.1.0 shape/make().";
+const GX_DESCRIBE: &str = "rust-analyzer cargo toy 0.1.0 shape/describe().";
+const GX_SHAPE_TESTS: &str = "rust-analyzer cargo toy 0.1.0 shape/tests/";
+const GX_BUILDS: &str = "rust-analyzer cargo toy 0.1.0 shape/tests/builds().";
+const GX_MOD_SHAPE: &str = "rust-analyzer cargo toy 0.1.0 shape/";
+const GX_MOD_USER: &str = "rust-analyzer cargo toy 0.1.0 user/";
+const GX_MOD_OTHER: &str = "rust-analyzer cargo toy 0.1.0 other/";
+const GX_ASSEMBLE: &str = "rust-analyzer cargo toy 0.1.0 user/assemble().";
+const GX_ROUTE: &str = "rust-analyzer cargo toy 0.1.0 user/route().";
+const GX_RUN_USER: &str = "rust-analyzer cargo toy 0.1.0 user/run().";
+const GX_OTHER_GADGET: &str = "rust-analyzer cargo toy 0.1.0 other/Gadget#";
+const GX_OTHER_FN: &str = "rust-analyzer cargo toy 0.1.0 other/other().";
+const GX_RUN_OTHER: &str = "rust-analyzer cargo toy 0.1.0 other/run().";
+
+/// occurrence 1 つ（`at` は（文脈・文脈の中の字）・`scope` は定義の囲む範囲の字〔無ければ参照〕）。
+fn gx_occ(body: &str, at: (&str, &str), symbol: &str, scope: Option<&str>) -> Vec<u8> {
+    let range = scip_range(body, span_in(body, at.0, at.1), false);
+    let enclosing = scope.map(|whole| scip_range(body, span_of(body, whole, 0), false)).unwrap_or_default();
+    scip_occ(&range, symbol, scope.is_some(), &enclosing)
+}
+
+/// module を宣言する occurrence（囲む範囲を持たない定義・`declared` は `mod <名>;`）。
+fn gx_module(body: &str, declared: &str, symbol: &str) -> Vec<u8> {
+    let name = declared.trim_start_matches("mod ").trim_end_matches(';');
+    scip_occ(&scip_range(body, span_in(body, declared, name), false), symbol, true, &[])
+}
+
+/// fixture の SCIP の bytes。
+fn gx_scip_bytes() -> Vec<u8> {
+    let shape = vec![
+        gx_occ(GX_SHAPE, ("pub struct Gadget", "Gadget"), GX_GADGET, Some("pub struct Gadget { pub x: u8 }")),
+        gx_occ(GX_SHAPE, ("impl Gadget", "Gadget"), GX_GADGET, None),
+        gx_occ(GX_SHAPE, ("fn new", "new"), GX_NEW, Some("pub fn new() -> Self {\n        Self { x: 0 }\n    }")),
+        gx_occ(GX_SHAPE, ("-> Self", "Self"), GX_GADGET, None),
+        gx_occ(GX_SHAPE, ("Self { x: 0 }", "Self"), GX_GADGET, None),
+        gx_occ(GX_SHAPE, ("fn make", "make"), GX_MAKE, Some("pub fn make() -> Gadget {\n    Gadget { x: 1 }\n}")),
+        gx_occ(GX_SHAPE, ("-> Gadget", "Gadget"), GX_GADGET, None),
+        gx_occ(GX_SHAPE, ("Gadget { x: 1 }", "Gadget"), GX_GADGET, None),
+        gx_occ(GX_SHAPE, ("fn describe", "describe"), GX_DESCRIBE, Some("fn describe() -> String { format!(\"{Gadget}\") }")),
+        gx_module(GX_SHAPE, "mod tests;", GX_SHAPE_TESTS),
+    ];
+    let tests = vec![
+        scip_occ(&[0, 0, 0], GX_SHAPE_TESTS, true, &[]),
+        gx_occ(GX_TESTS, ("fn builds", "builds"), GX_BUILDS, Some("fn builds() { let _ = crate::shape::make(); let _ = crate::shape::Gadget { x: 2 }; }")),
+        gx_occ(GX_TESTS, ("shape::make", "make"), GX_MAKE, None),
+        gx_occ(GX_TESTS, ("shape::Gadget", "Gadget"), GX_GADGET, None),
+    ];
+    let user = vec![
+        gx_occ(GX_USER, ("shape::Gadget as", "Gadget"), GX_GADGET, None),
+        gx_occ(GX_USER, ("fn assemble", "assemble"), GX_ASSEMBLE, Some("pub fn assemble() -> Widget { let _ = make(); Widget { x: 3 } }")),
+        gx_occ(GX_USER, ("-> Widget", "Widget"), GX_GADGET, None),
+        gx_occ(GX_USER, ("make()", "make"), GX_MAKE, None),
+        gx_occ(GX_USER, ("Widget { x: 3 }", "Widget"), GX_GADGET, None),
+        gx_occ(GX_USER, ("fn route", "route"), GX_ROUTE, Some("pub fn route(g: Gadget) -> u8 {\n    match g {\n        Gadget { x } => x,\n    }\n}")),
+        gx_occ(GX_USER, ("g: Gadget", "Gadget"), GX_GADGET, None),
+        gx_occ(GX_USER, ("Gadget { x } =>", "Gadget"), GX_GADGET, None),
+        gx_occ(GX_USER, ("fn run", "run"), GX_RUN_USER, Some("pub fn run() {}")),
+    ];
+    let lib = vec![
+        gx_occ(GX_LIB, ("shape::Gadget;", "Gadget"), GX_GADGET, None),
+        gx_module(GX_LIB, "mod shape;", GX_MOD_SHAPE),
+        gx_module(GX_LIB, "mod user;", GX_MOD_USER),
+        gx_module(GX_LIB, "mod other;", GX_MOD_OTHER),
+    ];
+    let other = vec![
+        gx_occ(GX_OTHER, ("struct Gadget", "Gadget"), GX_OTHER_GADGET, Some("pub struct Gadget;")),
+        gx_occ(GX_OTHER, ("fn other", "other"), GX_OTHER_FN, Some("fn other(_: Gadget) {}")),
+        gx_occ(GX_OTHER, ("_: Gadget", "Gadget"), GX_OTHER_GADGET, None),
+        gx_occ(GX_OTHER, ("fn run", "run"), GX_RUN_OTHER, Some("pub fn run() {}")),
+    ];
+    scip_index(
+        &[
+            scip_document(GX_SHAPE_RS, 1, &shape, &[]),
+            scip_document(GX_TESTS_RS, 1, &tests, &[]),
+            scip_document(GX_USER_RS, 1, &user, &[]),
+            scip_document(GX_LIB_RS, 1, &lib, &[]),
+            scip_document(GX_OTHER_RS, 1, &other, &[]),
+        ],
+        &[],
+    )
+}
+
+/// fixture の役の一致の stream。
+fn gx_roles_text() -> String {
+    let role = |rule: &str, (file, body): (&str, &str), needle: &str, name: Option<&str>| idx_role_line(rule, file, span_of(body, needle, 0), name);
+    let (shape, tests, user, lib) = ((GX_SHAPE_RS, GX_SHAPE), (GX_TESTS_RS, GX_TESTS), (GX_USER_RS, GX_USER), (GX_LIB_RS, GX_LIB));
+    [
+        role("doclink", shape, "[`Gadget`]", Some("Gadget")),
+        role("literal", shape, "Self { x: 0 }", Some("Self")),
+        role("literal", shape, "Gadget { x: 1 }", Some("Gadget")),
+        role("capture", shape, "\"{Gadget}\"", Some("Gadget")),
+        role("test", shape, "#[cfg(test)]\nmod tests;", None),
+        role("vis", shape, "pub struct Gadget { pub x: u8 }", Some("pub")),
+        role("vis", shape, "pub fn make() -> Gadget {\n    Gadget { x: 1 }\n}", Some("pub")),
+        role("literal", tests, "Gadget { x: 2 }", Some("Gadget")),
+        role("call", tests, "make()", None),
+        role("use", user, "use crate::shape::Gadget as Widget;", None),
+        role("use", user, "use crate::shape::*;", None),
+        role("call", user, "make()", None),
+        role("literal", user, "Widget { x: 3 }", Some("Widget")),
+        role("pattern", user, "Gadget { x }", Some("Gadget")),
+        role("use", lib, "pub use crate::shape::Gadget;", None),
+        role("reexport", lib, "pub use crate::shape::Gadget;", None),
+        role("vis", lib, "pub(crate) mod shape;", Some("pub(crate)")),
+    ]
+    .join("\n")
+        + "\n"
+}
+
+/// 節 1 の散文: touches の型・型の path 形（`crate::` の有無）・fn 形・解けない fn 形・同名が 2 つの fn 形・touches の型の variant・散文（可視性・
+/// 引数付きの予約語の呼び出し・大文字始まりの tuple variant の構築・末尾 `::`・glob）。
+const GX_PROSE: &str = "型 `crate::shape::Gadget` を使う。`crate::shape::make` を呼び、`shape::Gadget` と `describe()` と `ghost()` と `run()` を見る。`Gadget::new` は touches の型の variant で、`pub(crate)`・`if (a)`・`match(x)`・`Some(x)`・`crate::shape::`・`crate::shape::*` は散文。";
+
+/// 節 2 の散文（審査の材料の歯が使う・名は全部解ける）。
+const GX_PROSE_TWO: &str = "型 `crate::shape::Gadget` と `describe()` を読む。";
+
+/// 設計 doc の本文（節 2 つと契約表の行）。
+fn gx_doc(rows: &[Vec<String>]) -> String {
+    let listed: Vec<String> = rows.iter().map(|fields| format!("[[contract]]\n{}", fields.join("\n"))).collect();
+    format!(
+        "# 設計: toy\n\n## 1. 何を解くか\n\n{GX_PROSE}\n\n## 2. 読むだけ\n\n{GX_PROSE_TWO}\n\n{}\nschema = 1\n\n{}\n{}\n",
+        table_begin(),
+        listed.join("\n\n"),
+        table_end()
+    )
+}
+
+/// 表の行 1 本の欄（`derived` は write-set の字か `tests` の欄の字・節は 1）。
+fn gx_row(id: &str, touches: bool, derived: &str) -> Vec<String> {
+    let mut add = vec![derived];
+    if touches {
+        add.push(r#"touches = ["crate::shape::Gadget"]"#);
+    }
+    row_fields(id, &["write-set"], &add)
+}
+
+/// 逆引きの歯の置き場（偽の宣言を持つか持たない toy repo・表の行 a・b・c・e・f と `contracts/t.toml` の行 t1・偽の command）。
+fn gx_place(declared: bool) -> IdxPlace {
+    gx_place_with(if declared { IDXB_DECL } else { "" })
+}
+
+/// [`gx_place`] の宣言の本文を選ぶ形（`index` は宣言に足す索引の 2 key の行）。
+fn gx_place_with(index: &str) -> IdxPlace {
+    let (repo, state) = repo_with_state();
+    let put = |path: &str, body: &str| {
+        let target = repo.join(path);
+        assert!(target.parent().is_some_and(|parent| fs::create_dir_all(parent).is_ok()), "{path} の dir を作れる");
+        assert!(fs::write(&target, body).is_ok(), "{path} を書ける");
+    };
+    for (path, body) in GX_FILES {
+        put(path, body);
+    }
+    let four = r#"write-set = ["crates/toy/src/shape.rs", "crates/toy/src/shape/tests.rs", "crates/toy/src/user.rs", "crates/toy/src/lib.rs"]"#;
+    let rows = [
+        gx_row("a", true, r#"write-set = ["crates/toy/src/shape.rs", "crates/toy/src/shape/tests.rs"]"#),
+        gx_row("b", true, r#"write-set = ["crates/toy/src/user.rs"]"#),
+        gx_row("c", true, r#"tests = ["crates/toy/src/shape/tests.rs"]"#),
+        row_fields("e", &["write-set", "section"], &[r#"section = "2""#, four]),
+        row_fields("f", &["write-set", "section"], &[r#"section = "2""#, r#"creates = ["crates/toy/tests/gadget.rs"]"#, r#"tests = ["crates/toy/tests/gadget.rs"]"#]),
+    ];
+    put(DESIGN_FILE, &gx_doc(&rows));
+    put("contracts/t.toml", &format!("schema = 1\n\n[[contract]]\n{}\n", gx_row("t1", true, r#"write-set = ["crates/toy/src/lib.rs"]"#).join("\n")));
+    let declaration = fs::read_to_string(repo.join(".vessel.toml")).unwrap_or_default();
+    put(".vessel.toml", &format!("{declaration}contract-tables = [\"contracts/\"]\n{index}"));
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["add", "-f", ".vessel.toml"]);
+    git(&repo, &["commit", "-q", "-m", "gadget"]);
+    let place = IdxPlace { repo, state };
+    assert!(fs::write(place.state.join("idx.scip"), gx_scip_bytes()).is_ok(), "SCIP の fixture を書ける");
+    assert!(fs::write(place.state.join("idx.roles"), gx_roles_text()).is_ok(), "一致の fixture を書ける");
+    assert!(fs::create_dir_all(place.bin()).is_ok(), "偽の command の dir を作れる");
+    idxb_script(&place, (IDXB_SCIP, "scip"), &format!("cp '{}' \"$2\"\n", place.state.join("idx.scip").display()));
+    idxb_script(&place, (IDXB_ROLES, "roles"), &format!("cat '{}'\n", place.state.join("idx.roles").display()));
+    place
+}
+
+impl IdxPlace {
+    /// `pipe index show` を撃つ（`extra` は `--row` と `--item` などの引数）。
+    fn show(&self, extra: &[&str]) -> Output {
+        let (state, repo) = (self.state.display().to_string(), self.repo.display().to_string());
+        let mut args = vec!["index", "show", "--state-dir", state.as_str(), "--repo", repo.as_str()];
+        args.extend(extra);
+        run_pipe_with_path(&self.path(), &args)
+    }
+}
+
+/// 項目 `item` の塊（頭の行から次の項目の頭の前まで）。
+fn gx_block(text: &str, item: &str) -> Vec<String> {
+    let head = format!("- {item}: ");
+    let mut lines = text.lines().skip_while(|line| !line.starts_with(&head));
+    lines.next().map(str::to_owned).into_iter().chain(lines.take_while(|line| !line.starts_with("- ")).map(str::to_owned)).collect()
+}
+
+/// 塊の頭の行の `name=<値>` の値（`refs=14(外6)` は `14(外6)`）。
+fn gx_field(block: &[String], name: &str) -> String {
+    let head = block.first().cloned().unwrap_or_default();
+    head.split_whitespace().find_map(|word| word.strip_prefix(&format!("{name}="))).unwrap_or_default().to_owned()
+}
+
+/// 塊の中の列 `name` の site の行（4 字下げ・先頭の空白を落とし昇順）。
+fn gx_sites(block: &[String], name: &str) -> Vec<String> {
+    let head = format!("  {name}:");
+    let mut sites: Vec<String> = block
+        .iter()
+        .skip_while(|line| !line.starts_with(&head))
+        .skip(1)
+        .take_while(|line| line.starts_with("    "))
+        .map(|line| line.trim().to_owned())
+        .collect();
+    sites.sort();
+    sites
+}
+
+/// site の行の先頭の `<file>:<行>`（昇順）。
+fn gx_places_of(block: &[String], name: &str) -> Vec<String> {
+    gx_sites(block, name).iter().filter_map(|line| line.split(' ').next()).map(str::to_owned).collect()
+}
+
+/// 項目の見出し（`- <項目>: ` の頭の行の項目・出力の順）。
+fn gx_items(text: &str) -> Vec<String> {
+    text.lines().filter_map(|line| line.strip_prefix("- ")).filter_map(|rest| rest.split_once(": ")).map(|(item, _)| item.to_owned()).collect()
+}
+
+/// 行（1 始まり）の番号の列を `<file>:<行>` にする。
+fn gx_places(file: &str, lines: &[usize]) -> Vec<String> {
+    lines.iter().map(|line| format!("{file}:{line}")).collect()
+}
+
+/// 本文の中で語 `word` を語の境界で含む行の数。
+fn gx_word_lines(body: &str, word: &str) -> usize {
+    let word_char = |found: char| found.is_alphanumeric() || found == '_';
+    let holds = |line: &str| {
+        line.match_indices(word).any(|(at, _)| {
+            let before = line.get(..at).and_then(|head| head.chars().next_back());
+            let after = line.get(at + word.len()..).and_then(|tail| tail.chars().next());
+            !before.is_some_and(word_char) && !after.is_some_and(word_char)
+        })
+    };
+    body.lines().filter(|line| holds(line)).count()
+}
+
+/// 偽の宣言で組んだ索引の上の `show` の stdout（rc 0 でない周は落とす）。
+fn gx_shown(place: &IdxPlace, extra: &[&str]) -> String {
+    let out = place.show(extra);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "show は rc 0: {}", told_index(&out));
+    stdout_of(&out)
+}
+
+/// 昇順に並べ直した列。
+fn gx_sorted(mut found: Vec<String>) -> Vec<String> {
+    found.sort();
+    found
+}
+
+/// (a) `--item` は項目を symbol に解き、7 列の件数と site（本体と test の別・file の数）と母集団の 3 値を出す: 別名・`Self` の literal・glob・
+/// 再輸出・doc の link・文字列の取り込み越しの site を含み、別 module の同名の型の site を数えず、toml に現れる名を outside-index に数える。
+/// 解けない項目は 0 件・同名が 2 つの fn は ambiguous:2 と候補の定義の site。
+#[test]
+fn pipe_index_show_item_counts_seven_columns_and_the_population_of_a_resolved_symbol() {
+    let place = gx_place(true);
+    let shown = gx_shown(&place, &["--item", "crate::shape::Gadget", "--item", "crate::other::Gadget", "--item", "crate::shape::make", "--item", "crate::nothing::Here", "--item", "run"]);
+    let gadget = gx_block(&shown, "crate::shape::Gadget");
+    gx_check_sites(&gadget);
+    gx_check_census(&place, &gadget);
+    let other = gx_block(&shown, "crate::other::Gadget");
+    assert_eq!(gx_places_of(&other, "refs"), gx_places(GX_OTHER_RS, &[2]), "別 module の同名の型は自分の site だけ: {shown}");
+    let make = gx_block(&shown, "crate::shape::make");
+    assert_eq!(gx_sites(&make, "callers"), [format!("{GX_TESTS_RS}:1 test builds"), format!("{GX_USER_RS}:3 assemble")], "callers は call の site を囲む定義: {make:?}");
+    assert!(make.iter().any(|line| line.starts_with("  callers: 本体 1・test 1")), "{make:?}");
+    let none = gx_block(&shown, "crate::nothing::Here");
+    assert!(none.first().is_some_and(|line| line.contains("unresolved refs=0 callers=0 literals=0 patterns=0 teeth=0 vis=0 ")), "解けない項目は 0 件: {none:?}");
+    gx_check_ambiguous(&gx_block(&shown, "run"));
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (a) の 6 列の site の集合と 7 列の件数。
+fn gx_check_sites(gadget: &[String]) {
+    let want = [gx_places(GX_SHAPE_RS, &[1, 3, 4, 5, 8, 9, 11]), gx_places(GX_TESTS_RS, &[1]), gx_places(GX_USER_RS, &[1, 3, 3, 4, 6]), gx_places(GX_LIB_RS, &[1])].concat();
+    assert_eq!(gx_places_of(gadget, "refs"), gx_sorted(want), "refs の site の集合（別名・Self・glob・再輸出・doc の link・文字列の取り込み越し・別 module の同名の型は無い）: {gadget:?}");
+    assert!(gadget.iter().any(|line| line.starts_with("  refs: 本体 13・test 1・file 4")), "本体と test の別と file の数: {gadget:?}");
+    let literals = [gx_places(GX_SHAPE_RS, &[5, 9]), gx_places(GX_TESTS_RS, &[1]), gx_places(GX_USER_RS, &[3])].concat();
+    assert_eq!(gx_places_of(gadget, "literals"), gx_sorted(literals), "Self と別名の literal を含む: {gadget:?}");
+    assert_eq!(gx_places_of(gadget, "patterns"), gx_places(GX_USER_RS, &[6]), "pattern: {gadget:?}");
+    assert_eq!(gx_places_of(gadget, "vis"), gx_places(GX_LIB_RS, &[1]), "再輸出の site: {gadget:?}");
+    assert_eq!(gx_sites(gadget, "teeth"), [format!("{GX_TESTS_RS}:1 test builds")], "teeth は test の関数の名と site: {gadget:?}");
+    assert!(gadget.iter().any(|line| line == "  vis: 定義 pub ← shape=pub(crate)"), "可視性と親 module の可視性: {gadget:?}");
+    let counts: Vec<String> = ["refs", "callers", "literals", "patterns", "teeth", "vis", "rows"].iter().map(|name| gx_field(gadget, name)).collect();
+    assert_eq!(counts, ["14", "0", "4", "1", "1", "1", "4"], "7 列の件数（rows は a・b・c と contracts/t.toml の t1）: {gadget:?}");
+}
+
+/// (a) の母集団の 3 値（text・indexed・outside-index と path）。
+fn gx_check_census(place: &IdxPlace, gadget: &[String]) {
+    let doc = fs::read_to_string(place.repo.join(DESIGN_FILE)).unwrap_or_default();
+    let toml = fs::read_to_string(place.repo.join("contracts/t.toml")).unwrap_or_default();
+    let beyond = gx_word_lines(GX_TOML, "Gadget") + gx_word_lines(&doc, "Gadget") + gx_word_lines(&toml, "Gadget");
+    let inside: usize = [GX_SHAPE, GX_TESTS, GX_USER, GX_LIB, GX_OTHER].iter().map(|body| gx_word_lines(body, "Gadget")).sum();
+    assert_eq!(inside, 13, "索引の中の file で語が現れる行（別 module の同名の型の 2 行を含む）");
+    let census = (gx_field(gadget, "text"), gx_field(gadget, "indexed"), gx_field(gadget, "outside-index"));
+    assert_eq!(census, ((inside + beyond).to_string(), "11".to_owned(), beyond.to_string()), "母集団の 3 値: {gadget:?}");
+    let outside = gadget.iter().find(|line| line.starts_with("  outside-index: ")).cloned().unwrap_or_default();
+    for path in [GX_TOML_PATH, "contracts/t.toml", DESIGN_FILE] {
+        assert!(outside.contains(path), "索引の外の file の path: {outside}");
+    }
+    assert!(!outside.contains(".rs"), "索引の中の file は外に数えない: {outside}");
+}
+
+/// (a) の同名が 2 つの fn（ambiguous:2 と候補の定義の site）。
+fn gx_check_ambiguous(many: &[String]) {
+    assert!(many.first().is_some_and(|line| line.starts_with("- run: ambiguous:2 ")), "同名が 2 つの fn: {many:?}");
+    let candidates: Vec<&String> = many.iter().filter(|line| line.starts_with("  候補: ")).collect();
+    let names = |place: String| candidates.iter().any(|line| line.contains(&place));
+    assert!(candidates.len() == 2 && names(format!("{GX_USER_RS}:9")) && names(format!("{GX_OTHER_RS}:3")), "候補の定義の site: {many:?}");
+}
+
+/// 項目の頭の行の 6 列の値（`refs`・`callers`・`literals`・`patterns`・`teeth`・`vis`）。
+fn gx_six(block: &[String]) -> Vec<String> {
+    ["refs", "callers", "literals", "patterns", "teeth", "vis"].iter().map(|name| gx_field(block, name)).collect()
+}
+
+/// (b) `--row` は行の touches と節の散文の名指しを項目にし（見出しの列は touches と `section_symbols` の列と集合で等しい・散文の可視性・
+/// 引数付きの予約語の呼び出し・tuple variant の構築・touches の型の variant は項目にならず、`crate::` の頭の無い型の path 形と fn 形は項目になる）、
+/// site の file が行の欄 write-set の外なら `外` を付けて列ごとに外の件数を出し、ほかの行の閉包を広げる file を rows 列に出す。`key` で
+/// `contracts/` を名乗る toy の `contracts/t.toml` の行も引け rows 列に数える。欄 write-set を持たず tests の欄で導く行は `外` を 1 つも付けず
+/// `write-set=derived` の 1 行を持つ（同じ site が欄 write-set を持つ行では `外` を持つことを先に確かめる）。
+#[test]
+fn pipe_index_show_row_marks_outside_sites_and_derived_rows_carry_no_mark() {
+    let place = gx_place(true);
+    let shown = gx_shown(&place, &["--row", "docs/design/toy.md#a"]);
+    let touches = vec!["crate::shape::Gadget".to_owned()];
+    let mut want = touches.clone();
+    for name in vessel::pipe::closure::section_symbols(&[GX_PROSE], &touches) {
+        if !want.contains(&name) {
+            want.push(name);
+        }
+    }
+    let got = gx_items(&shown);
+    assert_eq!(gx_sorted(got.clone()), gx_sorted(want), "見出しの列は touches と section_symbols の列と集合で等しい: {shown}");
+    assert_eq!(got, ["crate::shape::Gadget", "crate::shape::make", "shape::Gadget", "describe", "ghost", "run"], "touches が先・節の名指しは本文の順: {shown}");
+    for prose in ["pub(crate)", "if (a)", "match(x)", "Some(x)", "crate::shape::", "crate::shape::*", "Gadget::new"] {
+        assert!(!got.iter().any(|item| item == prose), "{prose} は項目にならない: {got:?}");
+    }
+    gx_check_marks(&shown);
+    assert!(!shown.starts_with("write-set=derived"), "欄を持つ行に derived の行は無い");
+    // `contracts/t.toml` の行も引け、rows 列は a・b・c を数える。
+    let declared = gx_shown(&place, &["--row", "contracts/t.toml#t1"]);
+    let one = gx_block(&declared, "crate::shape::Gadget");
+    assert_eq!((gx_field(&one, "rows"), gx_six(&one)), ("3".to_owned(), ["14(外13)", "0(外0)", "4(外4)", "1(外1)", "1(外1)", "1(外0)"].map(str::to_owned).to_vec()), "{one:?}");
+    // 欄 write-set を持たず tests の欄で導く行（c）は外を 1 つも付けず derived の 1 行を持つ。
+    let derived = gx_shown(&place, &["--row", "docs/design/toy.md#c"]);
+    assert_eq!(derived.lines().next(), Some("write-set=derived"), "項目の前に derived の 1 行: {derived}");
+    let block = gx_block(&derived, "crate::shape::Gadget");
+    assert_eq!(gx_six(&block), ["14", "0", "4", "1", "1", "1"], "外の件数を出さない: {block:?}");
+    assert!(gx_sites(&block, "refs").iter().all(|line| !line.ends_with(" 外")), "外の印を付けない: {block:?}");
+    assert!(block.iter().any(|line| line.starts_with("  refs: 本体 13・test 1・file 4") && !line.contains('外')), "{block:?}");
+    assert_eq!(gx_items(&derived), got, "項目は同じ節の名指し: {derived}");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (b) の外の印と列ごとの外の件数と rows 列（行 a の write-set は shape.rs と shape/tests.rs）。
+fn gx_check_marks(shown: &str) {
+    let gadget = gx_block(shown, "crate::shape::Gadget");
+    assert_eq!(gx_six(&gadget), ["14(外6)", "0(外0)", "4(外1)", "1(外1)", "1(外0)", "1(外1)"], "列ごとの外の件数: {gadget:?}");
+    let marked: Vec<String> = gx_sites(&gadget, "refs").into_iter().filter(|line| line.ends_with(" 外")).filter_map(|line| line.split(' ').next().map(str::to_owned)).collect();
+    assert_eq!(marked, gx_sorted([gx_places(GX_USER_RS, &[1, 3, 3, 4, 6]), gx_places(GX_LIB_RS, &[1])].concat()), "外の印は write-set の外の file の site だけ: {gadget:?}");
+    assert!(gadget.iter().any(|line| line.starts_with("  refs: 本体 13・test 1・file 4・外 6")), "{gadget:?}");
+    assert_eq!(gx_field(&gadget, "rows"), "3", "rows 列は自分を除く b・c と contracts/t.toml の t1: {gadget:?}");
+    let rows: Vec<&str> = gadget.iter().filter(|line| line.starts_with("    ") && line.contains('#')).map(|line| line.trim()).collect();
+    let listed = [
+        "contracts/t.toml#t1 広げる: crates/toy/src/shape.rs, crates/toy/src/shape/tests.rs, crates/toy/src/user.rs",
+        "docs/design/toy.md#b 広げる: crates/toy/src/lib.rs, crates/toy/src/shape.rs, crates/toy/src/shape/tests.rs",
+        "docs/design/toy.md#c write-set=derived",
+    ];
+    assert_eq!(rows, listed, "ほかの行の閉包を広げる file（欄を持たない行は derived）: {gadget:?}");
+    let make = gx_block(shown, "crate::shape::make");
+    assert_eq!(gx_six(&make), ["2(外1)", "2(外1)", "0(外0)", "0(外0)", "1(外0)", "0(外0)"], "{make:?}");
+    assert!(gx_block(shown, "ghost").first().is_some_and(|line| line.contains("unresolved refs=0(外0) ")), "解けない項目は 0 件: {shown}");
+    assert!(gx_block(shown, "run").first().is_some_and(|line| line.starts_with("- run: ambiguous:2 ")), "{shown}");
+}
+
+/// (c) 索引の無い周の show は偽の宣言を 1 回撃って表を出し（2 回目は撃たない）、生きた持ち主の印の周は command を撃たず子の終わりまで待ち
+/// （経過が子の sleep 以上）失敗の記録を `index=unavailable:<語>` で出し、rc 1 の偽の宣言の周は `index=unavailable:rc`・2 key の無い repo は
+/// `index=unavailable:undeclared` で、どれも rc 0。片方の key だけの repo と引けない行・解けない ref は rc 2、build に `--item` か `--row` を渡すと
+/// stderr が未知の引数を名乗って rc 2。
+#[test]
+fn pipe_index_show_assembles_waits_for_the_owner_and_names_what_it_cannot_show() {
+    let place = gx_place(true);
+    let first = gx_shown(&place, &["--item", "crate::shape::Gadget"]);
+    assert!(first.starts_with("- crate::shape::Gadget: resolved refs=14 "), "索引の無い周も表を出す: {first}");
+    assert_eq!((place.calls("scip"), place.calls("roles")), (1, 1), "偽の宣言を 1 回撃つ");
+    assert_eq!(gx_shown(&place, &["--item", "crate::shape::Gadget"]), first, "2 回目は撃たず同じ表");
+    assert_eq!(place.calls("scip"), 1, "撃たない");
+    let key = place.names().iter().find_map(|name| name.strip_suffix(".tsv").map(str::to_owned)).unwrap_or_default();
+    for suffix in ["tsv", "rec"] {
+        assert!(fs::remove_file(place.dir().join(format!("{key}.{suffix}"))).is_ok(), "{suffix} を外す");
+    }
+    assert!(fs::write(place.dir().join(format!("{key}.rec")), "schema=1\nfailed=rc\n").is_ok(), "失敗の記録を置く");
+    let started = Instant::now();
+    assert!(fs::write(place.dir().join(format!("{key}.lock")), format!("{}\n", idxb_sleeper())).is_ok(), "子の印を置く");
+    let waited = place.show(&["--item", "crate::shape::Gadget"]);
+    assert!(started.elapsed() >= Duration::from_secs(1), "子の終わりまで待つ: {:?}", started.elapsed());
+    assert_eq!((waited.status.code(), stdout_of(&waited)), (Some(i32::from(RC_OK)), "index=unavailable:rc\n".to_owned()), "{}", told_index(&waited));
+    assert_eq!(place.calls("scip"), 1, "待つ周は撃たない（回数は増えない）");
+    clean(&[&place.repo, &place.state]);
+    gx_check_unavailable();
+    gx_check_refusals();
+}
+
+/// (c) の組めない周（rc 1 の偽の宣言）と 2 key の無い repo は `index=unavailable:<語>` の 1 行で rc 0。
+fn gx_check_unavailable() {
+    let failing = gx_place(true);
+    idxb_script(&failing, (IDXB_SCIP, "scip"), "exit 1\n");
+    let failed = failing.show(&["--item", "crate::shape::Gadget"]);
+    assert_eq!((failed.status.code(), stdout_of(&failed)), (Some(i32::from(RC_OK)), "index=unavailable:rc\n".to_owned()), "{}", told_index(&failed));
+    clean(&[&failing.repo, &failing.state]);
+    let bare = gx_place(false);
+    let undeclared = bare.show(&["--item", "crate::shape::Gadget", "--row", "docs/design/toy.md#a"]);
+    assert_eq!((undeclared.status.code(), stdout_of(&undeclared)), (Some(i32::from(RC_OK)), "index=unavailable:undeclared\n".to_owned()), "{}", told_index(&undeclared));
+    assert_eq!((bare.calls("scip"), bare.calls("roles"), bare.dir().exists()), (0, 0, false), "撃たず置き場も作らない");
+    clean(&[&bare.repo, &bare.state]);
+}
+
+/// (c) の rc 2（片方の key だけの宣言・引けない行・解けない ref）と build に渡した `--item` / `--row` の使い方の誤り。
+fn gx_check_refusals() {
+    let decl ="index-scip = [\"index-fake-scip {tree} {out}\"]\n";
+    let one = gx_place_with(decl);
+    let line = fs::read_to_string(one.repo.join(".vessel.toml")).unwrap_or_default().lines().position(|text| text.starts_with("index-scip")).map_or(0, |at| at + 1);
+    let half = one.show(&["--item", "crate::shape::Gadget"]);
+    assert_eq!(half.status.code(), Some(i32::from(RC_BROKEN)), "片方の key だけは rc 2: {}", told_index(&half));
+    assert!(stderr_of(&half).contains("index-roles") && stderr_of(&half).contains(&format!("line={line}")), "key の名と行番号: {}", stderr_of(&half));
+    assert_eq!(one.calls("scip"), 0, "撃たない");
+    clean(&[&one.repo, &one.state]);
+    let place = gx_place(true);
+    let missing = place.show(&["--row", "docs/design/toy.md#zz"]);
+    assert_eq!(missing.status.code(), Some(i32::from(RC_BROKEN)), "引けない行は rc 2: {}", told_index(&missing));
+    assert!(stderr_of(&missing).contains("docs/design/toy.md#zz"), "{}", stderr_of(&missing));
+    let no_ref = place.show(&["--ref", "no-such-ref", "--item", "x"]);
+    assert_eq!(no_ref.status.code(), Some(i32::from(RC_BROKEN)), "解けない ref は rc 2: {}", told_index(&no_ref));
+    let nothing = place.show(&[]);
+    assert_eq!(nothing.status.code(), Some(i32::from(RC_REFUSED)), "項目が 1 つも無い周は断る: {}", told_index(&nothing));
+    for flag in ["--item", "--row"] {
+        let build = place.build(None, &[flag, "crate::shape::Gadget"]);
+        assert_eq!(build.status.code(), Some(i32::from(RC_BROKEN)), "build に {flag} は使い方の誤り: {}", told_index(&build));
+        assert!(stderr_of(&build).contains(&format!("未知の引数 {flag}")), "未知の引数を名乗る: {}", stderr_of(&build));
+    }
+    clean(&[&place.repo, &place.state]);
+}
+
+/// 審査の材料の dir（偽 PASS の lens で受付から審査まで通した便・行 `row` の pointer は節 2 の行）。
+fn gx_review_dir(place: &IdxPlace, row: &str) -> PathBuf {
+    let out = intake_raw(&place.repo, &place.state, &format!("docs/design/toy.md#{row}"), &format!("s2-{row}"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "受付から審査まで通る: {}", told_index(&out));
+    review_dir(&place.state, &run_id_of(&out))
+}
+
+/// 材料の dir の file の名の列から index.txt を除いた列。
+fn gx_others(dir: &Path) -> Vec<String> {
+    dir_names(dir).into_iter().filter(|name| name != "index.txt").collect()
+}
+
+/// (d) 偽の lens で受付から審査まで通した便の材料の dir の index.txt は、同じ ref の `show --row` の出力と byte で等しい（write-set は表の行の欄から
+/// 読む＝欄を持たず tests の欄で導く行は契約の写しが導出値の write-set を持っても `write-set=derived` の 1 行）。索引を作らない周は
+/// `index=unavailable:absent` の 1 行・撃ち中の持ち主が生きている周は `building`・宣言の無い repo は file を置かず、材料の file の列は今のまま。
+#[test]
+fn pipe_index_show_material_equals_the_show_row_output_and_says_why_when_unavailable() {
+    let place = gx_place(true);
+    let built = place.build(None, &[]);
+    assert_eq!(idxb_word(&idxb_line(&built)), "built", "{}", told_index(&built));
+    let dir = gx_review_dir(&place, "e");
+    let written = fs::read(dir.join("index.txt")).unwrap_or_default();
+    let shown = place.show(&["--row", "docs/design/toy.md#e"]);
+    assert_eq!(shown.status.code(), Some(i32::from(RC_OK)), "{}", told_index(&shown));
+    assert_eq!(written, shown.stdout, "index.txt は show --row と byte で等しい: {}", String::from_utf8_lossy(&written));
+    assert_eq!(gx_items(&stdout_of(&shown)), ["crate::shape::Gadget", "describe"], "touches の無い行は節の名指しだけ: {}", stdout_of(&shown));
+    let names = gx_others(&dir);
+    let derived = gx_review_dir(&place, "f");
+    let text = fs::read_to_string(derived.join("index.txt")).unwrap_or_default();
+    assert_eq!(text.lines().next(), Some("write-set=derived"), "契約の写しの write-set は読まない: {text}");
+    assert!(!text.contains('外'), "derived の行は外を付けない: {text}");
+    clean(&[&place.repo, &place.state]);
+    gx_check_material_unavailable(&names);
+}
+
+/// (d) の索引を作らない周（absent）・撃ち中の持ち主が生きている周（building）・宣言の無い repo（file を置かず材料の列は今のまま）。
+fn gx_check_material_unavailable(names: &[String]) {
+    let absent = gx_place(true);
+    let dir_absent = gx_review_dir(&absent, "e");
+    assert_eq!(fs::read_to_string(dir_absent.join("index.txt")).unwrap_or_default(), "index=unavailable:absent\n", "索引を作らない周");
+    assert_eq!(absent.calls("scip"), 0, "審査は索引を撃たない");
+    assert_eq!(gx_others(&dir_absent), names, "索引を名乗る周も index.txt のほかの列は同じ");
+    clean(&[&absent.repo, &absent.state]);
+    let busy = gx_place(true);
+    let key = idxb_field(&idxb_line(&busy.build(None, &[])), "key");
+    for suffix in ["tsv", "rec"] {
+        assert!(fs::remove_file(busy.dir().join(format!("{key}.{suffix}"))).is_ok(), "{suffix} を外す");
+    }
+    let spawned = Command::new("sleep").arg("20").spawn();
+    assert!(spawned.is_ok(), "sleep を起こせる");
+    let Ok(mut child) = spawned else {
+        return;
+    };
+    assert!(fs::write(busy.dir().join(format!("{key}.lock")), format!("{}\n", child.id())).is_ok(), "生きた持ち主の印を置く");
+    let dir_busy = gx_review_dir(&busy, "e");
+    assert!(child.kill().is_ok() && child.wait().is_ok(), "子を止める");
+    assert_eq!(fs::read_to_string(dir_busy.join("index.txt")).unwrap_or_default(), "index=unavailable:building\n", "作り中の周");
+    clean(&[&busy.repo, &busy.state]);
+    let plain = gx_place(false);
+    let dir_plain = gx_review_dir(&plain, "e");
+    assert!(!dir_plain.join("index.txt").exists(), "宣言の無い repo は file を置かない");
+    assert_eq!(dir_names(&dir_plain), names, "材料の file の列は今のまま");
+    clean(&[&plain.repo, &plain.state]);
+}

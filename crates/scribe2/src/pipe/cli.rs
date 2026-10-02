@@ -171,7 +171,7 @@ impl PipeCommand {
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R（cwd は読まない＝--state-dir の無い周と便の写し面の無い周は要る）] [--rules PATH] [stop: --all [{REASON_FLAG} WORDS（live な便が 2 本以上の周は要る）]|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD|memo-lens MEMO] [run|resume: --drive] [land: --terminal-only|--detection-only] [--runner CMD] [flags]\nusage: {NAME} pipe land-window [--state-dir D] --repo R [{WINDOW_WAIT_FLAG} N]（pipeline 外の merge の前置: 開けば rc 0 の clear・待ちが切れれば rc 1 の busy）\nusage: {NAME} pipe regate --run ID {REASON_FLAG} WORDS [--state-dir D] [--repo R]（判定 FAIL の Gated を裁定の逐語つきで同じ worktree の Implemented へ 1 段戻す・最新の Gated につき 1 回）\nusage: {NAME} pipe follow --run ID [--state-dir D] [--repo R]（終端でない便の木だけを main の先端へ載せ替えて段を Implemented へ戻す・gate は撃たない・衝突は木を戻して断る）\nusage: {NAME} pipe anchor-sync --repo R [--state-dir D] [--rules PATH]（着地が揃えなかった anchor の index と作業の木のうち着地前の中身のままの path だけを main の先端へ戻して印を外す・利用者の編集は触らない）\nusage: {NAME} pipe review --ref SHA --repo R --state-dir S --lens CMD [--rules PATH]（設計の PR の head の commit で変わった契約表の行ごとに機械の検査と lens を撃ち、行ごとの記録と ref の記録を置き場に書いて [ROW-REVIEW] の行を返す・pass は rc 0・fail と pending と stale は rc 1・組めない周は rc 2）\nusage: {NAME} pipe index build --repo R --state-dir S [--ref SHA] [--rules PATH]（ref〔既定は HEAD〕の commit の code の索引を、宣言の 2 key の command で組んで置き場へ置き、[INDEX] の 1 行を返す・built と cached は rc 0・failed は rc 1・宣言の不備と組めない周は rc 2・宣言の無い repo は undeclared で rc 0）"
+        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R（cwd は読まない＝--state-dir の無い周と便の写し面の無い周は要る）] [--rules PATH] [stop: --all [{REASON_FLAG} WORDS（live な便が 2 本以上の周は要る）]|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD|memo-lens MEMO] [run|resume: --drive] [land: --terminal-only|--detection-only] [--runner CMD] [flags]\nusage: {NAME} pipe land-window [--state-dir D] --repo R [{WINDOW_WAIT_FLAG} N]（pipeline 外の merge の前置: 開けば rc 0 の clear・待ちが切れれば rc 1 の busy）\nusage: {NAME} pipe regate --run ID {REASON_FLAG} WORDS [--state-dir D] [--repo R]（判定 FAIL の Gated を裁定の逐語つきで同じ worktree の Implemented へ 1 段戻す・最新の Gated につき 1 回）\nusage: {NAME} pipe follow --run ID [--state-dir D] [--repo R]（終端でない便の木だけを main の先端へ載せ替えて段を Implemented へ戻す・gate は撃たない・衝突は木を戻して断る）\nusage: {NAME} pipe anchor-sync --repo R [--state-dir D] [--rules PATH]（着地が揃えなかった anchor の index と作業の木のうち着地前の中身のままの path だけを main の先端へ戻して印を外す・利用者の編集は触らない）\nusage: {NAME} pipe review --ref SHA --repo R --state-dir S --lens CMD [--rules PATH]（設計の PR の head の commit で変わった契約表の行ごとに機械の検査と lens を撃ち、行ごとの記録と ref の記録を置き場に書いて [ROW-REVIEW] の行を返す・pass は rc 0・fail と pending と stale は rc 1・組めない周は rc 2）\nusage: {NAME} pipe index build --repo R --state-dir S [--ref SHA] [--rules PATH]（ref〔既定は HEAD〕の commit の code の索引を、宣言の 2 key の command で組んで置き場へ置き、[INDEX] の 1 行を返す・built と cached は rc 0・failed は rc 1・宣言の不備と組めない周は rc 2・宣言の無い repo は undeclared で rc 0）\nusage: {NAME} pipe index show --repo R --state-dir S [--ref SHA] [--rules PATH] (--row DOC#ID | --item PATH)…（ref〔既定は HEAD〕の commit の索引から、行の touches と節の名指し・名を項目に 7 列の件数と site と write-set の外の印と母集団を出す・組めない周は index=unavailable:<語>・宣言の無い repo は index=unavailable:undeclared で rc 0・宣言の不備と引けない行と解けない ref は rc 2）"
     )
 }
 
@@ -214,7 +214,8 @@ pub fn dispatch(args: &[String]) -> Outcome {
     // **閉包の検査は subcommand を選んだ直後の 1 回**（設計 pipeline.md §14 約束 5）: 未知の flag と `--help` を
     // manifest も state も読まずに断る＝`pipe land --help` が着地を走らせない（2026-09-15 の回帰）。
     if let Some(command) = verb {
-        if let Err(error) = crate::cli_args::parse(args.get(1..).unwrap_or_default(), allowed_of(command)) {
+        let allowed = allowed_of(command, args.get(1).map(String::as_str) == Some("show"));
+        if let Err(error) = crate::cli_args::parse(args.get(1..).unwrap_or_default(), allowed) {
             return crate::cli_args::refusal("pipe", &error, usage());
         }
     }
@@ -528,6 +529,8 @@ fn subcommand(
         // 設計の PR の head の commit の変わった行ごとに審査して記録を書く（設計 row-review.md §3・merge の前の門が読む）。
         Some(PipeCommand::Review) => super::review_ref::review(args, manifest, policy),
         // 外の道具で code の索引を組んで置き場へ置く（設計 reverse-index.md §4 形 9・撃つのは組み立ての 1 本）。
+        // 逆引きの表は同じ索引を組み立ての 1 本で得て項目ごとに出す（設計 reverse-index.md §6 形 1）。
+        Some(PipeCommand::Index) if args.get(1).map(String::as_str) == Some("show") => super::review::index::show(args, manifest, policy),
         Some(PipeCommand::Index) => super::dispatch::index_build::build(args, manifest, policy),
         None => Outcome::failed(RC_REFUSED, vec![usage()]),
     }

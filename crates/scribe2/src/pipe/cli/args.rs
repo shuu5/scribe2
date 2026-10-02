@@ -187,12 +187,16 @@ const ALLOWED_REGATE: &[cli_args::Allowed] =
 const ALLOWED_REVIEW: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--ref"), value("--lens")];
 /// `pipe index`（設計 reverse-index.md §4 形 9・`--ref` は索引を組む commit・無ければ HEAD）。
 const ALLOWED_INDEX: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--ref")];
+/// `pipe index show`（設計 reverse-index.md §6 形 1・`--row` と `--item` は show だけが受ける＝build に渡すと未知の引数）。
+const ALLOWED_INDEX_SHOW: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--ref"), value("--row"), value("--item")];
 /// `pipe follow`（設計 pipeline.md §52）。
 const ALLOWED_FOLLOW: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--run")];
 
 /// subcommand が受ける flag の集合（[`super::dispatch`] が subcommand を選んだ直後に [`crate::cli_args::parse`] へ渡す）。
-pub(super) const fn allowed_of(command: PipeCommand) -> &'static [Allowed] {
+/// `shown` は subcommand の次の語が `show` か（`pipe index` だけが build と show で受ける flag を分ける）。
+pub(super) const fn allowed_of(command: PipeCommand, shown: bool) -> &'static [Allowed] {
     match command {
+        PipeCommand::Index if shown => ALLOWED_INDEX_SHOW,
         PipeCommand::Intake => ALLOWED_INTAKE,
         PipeCommand::Preflight => ALLOWED_PREFLIGHT,
         PipeCommand::Spawn => ALLOWED_SPAWN,

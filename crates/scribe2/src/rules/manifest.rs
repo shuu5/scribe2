@@ -754,6 +754,7 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
 fn check_declared(found: &mut Manifest, errors: &mut Vec<RuleError>) {
     check_duplicate_ids(&found.rows, errors);
     check_class_commands(found, errors);
+    check_permit_rows(found, errors);
     check_duplicate_labels(&found.accounts, errors);
     check_duplicate_groups(&found.groups, errors);
     super::groups::check_tiers(&found.groups, errors);
@@ -1363,6 +1364,29 @@ fn check_class_commands(found: &Manifest, errors: &mut Vec<RuleError>) {
                 let reason = format!("語列が禁じる語列 {} を含む（受付が先に断る死に値）", hit.sequence);
                 errors.push(RuleError::new(row.line, format!("{} の value の要素 {element:?} の{reason}", row.id)));
             }
+        }
+    }
+}
+
+/// 上限の許可の対象の列（kind [`RuleKind::PipePermitRows`]・enabled は問わない）の要素ごとの閉じ（設計 limit-permit.md §18 約束 3）。
+/// 要素が manifest の行の id でない周と、その行の kind が [`RuleKind::has_permit_reader`] の false の周を、行 id・要素・行番号を
+/// 名指して 1 件ずつ断る（kind の列は分けが true の kind を [`super::ALL`] の順に ` / ` で継ぐ）。
+fn check_permit_rows(found: &Manifest, errors: &mut Vec<RuleError>) {
+    let readers: Vec<&str> = super::ALL.iter().filter(|kind| kind.has_permit_reader()).map(|kind| kind.as_str()).collect();
+    let readers = readers.join(" / ");
+    for row in found.rows.iter().filter(|row| row.kind == RuleKind::PipePermitRows) {
+        let RuleValue::List(ref elements) = row.value else {
+            continue;
+        };
+        for element in elements {
+            let reason = match found.get(element) {
+                None => format!("が manifest の行の id でない（上限の許可の読み手を持つ kind は {readers}）"),
+                Some(named) if !named.kind.has_permit_reader() => {
+                    format!("の行の kind {} は上限の許可の読み手を持たない（上限の許可の読み手を持つ kind は {readers}）", named.kind.as_str())
+                }
+                Some(_) => continue,
+            };
+            errors.push(RuleError::new(row.line, format!("{} の value の要素 \"{element}\" {reason}", row.id)));
         }
     }
 }

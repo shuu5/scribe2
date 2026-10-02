@@ -1284,14 +1284,19 @@ fn add_worktree(repo: &Path, worktree: &Path, run: &str, base: &str) -> Result<(
 ///
 /// 各項目は**接頭辞（`+` / `-`）を剥がした素の path** で書く（設計 contract-source.md §3・接頭辞は受付の宣言だけの
 /// 文法で、guard は素の path を読む）。剥がす規則は [`refuse::normalize`] の 1 本で、dir 項目の末尾 `/` はそのまま残る
-/// （guard の dir 判定は既存のまま）。
+/// （guard の dir 判定は既存のまま）。置き場だけの項目（`=`・中身を変えない）は書かない＝guard はその file への編集を
+/// write-set の外として止める（gate の段 ① も diff に在れば落とす）。
 fn write_policy(worktree: &Path, write_set: &[String]) -> Result<PathBuf, String> {
     let git_dir = git_line(worktree, &["rev-parse", "--absolute-git-dir"])
         .ok_or_else(|| format!("{} の git dir を読めない", worktree.display()))?;
     let dir = PathBuf::from(git_dir).join(NAME);
     std::fs::create_dir_all(&dir).map_err(|err| format!("{} を作れない: {err}", dir.display()))?;
     let path = dir.join(WRITE_SET_FILE);
-    let plain: Vec<String> = write_set.iter().map(|item| refuse::normalize(item)).collect();
+    let plain: Vec<String> = write_set
+        .iter()
+        .filter(|item| !item.starts_with(refuse::PLACE_ONLY_FILE))
+        .map(|item| refuse::normalize(item))
+        .collect();
     let body = format!("{}\n", plain.join("\n"));
     std::fs::write(&path, body).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
     Ok(path)

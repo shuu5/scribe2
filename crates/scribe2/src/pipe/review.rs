@@ -42,14 +42,20 @@
 //! **write-set の外の材料**（設計 contract-source.md §51 行 bc）: 契約の本文が名指す write-set の外の物（`.rs` の item・要約・
 //! data file の鍵の行・依存の表・親 module の宣言・depends の相手の行）を子 module `outside` が組み、本文が空でない周だけ
 //! [`OUTSIDE_FILE`] として置く（約束の行と同じ形）。lens は `{outside}` の穴を名ごとに cap の残りで埋める（[`outside_block`]）。
+//!
+//! **逆引きの表**（設計 reverse-index.md §6・§7 (a)・行 c）: 子 module `index` が審査の木の commit の索引から契約の design の行の表を組み、
+//! 状態が ready でない周は 1 行で、材料の [`INDEX_FILE`] として既存の材料の後に置く（undeclared の repo は置かない）。lens は
+//! `{index}` の穴を [`index_block`] で outside の後ろの残りに項目ごとに収める。
 
 mod base;
+pub(in crate::pipe) mod index;
 mod items;
 mod judgement;
 mod outside;
 mod requirements;
 pub(in crate::pipe) mod tree;
 pub use base::base_block;
+pub use index::index_block;
 pub use outside::outside_block;
 pub use judgement::{judgement_of, review_dir, review_path, unaddressed, verdict_of};
 pub use judgement::{Judgement, Rework, ROW_SAME_KIND_STOP};
@@ -92,6 +98,9 @@ pub const OUTSIDE_FILE: &str = "outside.txt";
 
 /// done の番号つき項目の本文（項目が 1 個以上で Promised でない行だけ契約の写しの隣に置く・lens が契約の本文の後ろに足す・§64）。
 pub const ITEMS_FILE: &str = "items.txt";
+
+/// `{index}` の穴の本文（審査の木の commit の索引から組んだ逆引きの表・索引を名乗る repo だけ契約の写しの隣に置く・§6・§7 (a)）。
+pub const INDEX_FILE: &str = "index.txt";
 
 /// lens の scope の unit 名に載せる段の名。
 const REVIEW_STAGE: &str = "review";
@@ -318,6 +327,10 @@ pub fn review(entry: &Review<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
+    // 逆引きの表は既存の材料を置いた後に置く（先撃ちは置かない・undeclared の repo は file を置かない・§7 (a)）。
+    if let Err(reason) = index::keep(&dir, (entry.state_dir, entry.repo), head.as_deref(), &entry.contract.design) {
+        return broken(reason);
+    }
     // 行の審査の記録を写せる周（行の digest・材料の鍵・code の木の鍵・lens の版が同じ actual の PASS・設計 row-review.md §5）と、先撃ちの
     // 判定を使い回せる周（材料の鍵・判定・lens の字・model の行が同じ・置き場の木が審査の木・設計 dispatcher.md §27 形 ac 1・pipeline.md
     // §61 形 5・§64 形 5）は lens を撃たない（木も作らない）。行の審査の読み口が先で、先撃ちの読み口は行 e まで残す。

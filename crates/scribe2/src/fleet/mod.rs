@@ -111,6 +111,10 @@ pub enum EventKind {
     /// memo の審査の判定を残した（dispatcher.md §41・ADR-0085・[`Case::Judged`]・`bead` = memo の id・`detail` = 判定の語）。
     /// **便に紐づかない**。
     MemoJudged,
+    /// 上限の許可の記帳（設計 limit-permit.md §18・[`Shape::Permit`]・`bead` = 許可の対象の契約の id・`detail` = 閉じた key の列
+    /// 〔許可 `rule=<行 id> value=<n> until=<ts> ruling=<裁定 id>`・取り消し `rule=<行 id> revoked`〕）。actor は machine（人の言葉は
+    /// 結んだ裁定の event が持つ）。**便に紐づかない**。書き手は許可の口だけ（`fleet record` は断る）。
+    LimitPermitted,
 }
 
 /// [`EventKind`] の全 variant。
@@ -145,6 +149,7 @@ pub const KINDS: &[EventKind] = &[
     EventKind::IntakeRefused,
     EventKind::LifecycleCutover,
     EventKind::MemoJudged,
+    EventKind::LimitPermitted,
 ];
 
 impl EventKind {
@@ -181,6 +186,7 @@ impl EventKind {
             Self::IntakeRefused => "IntakeRefused",
             Self::LifecycleCutover => "LifecycleCutover",
             Self::MemoJudged => "MemoJudged",
+            Self::LimitPermitted => "LimitPermitted",
         }
     }
 
@@ -219,7 +225,8 @@ impl EventKind {
             | Self::TurnEndUnjudged
             | Self::IntakeRefused
             | Self::LifecycleCutover
-            | Self::MemoJudged => ACTOR_MACHINE,
+            | Self::MemoJudged
+            | Self::LimitPermitted => ACTOR_MACHINE,
         }
     }
 
@@ -257,6 +264,7 @@ impl EventKind {
             | Self::IntakeRefused
             | Self::LifecycleCutover
             | Self::MemoJudged => Shape::Case,
+            Self::LimitPermitted => Shape::Permit,
         }
     }
 
@@ -301,6 +309,9 @@ pub enum Shape {
     /// 案件の一生の 5 kind（本体は [`Case`]・`run` / `stage` / `seat` / `pid` を持たない・`bead` は kind ごと・設計
     /// fleet-event-log.md §12）。5 つを形では見分けない（見分けは kind で行う）。
     Case,
+    /// 上限の許可の記帳（`bead` と `detail` = 閉じた key の列が必須・`run` / `stage` / `seat` / `pid` / 口座残量の key / 登録の key /
+    /// 列の印の key を持たない・設計 limit-permit.md §18 約束 4）。
+    Permit,
 }
 
 /// [`Shape`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
@@ -316,6 +327,7 @@ pub const SHAPES: &[Shape] = &[
     Shape::Pressure,
     Shape::Group,
     Shape::Case,
+    Shape::Permit,
 ];
 
 /// 発話の経路（**閉じた 2 値**・設計 fleet-event-log.md §12・ADR-0087）。

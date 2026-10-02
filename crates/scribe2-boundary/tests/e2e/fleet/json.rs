@@ -423,14 +423,14 @@ fn fleet_replay_seat_retired_then_registered_resolves_the_last_row() {
     assert_eq!(before.registrations.len(), 1, "登録より前の退役は後の登録を消さない");
 }
 
-/// 形 4: `SeatRetired` は `Shape::Registration`・既定の actor は human・`KINDS` の 24 種目（30 種の末尾は memo の判定の
-/// `MemoJudged`・dispatcher.md §41）で、`fleet record` からは書けない（書き手は `seat retire` だけ・rc 1・log を作らない）。
+/// 形 4: `SeatRetired` は `Shape::Registration`・既定の actor は human・`KINDS` の 24 種目（31 種の末尾は上限の許可の
+/// `LimitPermitted`・limit-permit.md §18）で、`fleet record` からは書けない（書き手は `seat retire` だけ・rc 1・log を作らない）。
 #[test]
 fn fleet_replay_seat_retired_kind_is_a_registration_shape_and_record_refuses_it() {
     use vessel::fleet::Shape;
-    assert_eq!(KINDS.len(), 30, "母集団");
+    assert_eq!(KINDS.len(), 31, "母集団");
     assert_eq!(KINDS.get(23), Some(&EventKind::SeatRetired), "宣言順の 24 種目");
-    assert_eq!(KINDS.last(), Some(&EventKind::MemoJudged), "宣言順の末尾");
+    assert_eq!(KINDS.last(), Some(&EventKind::LimitPermitted), "宣言順の末尾");
     assert_eq!(EventKind::SeatRetired.shape(), Shape::Registration);
     assert_eq!(EventKind::SeatRetired.default_actor(), "human", "退役は人由来");
     assert_eq!(EventKind::parse("SeatRetired"), Some(EventKind::SeatRetired), "as_str ↔ parse の往復");
@@ -670,19 +670,117 @@ fn fleet_case_kind_utterance_is_not_counted_as_human() {
     assert_eq!(counted.rulings, 0, "裁定の数えは変わらない");
 }
 
-/// §12 歯 6: `KINDS` は 30 種で、25 番目から 5 つの字面が 5 つの名の順、末尾は `MemoJudged`（dispatcher.md §41）。既定の actor は
-/// 1 つ目だけ human（`MemoJudged` は machine）。5 つも `MemoJudged` も `Shape` が Run でなく、互いに同じ値。base は 29 種で RED。
+/// §12 歯 6: `KINDS` は 31 種で、25 番目から 5 つの字面が 5 つの名の順、その次が `MemoJudged`（dispatcher.md §41）で末尾は
+/// `LimitPermitted`（limit-permit.md §18）。既定の actor は 1 つ目だけ human（`MemoJudged` は machine）。5 つも `MemoJudged` も
+/// `Shape` が Run でなく、互いに同じ値。base は 30 種で RED。
 #[test]
 fn fleet_case_kind_kinds_are_appended_in_order() {
     use vessel::fleet::Shape;
-    assert_eq!(KINDS.len(), 30, "母集団");
+    assert_eq!(KINDS.len(), 31, "母集団");
     let tail: Vec<EventKind> = KINDS.iter().copied().skip(24).take(5).collect();
     assert_eq!(tail.iter().map(|kind| kind.as_str()).collect::<Vec<_>>(), CASE_KIND_NAMES, "25 番目から 5 つの字面");
     let actors: Vec<&str> = tail.iter().map(|kind| kind.default_actor()).collect();
     assert_eq!(actors, ["human", "machine", "machine", "machine", "machine"], "既定の actor");
-    assert_eq!(KINDS.last(), Some(&EventKind::MemoJudged), "宣言順の末尾");
+    assert_eq!(KINDS.get(KINDS.len() - 2), Some(&EventKind::MemoJudged), "base の末尾の kind は末尾の 1 つ前");
+    assert_eq!(KINDS.last(), Some(&EventKind::LimitPermitted), "宣言順の末尾");
     assert_eq!(EventKind::MemoJudged.default_actor(), "machine", "memo の判定は機械由来");
     let shapes: BTreeSet<String> = tail.iter().chain([&EventKind::MemoJudged]).map(|kind| format!("{:?}", kind.shape())).collect();
     assert_eq!(shapes.len(), 1, "5 つと MemoJudged は 1 つの形を共有する: {shapes:?}");
     assert!(tail.iter().all(|kind| kind.shape() != Shape::Run), "Run の形でない");
+}
+
+/// 上限の許可の記帳の見本 2 行（許可と取り消し・limit-permit.md §18 約束 4・並びは schema・ts・kind・bead・host・actor・detail）。
+const PERMIT_LINES: [&str; 2] = [
+    r#"{"schema":1,"ts":"2026-10-02T01:00:00Z","kind":"LimitPermitted","bead":"s2-m1","host":"h","actor":"machine","detail":"rule=gate.token_cap value=250000 until=2026-10-03T01:00:00Z ruling=q-1"}"#,
+    r#"{"schema":1,"ts":"2026-10-02T02:00:00Z","kind":"LimitPermitted","bead":"s2-m1","host":"h","actor":"machine","detail":"rule=gate.token_cap revoked"}"#,
+];
+
+/// 許可の行の組み立て（`bead` と `detail` を差し替え・`extra` は足す key の 1 組）。
+fn permit_line(bead: Option<&str>, detail: Option<&str>, extra: &str) -> String {
+    let bead = bead.map(|text| format!(r#""bead":"{text}","#)).unwrap_or_default();
+    let detail = detail.map(|text| format!(r#","detail":"{text}""#)).unwrap_or_default();
+    format!(r#"{{"schema":1,"ts":"2026-10-02T01:00:00Z","kind":"LimitPermitted",{extra}{bead}"host":"h","actor":"machine"{detail}}}"#)
+}
+
+/// (d) `KINDS` の末尾は `LimitPermitted` でその 1 つ前が base の末尾の `MemoJudged`・字面の往復・既定の actor は machine・形 `Permit` は
+/// この kind だけで `SHAPES` の末尾も `Permit`・口座残量の kind でない。
+#[test]
+fn fleet_limit_permitted_kind_and_shape_are_appended_last() {
+    use vessel::fleet::{Shape, SHAPES};
+    assert_eq!(KINDS.last(), Some(&EventKind::LimitPermitted), "KINDS の末尾");
+    assert_eq!(KINDS.get(KINDS.len() - 2), Some(&EventKind::MemoJudged), "その 1 つ前は base の末尾の kind");
+    assert_eq!(EventKind::LimitPermitted.as_str(), "LimitPermitted");
+    assert_eq!(EventKind::parse("LimitPermitted"), Some(EventKind::LimitPermitted), "as_str ↔ parse の往復");
+    assert_eq!(EventKind::LimitPermitted.default_actor(), "machine", "許可は機械の導出");
+    assert_eq!(EventKind::LimitPermitted.shape(), Shape::Permit);
+    let owners: Vec<&EventKind> = KINDS.iter().filter(|kind| kind.shape() == Shape::Permit).collect();
+    assert_eq!(owners, [&EventKind::LimitPermitted], "形 Permit を持つのはこの kind だけ（母集団 {} 種）", KINDS.len());
+    assert_eq!(SHAPES.last(), Some(&Shape::Permit), "SHAPES の末尾");
+    assert!(!EventKind::LimitPermitted.is_allowance(), "口座残量の kind ではない");
+}
+
+/// (e) 許可と取り消しの見本の 2 行は読めて（kind・bead・actor・detail・run は空・stage は無い）書き戻すと同じ行で、2 行の replay は便 0・席 0。
+#[test]
+fn fleet_limit_permitted_sample_lines_round_trip_and_make_no_run_or_seat() {
+    let mut events = Vec::new();
+    for (line, detail) in PERMIT_LINES.iter().zip(["rule=gate.token_cap value=250000 until=2026-10-03T01:00:00Z ruling=q-1", "rule=gate.token_cap revoked"]) {
+        let read = Event::from_line(line).expect("見本の行が読める");
+        assert_eq!(read.kind, EventKind::LimitPermitted, "kind");
+        assert_eq!((read.bead.as_str(), read.actor.as_str()), ("s2-m1", "machine"), "bead と actor");
+        assert_eq!(read.detail.as_deref(), Some(detail), "detail");
+        assert!(read.run.is_empty() && read.stage.is_none() && read.seat.is_none() && read.pid.is_none(), "run・stage・seat・pid は持たない");
+        assert_eq!(read.to_line(), *line, "書き戻すと同じ行");
+        events.push(read);
+    }
+    let state = replay(&events);
+    assert_eq!((state.runs.len(), state.seats.len()), (0, 0), "replay は便も席も作らない");
+}
+
+/// (f) bead の欠けと空・detail の欠け・`run`・`stage`・`seat`・`pid`・`account`・`rule`・`mark` を足した行は、欠けた key か足した key を
+/// 名指して読めず、形の外の detail 7 つは `detail` を名指して読めない。
+#[test]
+fn fleet_limit_permitted_rows_name_the_bad_key() {
+    let good = "rule=gate.token_cap revoked";
+    let cases = [
+        (permit_line(None, Some(good), ""), "bead"),
+        (permit_line(Some(""), Some(good), ""), "bead"),
+        (permit_line(Some("s2-m1"), None, ""), "detail"),
+        (permit_line(Some("s2-m1"), Some(good), r#""run":"r1","#), "run"),
+        (permit_line(Some("s2-m1"), Some(good), r#""stage":"Spawned","#), "stage"),
+        (permit_line(Some("s2-m1"), Some(good), r#""seat":"s1","#), "seat"),
+        (permit_line(Some("s2-m1"), Some(good), r#""pid":1,"#), "pid"),
+        (permit_line(Some("s2-m1"), Some(good), r#""account":"a1","#), "account"),
+        (permit_line(Some("s2-m1"), Some(good), r#""rule":"x","#), "rule"),
+        (permit_line(Some("s2-m1"), Some(good), r#""mark":"hold","#), "mark"),
+    ];
+    for (line, key) in cases {
+        let reason = Event::from_line(&line).expect_err("malformed で読む");
+        assert!(reason.contains(key), "理由は {key} を名指す: {reason}（{line}）");
+    }
+    for bad in [
+        "value=1 rule=gate.token_cap until=2026-10-03T01:00:00Z ruling=q-1",
+        "rule=gate.token_cap value=1 until=2026-10-03T01:00:00Z",
+        "rule=gate.token_cap value=1 until=2026-10-03T01:00:00Z ruling=q-1 extra",
+        "rule=gate.token_cap value=many until=2026-10-03T01:00:00Z ruling=q-1",
+        "rule=gate.token_cap value= until=2026-10-03T01:00:00Z ruling=q-1",
+        "rule=gate.token_cap value=1 until=2026-10-03T01:00Z ruling=q-1",
+        "rule=gate.token_cap revokd",
+    ] {
+        let line = permit_line(Some("s2-m1"), Some(bad), "");
+        let reason = Event::from_line(&line).expect_err("形の外の detail は読めない");
+        assert!(reason.contains("detail"), "理由は detail を名指す: {reason}（{bad}）");
+    }
+    Event::from_line(&permit_line(Some("s2-m1"), Some(good), "")).expect("非空虚の対: 形の中の行は読める");
+}
+
+/// (g) `fleet record --kind LimitPermitted` は rc 1 で「record では書けない」と断り、log を作らない（席が許可の event を字で書く経路を作らない）。
+#[test]
+fn fleet_limit_permitted_record_refuses_the_kind() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let out = run_fleet(&["record", "--kind", "LimitPermitted", "--run", "r1", "--bead", "b1", "--state-dir", &path]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "書き側で断る: {out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("record では書けない"), "{out:?}");
+    assert!(!store::events_path(&dir).exists(), "行を残さない");
+    fs::remove_dir_all(&dir).ok();
 }

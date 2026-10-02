@@ -470,12 +470,12 @@ fn fleet_stages_place_rate_limited_after_questioned() {
     assert_eq!(Stage::parse("RateLimited"), Some(Stage::RateLimited), "as_str ↔ parse の往復");
 }
 
-/// `KINDS` の並びが**宣言順**と一致し、母集団は 30 種で末尾の 14 個が `InstallRecorded`（`vessel update` が足した・設計
+/// `KINDS` の並びが**宣言順**と一致し、母集団は 31 種で末尾の 15 個が `InstallRecorded`（`vessel update` が足した・設計
 /// consumer-sync.md §5 (4)）→ `RunCost`（消費の 1 件・gate-cost.md §26 形 (2)）→ `RulingReceived`（run 無しの裁定・
 /// fleet-event-log.md §9）→ `GroupPressureNotified`（群の逼迫の通知・account-lifecycle.md §19 形 3）→ `GroupMoved` /
 /// `GroupMoveRefused` / `GroupMovePending`（群の移動の承認・断り・保留・account-lifecycle.md §20 形 5 / 6）→ `SeatRetired`（席の
 /// 登録 row の退役・account-lifecycle.md §24 形 4）→ 案件の一生の 5 kind（fleet-event-log.md §12）→ `MemoJudged`（memo の判定・
-/// dispatcher.md §41）。variant を足して列に足し忘れた周・件数だけ合って末尾が違う周はここで赤になる。
+/// dispatcher.md §41）→ `LimitPermitted`（上限の許可の記帳・limit-permit.md §18）。variant を足して列に足し忘れた周・件数だけ合って末尾が違う周はここで赤になる。
 #[test]
 fn fleet_kinds_follow_declaration_order() {
     assert!(
@@ -483,7 +483,7 @@ fn fleet_kinds_follow_declaration_order() {
         "KINDS の並びが宣言順と乖離している（母集団 {} 種）",
         KINDS.len()
     );
-    assert_eq!(KINDS.len(), 30, "母集団（列の印までの 16 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1 + 群の移動 3 + 登録 row の退役 1 + 案件の一生 5 + memo の判定 1）");
+    assert_eq!(KINDS.len(), 31, "母集団（列の印までの 16 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1 + 群の移動 3 + 登録 row の退役 1 + 案件の一生 5 + memo の判定 1 + 上限の許可 1）");
     assert_eq!(
         KINDS.get(16..),
         Some(
@@ -502,9 +502,10 @@ fn fleet_kinds_follow_declaration_order() {
                 EventKind::IntakeRefused,
                 EventKind::LifecycleCutover,
                 EventKind::MemoJudged,
+                EventKind::LimitPermitted,
             ][..]
         ),
-        "install → 消費 → 裁定 → 群の逼迫の通知 → 群の移動の承認・断り・保留 → 登録 row の退役 → 案件の一生の 5 kind → memo の判定が宣言順の末尾"
+        "install → 消費 → 裁定 → 群の逼迫の通知 → 群の移動の承認・断り・保留 → 登録 row の退役 → 案件の一生の 5 kind → memo の判定 → 上限の許可が宣言順の末尾"
     );
     assert_eq!(EventKind::InstallRecorded.as_str(), "InstallRecorded");
     assert_eq!(EventKind::parse("InstallRecorded"), Some(EventKind::InstallRecorded), "as_str ↔ parse の往復");
