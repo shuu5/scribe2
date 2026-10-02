@@ -2539,3 +2539,171 @@ fn end_gate_mark_stands_while_the_gate_fires_and_refuses_a_resume() {
     assert_eq!(stub_calls(&state), 1, "runner は 1 回のまま");
     clean(&[&repo, &state]);
 }
+
+// ───── runner の stdin に前の便の gate の FAIL の節（設計 pipeline.md §68・行 bl・接頭辞 `prior_fail_`） ─────
+//
+// 同じ bead の 1 本目が gate の FAIL で終端した後に、同じ bead で受付を撃ち直して 2 本目を作る（release の後の受付と同じ形）。
+// run id は `<bead>-<秒>` なので、2 本目の受付は 1 本目と秒を分ける。偽 runner は turn ごとに stdin を写し（`turn_runner`）、
+// 偽 lens は evidence と findings を指定した FAIL を返す。契約の verify 行は緑の stub なので lens まで届く。
+
+/// 1 本目の便の材料（偽 runner は 3 本の便で共有する＝stdin の番号は spawn の通し番号）。
+struct PriorRun {
+    /// 対象 repo。
+    repo: PathBuf,
+    /// 置き場。
+    state: PathBuf,
+    /// 1 本目の run id。
+    id: String,
+    /// 偽 runner の起動行。
+    runner: String,
+}
+
+/// 偽 lens の判定の行（FAIL・`evidence` と `findings` を指定）。
+fn fail_verdict(evidence: &str, findings: &str) -> String {
+    format!(
+        "{{\"verdict\":\"FAIL\",\"evidence\":\"{evidence}\",\"findings\":\"{findings}\",\"population\":\"{FAKE_POPULATION}\"}}"
+    )
+}
+
+/// 1 本目の gate の FAIL の findings（`teeth-nonvacuous` だけ 2・他の 7 観点は 0）。
+const PRIOR_FINDINGS: &str =
+    "contract-fit:0,teeth-nonvacuous:2,constitution:0,delete:0,stdlib:0,native:0,yagni:0,shrink:0";
+
+/// 1 本目を緑で Implemented まで通し、`evidence` と `findings` を返す偽 lens で gate の FAIL（rc 1）にして終端させる。
+/// `second` は偽 runner の 2 回目の turn の本文（3 回目は緑の commit）。
+fn prior_first(evidence: &str, findings: &str, second: String) -> PriorRun {
+    let (repo, state, id) = gate_run_intake();
+    let runner = turn_runner(&state, &[commit_turn("green"), second, commit_turn("green")]);
+    let out = end_gate_spawn(&repo, &state, &id, &runner, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let lens = fake_lens(&state.join("lens-fail"), &fail_verdict(evidence, findings));
+    let gated = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_REFUSED)), "1 本目は gate の FAIL: {}", stdout_of(&gated));
+    assert!(
+        gated_details(&state, &id).iter().any(|detail| detail.starts_with("verdict:FAIL")),
+        "Gated の detail は verdict:FAIL: {:?}",
+        gated_details(&state, &id)
+    );
+    PriorRun { repo, state, id, runner }
+}
+
+/// 同じ bead で受付を撃ち直した便の run id（run id の秒を前の便から分ける）。
+fn prior_intake(prior: &PriorRun) -> String {
+    std::thread::sleep(Duration::from_millis(1100));
+    intake_bead(&prior.repo, &prior.state, &design_pointer(), "s2-2e5")
+}
+
+/// 受付済みの便 `id` を偽 runner で spawn する（rc 0 を要求する）。
+fn prior_spawn(prior: &PriorRun, id: &str) {
+    let out = end_gate_spawn(&prior.repo, &prior.state, id, &prior.runner, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+}
+
+/// 同じ bead で受付を撃ち直して spawn した便の run id。
+fn prior_next(prior: &PriorRun) -> String {
+    let id = prior_intake(prior);
+    prior_spawn(prior, &id);
+    id
+}
+
+/// stdin から「## 前の便の gate の FAIL」節の本文（次の節の見出しの手前まで）を取る（節が無ければ `None`）。
+fn prior_body(stdin: &str) -> Option<String> {
+    let after = stdin.split("\n## 前の便の gate の FAIL\n").nth(1)?;
+    Some(after.split("\n## ").next().unwrap_or_default().to_owned())
+}
+
+/// (a) 1 本目が gate の FAIL（evidence に固有の語・findings は `teeth-nonvacuous:2` で他は 0）で終端した後の、同じ契約の 2 本目の
+/// stdin は、ほかの行の touches の節の後に節を持つ。節は 1 本目の run id・evidence の語・`teeth-nonvacuous:2` を持ち、
+/// `contract-fit:0` を持たない。1 本目の stdin には節が無い。
+#[test]
+fn prior_fail_section_carries_the_verdict_of_the_previous_run_after_touches() {
+    let prior = prior_first("hole-in-the-teeth-xyzzy", PRIOR_FINDINGS, commit_turn("green"));
+    let second = prior_next(&prior);
+    assert_ne!(second, prior.id, "2 本目は別の便");
+    assert!(prior_body(&stub_stdin(&prior.state, 1)).is_none(), "1 本目の stdin には節が無い");
+    let stdin = stub_stdin(&prior.state, 2);
+    let body = prior_body(&stdin).unwrap_or_else(|| panic!("2 本目の stdin に節が在る: {stdin}"));
+    for word in [prior.id.as_str(), "hole-in-the-teeth-xyzzy", "teeth-nonvacuous:2"] {
+        assert!(body.contains(word), "節は {word} を持つ: {body}");
+    }
+    assert!(!body.contains("contract-fit:0"), "0 件の観点は載らない: {body}");
+    assert!(body.contains("findings: teeth-nonvacuous:2\n"), "件数が 0 でない語だけ: {body}");
+    let (touches_at, section_at) = (stdin.find("\n## ほかの行の touches\n"), stdin.find("\n## 前の便の gate の FAIL\n"));
+    assert!(matches!((touches_at, section_at), (Some(t), Some(s)) if t < s), "touches → 前の便の gate の FAIL の順: {stdin}");
+    clean(&[&prior.repo, &prior.state]);
+}
+
+/// (b) 1 本目と契約の字が違う（行の title を変えた）2 本目の stdin には節が無い。
+#[test]
+fn prior_fail_section_is_absent_when_the_contract_text_differs() {
+    let prior = prior_first("hole-in-the-teeth-xyzzy", PRIOR_FINDINGS, commit_turn("green"));
+    write_contract(&prior.repo, &["verify", "title"], &[GATE_VERIFY, r#"title = "別の題""#]);
+    let _second = prior_next(&prior);
+    let stdin = stub_stdin(&prior.state, 2);
+    assert!(stdin.contains("別の題"), "2 本目は変えた契約を読む: {stdin}");
+    assert!(prior_body(&stdin).is_none(), "契約の字が違う便に節は無い: {stdin}");
+    clean(&[&prior.repo, &prior.state]);
+}
+
+/// (c) 1 本目が gate の FAIL・2 本目が runner の rc 非 0 で Failed の後の、同じ契約の 3 本目の stdin には節が無い（直前の 1 本だけを見る）。
+#[test]
+fn prior_fail_section_looks_only_at_the_previous_run() {
+    let prior = prior_first("hole-in-the-teeth-xyzzy", PRIOR_FINDINGS, "exit 1".to_owned());
+    let second = prior_intake(&prior);
+    let out = end_gate_spawn(&prior.repo, &prior.state, &second, &prior.runner, None);
+    assert!(prior_body(&stub_stdin(&prior.state, 2)).is_some(), "2 本目には節が在る: {}", stub_stdin(&prior.state, 2));
+    assert_eq!(
+        stages(&prior.state, &second).last().map(|(stage, _)| *stage),
+        Some(Some(Stage::Failed)),
+        "2 本目は Failed: {} / {}",
+        stdout_of(&out),
+        stderr_of(&out)
+    );
+    let _third = prior_next(&prior);
+    assert_eq!(stub_calls(&prior.state), 3, "runner は 3 回起きた");
+    let stdin = stub_stdin(&prior.state, 3);
+    assert!(prior_body(&stdin).is_none(), "直前の便が Failed の 3 本目に節は無い: {stdin}");
+    clean(&[&prior.repo, &prior.state]);
+}
+
+/// (d) 1 本目の gate の FAIL の後に `verdict.json` を読めない字に書き替えた便の 2 本目の節は、`verdict.json` を名指す理由の 1 行で、
+/// evidence の語を持たない。
+#[test]
+fn prior_fail_section_says_why_when_the_verdict_is_unreadable() {
+    let prior = prior_first("hole-in-the-teeth-xyzzy", PRIOR_FINDINGS, commit_turn("green"));
+    // 読めない判定の便は live と読まれ受付を断るので、書き替えは 2 本目の受付の後・spawn の前に行う。
+    let second = prior_intake(&prior);
+    fs::write(prior.state.join("pipe").join(&prior.id).join("verdict.json"), "これは判定ではない\n").unwrap_or_default();
+    prior_spawn(&prior, &second);
+    let stdin = stub_stdin(&prior.state, 2);
+    let body = prior_body(&stdin).unwrap_or_else(|| panic!("読めない判定の周も節は在る: {stdin}"));
+    assert!(body.contains("verdict.json を読めない"), "verdict.json を名指す理由: {body}");
+    assert!(!body.contains("hole-in-the-teeth-xyzzy") && !body.contains("findings:"), "判定の語は載らない: {body}");
+    assert_eq!(body.trim_end().lines().count(), 2, "1 文の行と理由の 1 行: {body}");
+    clean(&[&prior.repo, &prior.state]);
+}
+
+/// (e) evidence が 3000 字の判定の後の 2 本目の節の evidence は 2000 字で切れ、切った字数の 1 行を持つ。1 本目の後に `verdict.json` を
+/// `findings` の無い形に書き替えた便の 2 本目の節は `findings: なし` の 1 行を持つ。
+#[test]
+fn prior_fail_section_cuts_long_evidence_and_says_none_without_findings() {
+    let prior = prior_first(&"z".repeat(3000), PRIOR_FINDINGS, commit_turn("green"));
+    let _second = prior_next(&prior);
+    let stdin = stub_stdin(&prior.state, 2);
+    let body = prior_body(&stdin).unwrap_or_else(|| panic!("2 本目の stdin に節が在る: {stdin}"));
+    let line = body.lines().find(|line| line.starts_with("- evidence: ")).unwrap_or_default();
+    assert_eq!(line.matches('z').count(), 2000, "evidence は 2000 字で切れる");
+    assert!(body.contains("- evidence は 1000 字を切った"), "切った字数の 1 行: {body}");
+    clean(&[&prior.repo, &prior.state]);
+
+    let prior = prior_first("hole-in-the-teeth-xyzzy", PRIOR_FINDINGS, commit_turn("green"));
+    let verdict = prior.state.join("pipe").join(&prior.id).join("verdict.json");
+    fs::write(&verdict, "{\"verdict\":\"FAIL\",\"evidence\":\"no-lens-ran\"}\n").unwrap_or_default();
+    let _second = prior_next(&prior);
+    let stdin = stub_stdin(&prior.state, 2);
+    let body = prior_body(&stdin).unwrap_or_else(|| panic!("2 本目の stdin に節が在る: {stdin}"));
+    assert!(body.contains("no-lens-ran"), "書き替えた evidence: {body}");
+    assert!(body.contains("- findings: なし\n"), "findings の無い判定は findings: なし: {body}");
+    assert!(!body.contains("evidence は"), "短い evidence に切った字数の行は無い: {body}");
+    clean(&[&prior.repo, &prior.state]);
+}

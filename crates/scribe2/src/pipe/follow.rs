@@ -36,12 +36,14 @@ use super::gate::RC_INCONCLUSIVE;
 use super::land::MAIN_REF;
 use super::ratelimit::{choose_account, Pool};
 use super::refuse::SHRINK_FILE;
-use super::spawn::{red_round, spawn, Account, EndGate, EndGateHold, GateRed, Launch};
+use super::spawn::{red_round, spawn, Account, EndGate, EndGateHold, GateRed, Launch, PriorFail};
 use super::table::{repo_findings, Located};
 use super::{
-    base_of_run, contract_path, emit, git_line, git_ok, question_of_run, vessel_path, worktree_path, Emit, Precheck,
+    base_of_run, contract_path, emit, git_line, git_ok, question_of_run, vessel_path, verdict_path, worktree_path, Emit,
+    Precheck,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
+use crate::fleet::json_lite;
 use crate::fleet::store::{self, LockPolicy};
 use crate::fleet::{EventKind, Stage};
 use crate::polarity::{OnFailure, Polarity, Timing};
@@ -658,6 +660,8 @@ fn spawn_rounds(entry: &Turn<'_>, runner: Runner<'_>, account: Account<'_>) -> O
         let follow = section(entry.state_dir, entry.repo, entry.run);
         // 「途中再開」節も同じく stdin の組立にだけ効く（上限で止まった便と runner が死んだ便だけが持つ）。
         let resumed = resumption(entry.state_dir, entry.repo, entry.run);
+        // 「前の便の gate の FAIL」節も stdin の組立にだけ効く（毎 turn 置き場から読み直す）。
+        let prior_fail = prior_fail(entry.state_dir, entry.run, entry.bead);
         let outcome = spawn(
             budget,
             &Launch {
@@ -674,6 +678,7 @@ fn spawn_rounds(entry: &Turn<'_>, runner: Runner<'_>, account: Account<'_>) -> O
                 account,
                 gate: runner.gate,
                 red: red.take(),
+                prior_fail,
                 policy: entry.policy,
             },
         );
@@ -709,6 +714,66 @@ pub(crate) fn section(state_dir: &Path, repo: &Path, run: &str) -> Option<Sectio
         false => Vec::new(),
     };
     Some(Section { main, base, stale })
+}
+
+/// `verdict.json` の evidence を節に写す字数の上限（prompt の窓の大きさで判定の閾値ではない＝rules 行にしない・
+/// [`super::spawn`] の抜粋の上限と同じ読み・設計 pipeline.md §68 形 4）。
+const PRIOR_EVIDENCE_CHARS: usize = 2000;
+
+/// gate の FAIL で終端した便の `Gated` の detail の頭（設計 pipeline.md §68 形 1）。
+const FAIL_DETAIL: &str = "verdict:FAIL";
+
+/// 直前の便の gate の判定（設計 pipeline.md §68 形 1）: 置き場の replay で同じ bead の便のうち run id がこの便より小さい最大の
+/// 1 本が、段 `Gated`・最後の `Gated` の detail が `verdict:FAIL` で始まり、契約 file の字がこの便と同じ周だけ `Some`
+/// （直前より前の便は見ない・どちらかの契約 file が読めない周は `None`）。
+///
+/// 節の本文は `verdict.json` の evidence の 1 行（改行と tab は空白に畳み、2000 字まで・超えた周は切った字数の 1 行）と、件数が 0 でない
+/// findings の語（分類せず写す）。`findings` の無い判定と全部 0 の判定は `findings: なし`。`verdict.json` が無い・読めない・
+/// evidence を持たない周は、file の名と理由の 1 行にする（黙って落とさない）。
+pub(crate) fn prior_fail(state_dir: &Path, run: &str, bead: &str) -> Option<PriorFail> {
+    let events = store::read_all(state_dir).ok()?;
+    let state = crate::fleet::replay(&events);
+    let (id, prior) = state.runs.iter().rev().find(|(id, found)| found.bead == bead && id.as_str() < run)?;
+    if !matches!(prior.stage, Stage::Gated) {
+        return None;
+    }
+    let gated = events
+        .iter()
+        .rev()
+        .find(|event| event.run == *id && event.kind == EventKind::RunStage && event.stage == Some(Stage::Gated))?;
+    if !gated.detail.as_deref().is_some_and(|detail| detail.starts_with(FAIL_DETAIL)) {
+        return None;
+    }
+    let theirs = std::fs::read_to_string(contract_path(state_dir, id)).ok()?;
+    let ours = std::fs::read_to_string(contract_path(state_dir, run)).ok()?;
+    if theirs != ours {
+        return None;
+    }
+    let lines = verdict_lines(state_dir, id).unwrap_or_else(|reason| vec![reason]);
+    Some(PriorFail { run: id.clone(), lines })
+}
+
+/// [`prior_fail`] の本文の行（`verdict.json` を読めない周の `Err` は file の名と理由の 1 行）。
+fn verdict_lines(state_dir: &Path, id: &str) -> Result<Vec<String>, String> {
+    let path = verdict_path(state_dir, id);
+    let text = std::fs::read_to_string(&path).map_err(|err| format!("verdict.json を読めない: {err}"))?;
+    let pairs = json_lite::parse_object(text.trim()).map_err(|err| format!("verdict.json を読めない: {err}"))?;
+    let field = |key: &str| pairs.iter().find(|(found, _)| found == key).and_then(|(_, value)| value.as_str());
+    let evidence = field("evidence").ok_or_else(|| "verdict.json が evidence を持たない".to_owned())?;
+    let folded: String = evidence.chars().map(|c| if matches!(c, '\n' | '\r' | '\t') { ' ' } else { c }).collect();
+    let total = folded.chars().count();
+    let mut lines = vec![format!("evidence: {}", folded.chars().take(PRIOR_EVIDENCE_CHARS).collect::<String>())];
+    if total > PRIOR_EVIDENCE_CHARS {
+        lines.push(format!("evidence は {} 字を切った（{PRIOR_EVIDENCE_CHARS} 字まで写す）", total - PRIOR_EVIDENCE_CHARS));
+    }
+    let words: Vec<&str> = field("findings")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|word| !word.is_empty() && word.rsplit_once(':').is_none_or(|(_, count)| count.trim() != "0"))
+        .collect();
+    lines.push(if words.is_empty() { "findings: なし".to_owned() } else { format!("findings: {}", words.join(",")) });
+    Ok(lines)
 }
 
 /// 便の最後の `RunStage` の detail（無い・読めない周は `None`）。

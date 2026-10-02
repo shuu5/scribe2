@@ -385,6 +385,28 @@ fn end_gate(launch: &Launch<'_>, worktree: &Path) -> Outcome {
     }
 }
 
+/// 直前の便の gate の FAIL（設計 pipeline.md §68）: 便 id と、節の本文の行（器は分類せず写すだけ）。
+pub struct PriorFail {
+    /// 直前の便の run id。
+    pub run: String,
+    /// 本文の行（`verdict.json` を読めた周は evidence・切った字数・findings、読めない周は理由の 1 行）。
+    pub lines: Vec<String>,
+}
+
+impl PriorFail {
+    /// 「前の便の gate の FAIL」節（stdin に足す字・1 行目は直前の便の run id と 1 文）。
+    fn section(&self) -> String {
+        let mut body = format!(
+            "\n## 前の便の gate の FAIL\n- {}: 同じ契約の前の便は gate で次の理由で落ちた。同じ穴を作らない\n",
+            self.run
+        );
+        for line in &self.lines {
+            body.push_str(&format!("- {line}\n"));
+        }
+        body
+    }
+}
+
 /// 起動 1 回の材料。
 pub struct Launch<'a> {
     /// 便 id。
@@ -422,6 +444,9 @@ pub struct Launch<'a> {
     /// **前の周の門の赤**（輪の 2 周目以降だけ持つ・設計 pipeline.md §66 形 7）。在る周は同じ run の worktree と base を使い、
     /// runner の stdin に「門の赤」節を付ける。
     pub red: Option<GateRed>,
+    /// **直前の便の gate の FAIL**（同じ bead の直前の便が gate の FAIL で終端し契約 file の字が同じ周だけ・設計 pipeline.md §68）。
+    /// runner の stdin に「前の便の gate の FAIL」節を付ける。値の出所は [`super::follow::prior_fail`] ただ 1 本である。
+    pub prior_fail: Option<PriorFail>,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }
@@ -849,14 +874,17 @@ pub fn touches_lines(rows: &[(String, Vec<String>)], own: &str) -> String {
     by_item.iter().map(|(item, pointers)| format!("- {item} ← {}\n", pointers.join(", "))).collect()
 }
 
-/// runner の stdin に流す本文 = 契約の写し（再読）+ 「共通 verify」節 + 「ほかの行の touches」節 + 門の赤が在れば「門の赤」節 +
+/// runner の stdin に流す本文 = 契約の写し（再読）+ 「共通 verify」節 + 「ほかの行の touches」節 + 直前の便の gate の FAIL が在れば「前の便の gate の FAIL」節 + 門の赤が在れば「門の赤」節 +
 /// 回答済みの質問が在れば「回答」節 + 途中再開なら「途中再開」節 + 追随の相手が在れば「追随」節。**順序は 契約 → 共通 verify →
-/// ほかの行の touches → 門の赤 → 回答 → 途中再開 → 追随**である（節の読み方は `headless/runner.txt` の雛形が持ち、ここは run ごとの値だけを
+/// ほかの行の touches → 前の便の gate の FAIL → 門の赤 → 回答 → 途中再開 → 追随**である（節の読み方は `headless/runner.txt` の雛形が持ち、ここは run ごとの値だけを
 /// 載せる）。
 fn prompt(launch: &Launch<'_>, base: &str) -> String {
     let mut body = std::fs::read_to_string(contract_path(launch.state_dir, launch.run)).unwrap_or_default();
     body.push_str(&format!("\n## 共通 verify\n{}", common_section(launch, base)));
     body.push_str(&format!("\n## ほかの行の touches\n{}", touches_section(launch, base)));
+    if let Some(prior) = &launch.prior_fail {
+        body.push_str(&prior.section());
+    }
     if let Some(red) = &launch.red {
         body.push_str(&red.section());
     }
