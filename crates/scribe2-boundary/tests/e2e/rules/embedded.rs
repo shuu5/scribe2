@@ -849,7 +849,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 111, "埋め込み manifest の行数（母集団・`.742.4` で +2〔上限の許可の対象の列と期限の上限〕・`.738.42.6` で +1〔管理 tick の全部の書き直しの下限〕・`.736.33.23.3` で +1〔終わりの門の起こし直しの回数〕・`.736.33.21.2` で +2〔索引の置き場の量の上限と待ちの上限〕・`.738.39.3` で +3〔memo の notes の上限と審査の間隔と本数〕・`.736.33.17` で +1〔行の予約の期限〕・`.736.33.23.1` で +1〔lens の turn の上限〕・`.738.38.7` で +14〔局面の出力の窓 1 行と年齢の 13 行〕・`.736.30` で +2〔席の起草の置き場の量の上限と組み立て中の窓〕・`.738.37.1` で +1〔床の検査の待ちの上限〕・`.738.18` で +2〔公開の配線の締め切りと読む上限〕・`.736.25` で +1〔席の起草の置き場の書きの線〕・`.736.19` で +2〔lens の model と先撃ちの lens の model〕・`.696` で +1〔公開の見張りの行〕・`.718` で +1〔事前審査の先撃ちの 1 周の本数〕・`.717` で +1〔事前審査の確定の束の段の上げ〕・`.719` で +1〔台帳のグラフの直下の open の子の上限〕・`.704` で +1〔heartbeat の段の上げ〕・`.694` で +1〔終端の CI の照合の間隔〕・`.627` で +1〔席の箱〕・`.651` で +1〔退避の猶予〕・`.637` で -2 +1〔梯子の係数と上限の行の退役と梯子の列の行〕・`.600` で +1〔境界 crate の上限 R-C4-5〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の行 4 本〕・`.172` で +1〔便ごとの token 消費の検出線 R-C6-1〕・`.574` で +4〔host の見張りの種類ごとの行〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の窓ごとの行〕・`.736.36` で +1〔検出線を起こす間隔の下限〕）");
+    assert_eq!(manifest.rows().len(), 109, "埋め込み manifest の行数（母集団・`.742.4` で +2〔上限の許可の対象の列と期限の上限〕・`.738.42.6` で +1〔管理 tick の全部の書き直しの下限〕・`.736.33.23.3` で +1〔終わりの門の起こし直しの回数〕・`.736.33.21.2` で +2〔索引の置き場の量の上限と待ちの上限〕・`.738.39.3` で +3〔memo の notes の上限と審査の間隔と本数〕・`.736.33.17` で +1〔行の予約の期限〕・`.736.33.23.1` で +1〔lens の turn の上限〕・`.738.38.7` で +14〔局面の出力の窓 1 行と年齢の 13 行〕・`.736.30` で +2〔席の起草の置き場の量の上限と組み立て中の窓〕・`.738.37.1` で +1〔床の検査の待ちの上限〕・`.738.18` で +2〔公開の配線の締め切りと読む上限〕・`.736.25` で +1〔席の起草の置き場の書きの線〕・`.736.19` で +2〔lens の model と先撃ちの lens の model〕・`.696` で +1〔公開の見張りの行〕・`.718` で +1〔事前審査の先撃ちの 1 周の本数〕・`.717` で +1〔事前審査の確定の束の段の上げ〕・`.719` で +1〔台帳のグラフの直下の open の子の上限〕・`.704` で +1〔heartbeat の段の上げ〕・`.694` で +1〔終端の CI の照合の間隔〕・`.627` で +1〔席の箱〕・`.651` で +1〔退避の猶予〕・`.637` で -2 +1〔梯子の係数と上限の行の退役と梯子の列の行〕・`.600` で +1〔境界 crate の上限 R-C4-5〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の行 4 本〕・`.172` で +1〔便ごとの token 消費の検出線 R-C6-1〕・`.574` で +4〔host の見張りの種類ごとの行〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の窓ごとの行〕・`.736.36` で +1〔検出線を起こす間隔の下限〕・`.736.33.16` で -2〔先撃ちの 1 周の本数と先撃ちの lens の model〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -906,7 +906,7 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
     assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.696` の公開の見張り）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 97, "kind の母集団（`.742.4` で +2〔上限の許可の対象の列と期限の上限〕・`.738.42.6` で +1〔管理 tick の全部の書き直しの下限〕・`.736.33.23.3` で +1〔終わりの門の起こし直しの回数〕・`.736.33.21.2` で +2〔索引の置き場の量の上限と待ちの上限〕・`.738.39.3` で +3〔memo の notes の上限と審査の間隔と本数〕・`.736.33.17` で +1〔行の予約の期限〕・`.736.33.23.1` で +1〔lens の turn の上限〕・`.738.38.7` で +2〔局面の出力の窓と年齢の 2 種〕・`.736.30` で +2〔席の起草の置き場の量の上限と組み立て中の窓〕・`.738.37.1` で +1〔床の検査の待ちの上限〕・`.738.18` で +2〔公開の配線の締め切りと読む上限〕・`.736.25` で +1〔席の起草の置き場の書きの線〕・`.736.19` で +2〔lens の model と先撃ちの lens の model〕・`.696` で +1〔公開の見張りの行〕・`.718` で +1〔事前審査の先撃ちの 1 周の本数〕・`.717` で +1〔事前審査の確定の束の段の上げ〕・`.719` で +1〔台帳のグラフの直下の open の子の上限〕・`.704` で +1〔heartbeat の段の上げ〕・`.694` で +1〔終端の CI の照合の間隔〕・`.627` で +1〔席の箱〕・`.651` で +1〔退避の猶予〕・`.637` で -2 +1〔梯子の係数と上限の 2 種の退役と梯子の列の 1 種〕・`.600` で +1〔境界 crate の上限〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の 4 種〕・`.172` で +1〔便ごとの token 消費の検出線〕・`.574` で +2〔host の見張りの語列と rm の守る集合〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の 3 種〕・`.736.36` で +1〔検出線を起こす間隔の下限〕）");
+    assert_eq!(kinds, 95, "kind の母集団（`.742.4` で +2〔上限の許可の対象の列と期限の上限〕・`.738.42.6` で +1〔管理 tick の全部の書き直しの下限〕・`.736.33.23.3` で +1〔終わりの門の起こし直しの回数〕・`.736.33.21.2` で +2〔索引の置き場の量の上限と待ちの上限〕・`.738.39.3` で +3〔memo の notes の上限と審査の間隔と本数〕・`.736.33.17` で +1〔行の予約の期限〕・`.736.33.23.1` で +1〔lens の turn の上限〕・`.738.38.7` で +2〔局面の出力の窓と年齢の 2 種〕・`.736.30` で +2〔席の起草の置き場の量の上限と組み立て中の窓〕・`.738.37.1` で +1〔床の検査の待ちの上限〕・`.738.18` で +2〔公開の配線の締め切りと読む上限〕・`.736.25` で +1〔席の起草の置き場の書きの線〕・`.736.19` で +2〔lens の model と先撃ちの lens の model〕・`.696` で +1〔公開の見張りの行〕・`.718` で +1〔事前審査の先撃ちの 1 周の本数〕・`.717` で +1〔事前審査の確定の束の段の上げ〕・`.719` で +1〔台帳のグラフの直下の open の子の上限〕・`.704` で +1〔heartbeat の段の上げ〕・`.694` で +1〔終端の CI の照合の間隔〕・`.627` で +1〔席の箱〕・`.651` で +1〔退避の猶予〕・`.637` で -2 +1〔梯子の係数と上限の 2 種の退役と梯子の列の 1 種〕・`.600` で +1〔境界 crate の上限〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の 4 種〕・`.172` で +1〔便ごとの token 消費の検出線〕・`.574` で +2〔host の見張りの語列と rm の守る集合〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の 3 種〕・`.736.36` で +1〔検出線を起こす間隔の下限〕・`.736.33.16` で -2〔先撃ちの 1 周の本数と先撃ちの lens の model〕）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・
@@ -1047,7 +1047,7 @@ fn rules_embedded_manifest_role_row_is_one_orchestrator_row() {
 
 /// 歯 (d・形 6): 埋め込み manifest が役割の既定の 2 行を**値ごと**運ぶ（裁定 `user 2026-09-26T15:41Z` の
 /// `opus` / `xhigh`・§28・値の正本は manifest で設計 doc は写さない・C1 / C5）。kind は宣言順で隣り合う 2 つ
-/// （`RunnerEffort` の直後の lens の model の 2 つ〔`.736.19`〕の直後が `RoleModel`・その直後が `RoleEffort`・末尾は `.396` の
+/// （`RunnerEffort` の直後の lens の model〔`.736.19`・先撃ちの lens の model は `.736.33.16` で退役〕の直後が `RoleModel`・その直後が `RoleEffort`・末尾は `.396` の
 /// `ReviewSameKindStop`）で、字面から引ける。
 #[test]
 fn rules_manifest_carries_role_defaults() {
@@ -1063,9 +1063,9 @@ fn rules_manifest_carries_role_defaults() {
     assert_eq!(effort.ruling, DEFAULTS_RULING, "effort の行の裁定 id");
     assert_eq!(effort.ruled_at, DEFAULTS_RULED_AT, "effort の行の裁定日");
     let at = ALL.iter().position(|kind| *kind == RuleKind::RunnerEffort).unwrap_or_default();
-    assert_eq!(ALL.get(at.saturating_add(3)), Some(&RuleKind::RoleModel), "宣言順は RunnerEffort と lens の model の 2 つの直後");
-    assert_eq!(ALL.get(at.saturating_add(4)), Some(&RuleKind::RoleEffort), "対は宣言順で隣り合う");
-    assert_eq!(ALL.get(at.saturating_add(5)), Some(&RuleKind::ReviewSameKindStop), "`.433` の 2 種の直後が `.396` の末尾");
+    assert_eq!(ALL.get(at.saturating_add(2)), Some(&RuleKind::RoleModel), "宣言順は RunnerEffort と lens の model の直後");
+    assert_eq!(ALL.get(at.saturating_add(3)), Some(&RuleKind::RoleEffort), "対は宣言順で隣り合う");
+    assert_eq!(ALL.get(at.saturating_add(4)), Some(&RuleKind::ReviewSameKindStop), "`.433` の 2 種の直後が `.396` の末尾");
     assert_eq!(RuleKind::parse("RoleModel"), Some(RuleKind::RoleModel), "kind を字面から引ける");
     assert_eq!(RuleKind::parse("RoleEffort"), Some(RuleKind::RoleEffort), "kind を字面から引ける");
 }
@@ -1100,23 +1100,21 @@ fn rules_manifest_carries_runner_model() {
     assert!(errors.join("\n").contains("形と合わない"), "{errors:?}");
 }
 
-/// model の 3 行の裁定 id の頭（設計 pipeline.md §61・契約表の行 bd）。
+/// model の行の裁定 id の頭（設計 pipeline.md §61・契約表の行 bd）。
 const MODEL_SPLIT_RULING: &str = "user 2026-09-29T07:44Z";
 
 /// 同じく裁定日。
 const MODEL_SPLIT_RULED_AT: &str = "2026-09-29";
 
-/// (g) 埋め込み manifest の model の 3 行（設計 pipeline.md §61 形 1・`s2-07l.736.19`）: `runner.model` = sonnet・`lens.model` =
-/// opus・`pipe.precheck_lens_model` = sonnet が同じ裁定で発効し、kind の宣言順が `RunnerModel` → `RunnerEffort` → `LensModel` →
-/// `PipePrecheckLensModel` → `RoleModel`（形は `Str`・字面から引ける）。`runner.effort` は値も裁定も不変。base は新しい kind が
-/// 無く compile されないので RED。
+/// (g) 埋め込み manifest の model の行（設計 pipeline.md §61 形 1・`s2-07l.736.19`・先撃ちの退役の段 2 で `pipe.precheck_lens_model` を外した）:
+/// `runner.model` = sonnet・`lens.model` = opus が同じ裁定で発効し、kind の宣言順が `RunnerModel` → `RunnerEffort` → `LensModel` →
+/// `RoleModel`（形は `Str`・字面から引ける）。`runner.effort` は値も裁定も不変。
 #[test]
 fn model_split_embedded_rows_carry_the_three_models_in_declaration_order() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
     let rows = [
         ("runner.model", RuleKind::RunnerModel, "sonnet", Model::Sonnet),
         ("lens.model", RuleKind::LensModel, "opus", Model::Opus),
-        ("pipe.precheck_lens_model", RuleKind::PipePrecheckLensModel, "sonnet", Model::Sonnet),
     ];
     for (id, kind, value, model) in rows {
         let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
@@ -1134,8 +1132,8 @@ fn model_split_embedded_rows_carry_the_three_models_in_declaration_order() {
     assert!(effort.ruling.starts_with("user 2026-09-15T03:52Z"), "effort の裁定は不変: {}", effort.ruling);
     assert_eq!(effort.ruled_at, "2026-09-15", "effort の裁定日は不変");
     let at = ALL.iter().position(|kind| *kind == RuleKind::RunnerModel).unwrap_or_default();
-    let order: Vec<RuleKind> = ALL.iter().skip(at).take(5).copied().collect();
-    let want = [RuleKind::RunnerModel, RuleKind::RunnerEffort, RuleKind::LensModel, RuleKind::PipePrecheckLensModel, RuleKind::RoleModel];
+    let order: Vec<RuleKind> = ALL.iter().skip(at).take(4).copied().collect();
+    let want = [RuleKind::RunnerModel, RuleKind::RunnerEffort, RuleKind::LensModel, RuleKind::RoleModel];
     assert_eq!(order, want, "kind の宣言順");
 }
 

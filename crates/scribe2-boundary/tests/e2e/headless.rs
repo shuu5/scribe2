@@ -251,14 +251,9 @@ fn model_row(value: &str) -> String {
     format!("id = \"runner.model\"\nkind = \"RunnerModel\"\nvalue = \"{value}\"\nenabled = true\n")
 }
 
-/// `lens.model` の行（`--stage` の無い lens が読む・値は文字列 `value`・発効・設計 pipeline.md §61）。
+/// `lens.model` の行（lens が読む・値は文字列 `value`・発効・設計 pipeline.md §61）。
 fn lens_model_row(value: &str) -> String {
     format!("id = \"lens.model\"\nkind = \"LensModel\"\nvalue = \"{value}\"\nenabled = true\n")
-}
-
-/// `pipe.precheck_lens_model` の行（`--stage prelens` の lens が読む・値は文字列 `value`・発効）。
-fn prelens_model_row(value: &str) -> String {
-    format!("id = \"pipe.precheck_lens_model\"\nkind = \"PipePrecheckLensModel\"\nvalue = \"{value}\"\nenabled = true\n")
 }
 
 /// 埋め込み manifest と同じ `runner.model` の値（claude CLI の別名・裁定 id `user 2026-09-29T07:44Z`）。
@@ -287,19 +282,13 @@ fn turns_row(value: u64) -> String {
 }
 
 /// `lens.max_turns` の行を**渡した形のまま**（`None` は行なし）載せる manifest（[`rules_with_rows`] のように行を足さない・
-/// cap / model（runner・lens・先撃ちの 3 行）/ effort は埋め込みと同じ値）。
+/// cap / model（runner・lens の 2 行）/ effort は埋め込みと同じ値）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn rules_with_turns_as_given(dir: &Path, name: &str, turns: Option<String>) -> PathBuf {
-    let rows = [
-        cap_row(4096),
-        model_row(RUNNER_MODEL),
-        lens_model_row(LENS_MODEL),
-        prelens_model_row(RUNNER_MODEL),
-        effort_row(RUNNER_EFFORT),
-    ];
+    let rows = [cap_row(4096), model_row(RUNNER_MODEL), lens_model_row(LENS_MODEL), effort_row(RUNNER_EFFORT)];
     let body: String = rows
         .into_iter()
         .chain(turns)
@@ -1648,7 +1637,7 @@ fn turns_flags(dir: &Path) -> usize {
     slurp(&dir.join("args")).lines().filter(|line| *line == "--max-turns").count()
 }
 
-/// (a) lens は rules 行 `lens.max_turns` の値を `--max-turns` の直後に置いた対をちょうど 1 つ、段に依らず（`--stage` 無し・`prelens`・
+/// (a) lens は rules 行 `lens.max_turns` の値を `--max-turns` の直後に置いた対をちょうど 1 つ、段に依らず（`--stage` 無し・
 /// `memo`）毎回渡す。値 7 と 30 の manifest で弁別し、`--rules` の無い lens は埋め込みの 100。base は渡さないので RED。
 #[test]
 fn lens_turns_passes_the_row_value_in_every_stage() {
@@ -1661,9 +1650,8 @@ fn lens_turns_passes_the_row_value_in_every_stage() {
         let rules = rules_with_turns_as_given(&dir, &format!("rules-turns-{value}.toml"), Some(turns_row(value)));
         let path = rules.display().to_string();
         let default = lens_args(&contract, &dir, &["--rules", &path], &claude);
-        let prelens = lens_args(&contract, &dir, &["--rules", &path, "--stage", "prelens"], &claude);
         let memo = lens_args(&material, &dir, &["--stage", "memo", "--rules", &path], &claude);
-        for (stage, args) in [("既定", default), ("prelens", prelens), ("memo", memo)] {
+        for (stage, args) in [("既定", default), ("memo", memo)] {
             let _ = fs::remove_file(dir.join("args"));
             let out = run_bin_owned(&dir, &args, b"--- a\n+++ b\n");
             assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{value} {stage}: {}", stderr_of(&out));
@@ -1672,13 +1660,11 @@ fn lens_turns_passes_the_row_value_in_every_stage() {
             assert_eq!(turns_flags(&dir), 1, "{value} {stage}: 対はちょうど 1 つ: {argv}");
         }
     }
-    for extra in [&[][..], &["--stage", "prelens"][..]] {
-        let _ = fs::remove_file(dir.join("args"));
-        let out = run_bin_owned(&dir, &lens_args(&contract, &dir, extra, &claude), b"--- a\n+++ b\n");
-        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{extra:?}: {}", stderr_of(&out));
-        let argv = slurp(&dir.join("args"));
-        assert!(pair(&argv, "--max-turns", &LENS_MAX_TURNS.to_string()), "{extra:?}: --rules 無しは埋め込みの 100:{argv}");
-        assert_eq!(turns_flags(&dir), 1, "{extra:?}: 対はちょうど 1 つ: {argv}");
-    }
+    let _ = fs::remove_file(dir.join("args"));
+    let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &[], &claude), b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let argv = slurp(&dir.join("args"));
+    assert!(pair(&argv, "--max-turns", &LENS_MAX_TURNS.to_string()), "--rules 無しは埋め込みの 100:{argv}");
+    assert_eq!(turns_flags(&dir), 1, "対はちょうど 1 つ: {argv}");
     clean(&[&dir]);
 }
