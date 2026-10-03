@@ -297,12 +297,13 @@
   1. `tracked_files` は根が toplevel でない周に `git -C <根> ls-files -s -z` を撃ち、1 本以上あれば根からの相対の列を母集団に返す（toplevel の周と同じ読み・形の読めない件が在れば全体を測れないへ倒す）。0 本の周だけ `NotRepoRoot` を返す。paths-clean は、根の下の追跡 file の本文の private path 形を違反と数え、値は走査した件数になる。
   2. private-clean も同じ口を通り、根の下の追跡 file の本文の needle（email の形ほか）を違反と数え、値は `n/a` でなくなる。
   3. 根の下に追跡 file の無い dir は、paths-clean と private-clean とも今どおり `n/a(not-a-repo-root)` で違反 0（既存の歯 2 本）。
+  4. `crates/xtask/src/check_tests.rs` の歯 2 本（`check_paths_clean_scans_noncanonical_root`・`check_summary_shape_pins_names_order_and_value_forms`）は、根の `.git` の有無で「数が出る周」と「出ない周」を分けている。subdir に置いた写しの根は `.git` を持たないのに数が出るようになるので、判別子を「根で `git rev-parse --is-inside-work-tree` が `true` を返すか」に替える。git の中の木（toplevel と subdir に置いた写しの両方・flip-check の base の木も自前の git repo）では数と判定行の pin を測り、git の外の木では今どおり数が出ないことを測る。2 本は base でも緑なので、`check_tests.rs` の歯の区間に札 retroactive（便の bead id）を置く。
 - 設計の線（歯を持たない・審査が読む）: non-rust-exec と prose-gate は同じ口を通るので、同じ周から測る。門ごとの読み（needle・免除・閾値）は変えない。根が toplevel の周の読みと値は 1 字も変えない。
 - 歯（xtask の lib・既存の `mod tests` の区間に 1 本ずつ）: fixture は一時 dir を `git init` し、その下の dir に file を書いて `git add` し（commit はしない）、下の dir を根にした `Layout` で門の `measure` を撃つ。違反の字は門の needle の定数から組み、字を doc と歯に字のまま書かない。
   - `paths_clean_measures_a_nested_root_by_its_own_tracked_files`（`paths_clean.rs`）: 下の dir の追跡 file 2 本のうち 1 本に private path 形を持たせると、値は `paths-clean=` の後ろが 2 で始まり（`n/a` でない）、違反が 1 件だけ在ってその file を名指す。
   - `private_clean_measures_a_nested_root_by_its_own_tracked_files`（`private_clean.rs`）: 同じ形で email の needle を持たせると、値は `n/a` でなく、違反が 1 件だけ在る。
   - base で RED: base は根が toplevel でない周を `n/a` にするので、2 本とも値の assert で落ちる（機能不在）。
-- 触らない: 4 門の needle・免除・値の書式・根が toplevel の周・flip-check・`cargo xtask check` の判定行の並び。
+- 触らない: 4 門の needle・免除・値の書式・根が toplevel の周・flip-check・`cargo xtask check` の判定行の並び・`check_tests.rs` のほかの歯。
 - 限界: 置いた先の repo の CI がこの check を撃つかは、置いた先の repo の側の約束である。根の下に追跡されていない file は、どの周でも母集団に入らない（今と同じ）。
 - ADR: 書かない（xtask の母集団の口の直しで、判定・rc の意味・on-disk の形・跨版の約束を変えない）。
 
@@ -467,10 +468,10 @@ id = "p"
 title = "xtask の check の公開の字面の門の母集団の口 tracked_files は、根が git の toplevel でない周も根の下の追跡 file が 1 本以上あれば根からの相対の列を返し、paths-clean と private-clean が n/a で黙らずに測る（0 本の周だけ今どおり n/a・§11）"
 req = ["FR52"]
 section = "11"
-write-set = ["crates/xtask/src/paths_clean.rs", "crates/xtask/src/private_clean.rs"]
-verify = ["cargo nextest run -p xtask --no-tests=fail paths_clean_measures_a_nested_root_by_its_own_tracked_files", "cargo nextest run -p xtask --no-tests=fail private_clean_measures_a_nested_root_by_its_own_tracked_files", "cargo nextest run -p xtask --no-tests=fail paths_clean_is_na_outside_repo_root", "cargo nextest run -p xtask --no-tests=fail private_clean_is_na_outside_repo_root"]
+write-set = ["crates/xtask/src/paths_clean.rs", "crates/xtask/src/private_clean.rs", "crates/xtask/src/check_tests.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail paths_clean_measures_a_nested_root_by_its_own_tracked_files", "cargo nextest run -p xtask --no-tests=fail private_clean_measures_a_nested_root_by_its_own_tracked_files", "cargo nextest run -p xtask --no-tests=fail paths_clean_is_na_outside_repo_root", "cargo nextest run -p xtask --no-tests=fail private_clean_is_na_outside_repo_root", "cargo nextest run -p xtask --no-tests=fail check_paths_clean_scans_noncanonical_root", "cargo nextest run -p xtask --no-tests=fail check_summary_shape_pins_names_order_and_value_forms"]
 size = "S"
-done = "(1) tracked_files は根が toplevel でない周に git -C <根> ls-files -s -z を撃ち、1 本以上あれば根からの相対の列を母集団に返し（形の読めない件が在れば全体を測れないへ倒す・toplevel の周と同じ読み）、paths-clean は根の下の追跡 file の本文の private path 形を違反と数えて値は走査した件数になる (2) private-clean も同じ口を通り、根の下の追跡 file の本文の email の needle を違反と数えて値は n/a でない (3) 根の下に追跡 file の無い dir は paths-clean と private-clean とも今どおり n/a(not-a-repo-root) で違反 0"
-done-teeth = ["1:paths_clean_measures_a_nested_root_by_its_own_tracked_files", "2:private_clean_measures_a_nested_root_by_its_own_tracked_files", "3:=paths_clean_is_na_outside_repo_root", "3:=private_clean_is_na_outside_repo_root"]
+done = "(1) tracked_files は根が toplevel でない周に git -C <根> ls-files -s -z を撃ち、1 本以上あれば根からの相対の列を母集団に返し（形の読めない件が在れば全体を測れないへ倒す・toplevel の周と同じ読み）、paths-clean は根の下の追跡 file の本文の private path 形を違反と数えて値は走査した件数になる (2) private-clean も同じ口を通り、根の下の追跡 file の本文の email の needle を違反と数えて値は n/a でない (3) 根の下に追跡 file の無い dir は paths-clean と private-clean とも今どおり n/a(not-a-repo-root) で違反 0 (4) check_tests.rs の歯 check_paths_clean_scans_noncanonical_root と check_summary_shape_pins_names_order_and_value_forms の分岐の判別子は根の .git の有無でなく根で git rev-parse --is-inside-work-tree が true を返すかで、git の中の木では paths-clean の数と判定行の pin を、git の外の木では数が出ないことを測り、check_tests.rs の歯の区間に札 retroactive（便の bead id）が在る"
+done-teeth = ["1:paths_clean_measures_a_nested_root_by_its_own_tracked_files", "2:private_clean_measures_a_nested_root_by_its_own_tracked_files", "3:=paths_clean_is_na_outside_repo_root", "3:=private_clean_is_na_outside_repo_root", "4:=check_paths_clean_scans_noncanonical_root", "4:=check_summary_shape_pins_names_order_and_value_forms"]
 
 <!-- contracts:end -->
