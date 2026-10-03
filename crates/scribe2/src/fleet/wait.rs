@@ -415,11 +415,17 @@ fn file_mark(path: &Path) -> std::io::Result<Option<FileMark>> {
 /// path は `store::events_path` と `pipe::verdict_path` の 1 本ずつから取る（新しい path 定数を書かない）。
 /// event log が無い・`pipe/` の dir を列挙できない・metadata を読めない周は **`None`＝必ず読み直す側**
 /// （fail-closed・費用を払って正しさを取る）。verdict.json の無い便は列に載らない（現れれば印が動く）。
+/// 材料にするのは `pipe/` の直下の項目のうち**列挙の種類が dir のもの**だけである（便は dir・直下の file は
+/// 便ではないので材料に入れず印を切らない）。種類を読めない項目は `None`。
 fn mark_of(state_dir: &Path) -> Option<Mark> {
     let log = file_mark(&store::events_path(state_dir)).ok()??;
     let mut verdicts = BTreeMap::new();
     for entry in std::fs::read_dir(state_dir.join(crate::pipe::DIR)).ok()? {
-        let id = entry.ok()?.file_name().into_string().ok()?;
+        let entry = entry.ok()?;
+        if !entry.file_type().ok()?.is_dir() {
+            continue;
+        }
+        let id = entry.file_name().into_string().ok()?;
         if let Some(found) = file_mark(&crate::pipe::verdict_path(state_dir, &id)).ok()? {
             verdicts.insert(id, found);
         }
@@ -768,6 +774,22 @@ mod tests {
         let second = turn.round(Some(first.clone()));
         assert!(second.met, "前の便が FAIL に外れた周は読み直して met");
         assert_ne!(second.mark, first.mark, "verdict の inode で印が動く");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// (i) `pipe/` の直下の file（`launch.log`・`unreflected`）は便ではないので材料に入れず、印を `None` にしない:
+    /// 印は取れて verdicts の key は便の dir だけ・`wait` は Timeout ∧ replay は 1 周目の 1 回だけ。
+    #[test]
+    fn fleet_wait_land_turn_mark_skips_plain_files_under_the_pipe_dir() {
+        let (root, state) = queue_fixture("wait-plain-files");
+        let pipe = state.join(crate::pipe::DIR);
+        ["launch.log", "unreflected"].iter().for_each(|name| {
+            std::fs::write(pipe.join(name), "x\n").expect("直下の file を置ける");
+        });
+        let mark = mark_of(&state).expect("直下の file で印は切れない");
+        assert_eq!(mark.verdicts.keys().map(String::as_str).collect::<Vec<_>>(), ["a-front", "b-me"], "便の dir だけ");
+        assert_eq!(wait(land_turn(&state), Duration::from_millis(200)), Err(Timeout), "前の便が居るまま上限");
+        assert_eq!(REPLAYS.with(Cell::get), 1, "1 周目だけ replay し、以後は前回の観測を再利用する");
         let _ = std::fs::remove_dir_all(&root);
     }
 
