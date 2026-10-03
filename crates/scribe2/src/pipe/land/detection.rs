@@ -403,6 +403,7 @@ fn fire_lines(entry: &Detect<'_>, lines: &[String], tmp: &Path, shot: &Shot) -> 
         common: &[],
         detection: &lines,
         host: entry.limits.breaker(),
+        contract_file: None,
     };
     Ok((run_detection_admitted(&checks, Some(&admit)), pure_move))
 }

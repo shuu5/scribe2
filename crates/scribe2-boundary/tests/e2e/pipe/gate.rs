@@ -256,6 +256,163 @@ fn done_teeth_place_only_file_in_the_diff_fails_stage_one() {
     clean(&[&repo, &state]);
 }
 
+// ───── 名の歯の照らし（設計 docs/design/contract-source.md §66 行 bz・接頭辞 `done_teeth_gate_`） ─────
+
+/// 名の歯の toy の file（歯の file の base の字と、2 か所目の置き場）。
+const TEETH_FILES: &[(&str, &str)] =
+    &[("crates/toy/tests/teeth.rs", "#[test]\nfn tooth_a() {}\n\n#[test]\nfn tooth_kept() {}\n"), ("crates/toy/tests/more.rs", "// seed\n")];
+
+/// 行 `k`（欄 done-teeth が `teeth`・空の周は欄も番号つきの done も持たない行）の設計 doc。write-set は `write_set`、
+/// verify は `tooth_` を選ぶ nextest の 1 行。
+fn teeth_doc(teeth: &str, write_set: &str) -> String {
+    let verify = "[\"cargo nextest run -p toy --no-tests=fail tooth_\"]";
+    let mut over = vec![("write-set", write_set), ("verify", verify)];
+    if !teeth.is_empty() {
+        over.extend([("done", "\"(1) a (2) b (3) c (4) d\""), ("done-teeth", teeth)]);
+    }
+    table_doc(&table_region(&[table_row("k", &over)]))
+}
+
+/// 歯の file 2 本と `.vessel.toml` を write-set に持つ行の write-set。
+const TEETH_WRITE_SET: &str = "[\"crates/toy/tests/teeth.rs\", \"crates/toy/tests/more.rs\", \".vessel.toml\"]";
+
+/// 全部の宣言（名の歯・既存の歯・検証行の番号の歯・仕組みの歯）を持つ欄。
+const TEETH_ALL: &str = "[\"1:tooth_new\", \"2:=tooth_kept\", \"3:@1\", \"4:!write-set\"]";
+
+/// 欄 `teeth` の行 `k` を受付（偽 lens は項目 4 つの表を返す）まで通した便を、`runner` で spawn して偽 `cargo`（rc 0）の下で gate に 1 回通す
+/// （段 ① 以外を緑にして判定を段 ① だけで分ける）。
+fn teeth_gate(teeth: &str, write_set: &str, runner: &str) -> (PathBuf, PathBuf, String, Output) {
+    let (repo, state) = derive_repo_with(&teeth_doc(teeth, write_set), TEETH_FILES);
+    // 偽 lens の表は欄の要素をそのまま 1 項目 1 歯で返す（`=` の印は剥がす・宣言の歯の内なので受付が通す）。
+    let table: Vec<String> = teeth.split('"').skip(1).step_by(2).map(|element| element.replacen(":=", ":", 1)).collect();
+    let table = format!("{},\"done\":\"{}\"}}", lens_verdict("PASS").trim_end_matches('}'), table.join(","));
+    let lens = fake_lens(&state.join(REVIEW_MARKER), &table);
+    let (rules, repo_arg, state_arg) = (ceiling_rules(&state), repo.display().to_string(), state.display().to_string());
+    let args = ["intake", "--design", "docs/design/toy.md#k", "--bead", "s2-k", "--repo", &repo_arg, "--state-dir", &state_arg, "--rules", &rules, "--lens", &lens];
+    let taken = run_pipe(&args);
+    assert_eq!(taken.status.code(), Some(i32::from(RC_OK)), "受付は通る: {}", stderr_of(&taken));
+    let id = run_id_of(&taken);
+    let spawned = spawn_without_gate(&repo, &state, &id, runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
+    let gate_lens = fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let gate = ["gate", "--run", &id, "--repo", &repo_arg, "--state-dir", &state_arg, "--lens", &gate_lens];
+    let out = run_pipe_with_path(&landed_path(&state), &gate);
+    (repo, state, id, out)
+}
+
+/// 段 ① の診断（gate の `verify.stderr.log`・無ければ空）。
+fn teeth_log(state: &Path, id: &str) -> String {
+    fs::read_to_string(run_dir(state, id).join("verify.stderr.log")).unwrap_or_default()
+}
+
+/// 名の歯の外れで落ちた便の確認: gate は FAIL・段 ① の record が rc 1・lens は起動せず、診断が `head` の見出しの下に `item` を名指して、
+/// ほかの 3 つの見出しを持たない。
+fn assert_teeth_miss(done: &(PathBuf, PathBuf, String, Output), head: &str, item: &str) {
+    let (repo, state, id, out) = done;
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "名の歯の外れは FAIL: {}", stderr_of(out));
+    let rows = verify_rows(state, id);
+    assert_eq!((row_value(&rows, 1, "cmd"), row_value(&rows, 1, "rc")), ("write-set".to_owned(), "1".to_owned()), "段 ① が rc 1（母集団 {} record）", rows.len());
+    assert!(!state.join("lens-ran").exists(), "段 ① が赤い周は lens を起動しない");
+    let log = teeth_log(state, id);
+    assert!(log.contains(&format!("{head}:\n{item}")), "見出しの下に {item} を名指す: {log}");
+    for other in [UNWRITTEN_HEAD, UNMOVED_HEAD, TWO_SITES_HEAD, VANISHED_HEAD].into_iter().filter(|found| *found != head) {
+        assert!(!log.contains(other), "ほかの見出し {other} は無い: {log}");
+    }
+    assert!(!log.contains("write-set の外へ出た"), "diff は write-set の内: {log}");
+    clean(&[repo, state]);
+}
+
+/// 名の歯の外れの見出しの頭（段 ① の診断の字面）。
+const UNWRITTEN_HEAD: &str = "契約の done-teeth の書かれていない歯（便の HEAD の歯の区間に無い）";
+const UNMOVED_HEAD: &str = "契約の done-teeth の動いていない歯（本文が base と同じ・動かさない既存の歯は = で書く）";
+const TWO_SITES_HEAD: &str = "契約の done-teeth の 2 か所の名（便の HEAD の歯の区間に 2 か所以上）";
+const VANISHED_HEAD: &str = "契約の done-teeth の消えた既存の歯（便の HEAD の歯の区間に無い）";
+
+/// 歯 `tooth_new` を歯の file の末尾に足す runner の command。
+const WRITE_NEW: &str = "printf '\\n#[test]\\nfn tooth_new() {}\\n' >> crates/toy/tests/teeth.rs && git add -A && git commit -q -m runner";
+
+/// (1) 書かれていない歯: 名の歯 `tooth_new` を書かずに歯の file へ別の行だけを足した便は、段 ① の rc 1 で、見出しの下にその要素を名指す。
+#[test]
+fn done_teeth_gate_names_an_unwritten_tooth() {
+    let done = teeth_gate(TEETH_ALL, TEETH_WRITE_SET, "echo '// c' >> crates/toy/tests/teeth.rs && git add -A && git commit -q -m runner");
+    assert_teeth_miss(&done, UNWRITTEN_HEAD, "1:tooth_new");
+}
+
+/// (1) 動いていない歯: base に在る歯 `tooth_a` を名の歯として名指す契約で、`tooth_a` に触れずに別の歯だけを足した便は、見出しの下にその要素を名指す。
+#[test]
+fn done_teeth_gate_names_an_unmoved_tooth() {
+    let teeth = "[\"1:tooth_a\", \"2:=tooth_kept\", \"3:@1\", \"4:!write-set\"]";
+    let runner = "printf '\\n#[test]\\nfn tooth_extra() {}\\n' >> crates/toy/tests/teeth.rs && git add -A && git commit -q -m runner";
+    assert_teeth_miss(&teeth_gate(teeth, TEETH_WRITE_SET, runner), UNMOVED_HEAD, "1:tooth_a");
+}
+
+/// (1) 2 か所の名: 名の歯 `tooth_new` を 2 つの file に書いた便は、見出しの下に要素と 2 つの path を名指す。
+#[test]
+fn done_teeth_gate_names_a_tooth_at_two_sites() {
+    let twice = format!("{WRITE_NEW} && printf '\\n#[test]\\nfn tooth_new() {{}}\\n' >> crates/toy/tests/more.rs && git add -A && git commit -q -m again");
+    let done = teeth_gate(TEETH_ALL, TEETH_WRITE_SET, &twice);
+    assert_teeth_miss(&done, TWO_SITES_HEAD, "1:tooth_new（crates/toy/tests/more.rs, crates/toy/tests/teeth.rs）");
+}
+
+/// (1) 根を読めない周: 便の HEAD の宣言の crate-roots が絶対 path の根（契約は宣言の file を write-set に持つ）の便は、判定が INCONCLUSIVE（rc 3）で、
+/// 段 ① の record の rc は -1 の記録形（255）になる。
+#[test]
+fn done_teeth_gate_unreadable_roots_is_inconclusive() {
+    let decl = "printf 'schema = 1\\nallowed-commands = [\"git\", \"sh\", \"cargo\"]\\ncommon-verify = [\"git status\"]\\ncrate-roots = [\"/abs/\"]\\n' > .vessel.toml";
+    let (repo, state, id, out) = teeth_gate(TEETH_ALL, TEETH_WRITE_SET, &format!("{decl} && {WRITE_NEW}"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "根を読めない周は rc 3: {}", stderr_of(&out));
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "INCONCLUSIVE", "測れなかった");
+    let rows = verify_rows(&state, &id);
+    assert_eq!((row_value(&rows, 1, "cmd"), row_value(&rows, 1, "rc")), ("write-set".to_owned(), "255".to_owned()), "段 ① の rc は -1（記録形 255）");
+    let evidence = value_of(&verdict_pairs(&state, &id), "evidence");
+    assert!(evidence.contains("読めない"), "測れなかった理由が残る: {evidence}");
+    clean(&[&repo, &state]);
+}
+
+/// (1) `.rs` を 1 本も持たない木: 歯の file ごと全部の `.rs` を消した便は、書かれていない名の歯 `tooth_new` を持っても名を測らず PASS（段 ① が rc 0）。
+#[test]
+fn done_teeth_gate_rs_less_tree_measures_no_names() {
+    let (repo, state, id, out) = teeth_gate(TEETH_ALL, "[\"crates/\", \"src/\"]", "git rm -q -r crates src && git commit -q -m runner");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), ".rs の無い木は名を測らず PASS: {}", stderr_of(&out));
+    assert_eq!(row_value(&verify_rows(&state, &id), 1, "rc"), "0", "段 ① が緑");
+    assert!(!teeth_log(&state, &id).contains(UNWRITTEN_HEAD), "名の外れは出さない");
+    clean(&[&repo, &state]);
+}
+
+/// (2) 消えた既存の歯: 既存の歯 `=tooth_kept` を歯の file から消した便は、見出しの下にその要素を名指す（書いた名の歯 `tooth_new` は外れない）。
+#[test]
+fn done_teeth_gate_names_a_vanished_kept_tooth() {
+    let rewrite = "printf '#[test]\\nfn tooth_a() {}\\n\\n#[test]\\nfn tooth_new() {}\\n' > crates/toy/tests/teeth.rs && git add -A && git commit -q -m runner";
+    assert_teeth_miss(&teeth_gate(TEETH_ALL, TEETH_WRITE_SET, rewrite), VANISHED_HEAD, "2:=tooth_kept");
+}
+
+/// (1)(2)(3) 全部を書いた便: 名の歯を書き既存の歯を残した便は PASS で段 ① が rc 0。欄が `@` と `!` の要素を持っても段 ① は測らず緑のまま。
+#[test]
+fn done_teeth_gate_passes_a_run_writing_every_tooth() {
+    let (repo, state, id, out) = teeth_gate(TEETH_ALL, TEETH_WRITE_SET, WRITE_NEW);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "全部を書いた便は PASS: {}", stderr_of(&out));
+    assert_eq!(row_value(&verify_rows(&state, &id), 1, "rc"), "0", "段 ① が緑（@ と ! の要素は測らない）");
+    assert!(!teeth_log(&state, &id).contains("done-teeth"), "名の歯の外れの見出しは無い: {}", teeth_log(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (4) key の無い契約: 欄も番号つきの done も持たない行の便は、名の歯を何も書かずに PASS で、段 ① の rc も stderr も今のまま。
+#[test]
+fn done_teeth_gate_keyless_run_passes_without_named_teeth() {
+    let (repo, state) = derive_repo_with(&teeth_doc("", TEETH_WRITE_SET), TEETH_FILES);
+    let id = intake(&repo, &state, "docs/design/toy.md#k");
+    let spawned = spawn_without_gate(&repo, &state, &id, "echo '// c' >> crates/toy/tests/teeth.rs && git add -A && git commit -q -m runner");
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
+    let (repo_arg, state_arg) = (repo.display().to_string(), state.display().to_string());
+    let gate_lens = fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let gate = ["gate", "--run", &id, "--repo", &repo_arg, "--state-dir", &state_arg, "--lens", &gate_lens];
+    let out = run_pipe_with_path(&landed_path(&state), &gate);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "key の無い契約は名の歯を測らず PASS: {}", stderr_of(&out));
+    assert_eq!(row_value(&verify_rows(&state, &id), 1, "rc"), "0", "段 ① が緑");
+    assert!(!teeth_log(&state, &id).contains("done-teeth"), "名の歯の外れの見出しは無い: {}", teeth_log(&state, &id));
+    clean(&[&repo, &state]);
+}
+
 /// **共通 verify は便の写しから撃ち、契約の verify より前に来る**（段②→段③）。
 ///
 /// `{base}` は共通 verify の行だけが置ける穴で、契約の行には置換しない（.56 の intake が

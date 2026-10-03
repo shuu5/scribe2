@@ -4,14 +4,15 @@
 use super::record::{excerpt_of, Failed, USAGE_HEAD};
 use super::{UNADMITTED_JOBS, WRITE_SET_CMD};
 use crate::pipe::admission::{self, Grant};
-use crate::pipe::closure::{self, ClosureError, Source};
+use crate::name::NAME;
+use crate::pipe::closure::{self, selects, tooth_sites, Base, ClosureError, Source};
 use crate::pipe::confine::{self, Confinement, Reason, Released, Usage};
-use crate::pipe::contract::Contract;
-use crate::pipe::declaration::{BASE_HOLE, JOBS_HOLE, TEETH_HOLE, THREADS_HOLE};
+use crate::pipe::contract::{done_teeth_of, Contract};
+use crate::pipe::declaration::{fixed_roots, with_fixed, RootsAtHead, BASE_HOLE, JOBS_HOLE, TEETH_HOLE, THREADS_HOLE};
 use crate::pipe::git_bytes;
 use crate::pipe::health;
 use crate::pipe::refuse::{self, DELETE_FILE, NEW_FILE};
-use crate::pipe::table;
+use crate::pipe::table::{self, parse_element, Tooth};
 use crate::seat::RuleRead;
 use std::path::Path;
 
@@ -188,6 +189,9 @@ pub struct Checks<'a> {
     pub detection: &'a [String],
     /// 器の健康の遮断器（倍率 2 本と待ちの上限・gate と land の主実測が同じ欄を埋める・設計 gate-cost.md §32 約束 9）。
     pub host: health::Breaker,
+    /// 便の契約 file（段 ① が key `done-teeth` の名の歯を測る・埋めるのは gate と終わりの門が通る `record_checks` だけで、
+    /// 主実測・候補の木・着地後の検出は `None`＝歯を測らない・設計 contract-source.md §66 形 5）。
+    pub contract_file: Option<&'a Path>,
 }
 
 /// ①②④ を**順序どおり**に撃つ（③ は撃たない・[`gate_checks`]・設計 gate-cost.md §44 形 (9)）。
@@ -424,6 +428,11 @@ fn check_write_set(checks: &Checks<'_>) -> Step {
         Ok(found) => found,
         Err(reason) => return unwrapped(cmd, -1, reason),
     };
+    let measured = checks.contract_file.map(|file| done_teeth_sections(file, (checks.worktree, checks.base), &checks.contract.verify));
+    let teeth = match measured.unwrap_or_else(|| Ok(Vec::new())) {
+        Ok(found) => found,
+        Err(reason) => return unwrapped(cmd, -1, reason),
+    };
     let mut lines: Vec<String> = Vec::new();
     if !outside.is_empty() {
         lines.push(format!("契約の write-set の外へ出た path:\n{}", outside.join("\n")));
@@ -432,6 +441,7 @@ fn check_write_set(checks: &Checks<'_>) -> Step {
         lines.push(format!("契約の write-set の = の file が便の diff に在る:\n{}", placed.join("\n")));
     }
     lines.extend(broken.sections());
+    lines.extend(teeth);
     let rc = i32::from(!lines.is_empty());
     lines.extend(broken.note.map(str::to_owned));
     unwrapped(cmd, rc, lines.join("\n"))
@@ -536,6 +546,109 @@ fn broken_promises(tree: &[String], write_set: &[String], names: &[&str], source
     broken.unresolved =
         names.iter().zip(found).filter(|(_, solved)| *solved == Some(false)).map(|(name, _)| (*name).to_owned()).collect();
     Ok(broken)
+}
+
+/// 名の歯の外れの見出し（段 ① の stderr・設計 contract-source.md §66 形 5・外れの種類ごとに 1 つ）。
+const UNWRITTEN: &str = "契約の done-teeth の書かれていない歯（便の HEAD の歯の区間に無い）";
+const UNMOVED: &str = "契約の done-teeth の動いていない歯（本文が base と同じ・動かさない既存の歯は = で書く）";
+const TWO_SITES: &str = "契約の done-teeth の 2 か所の名（便の HEAD の歯の区間に 2 か所以上）";
+const VANISHED: &str = "契約の done-teeth の消えた既存の歯（便の HEAD の歯の区間に無い）";
+
+/// key `done-teeth` の名の歯（名と `=` の名）の照らし（設計 contract-source.md §66 形 5・段 ① の一部）: 契約 file `file` の key を
+/// [`done_teeth_of`] で読み、便の HEAD の木（`at` は作業木と便の base）の歯の区間で、選ぶ検証行 `verify` の crate と scope の歯を
+/// [`tooth_sites`] で測る。key の無い契約・名の歯の無い key・`.rs` を 1 本も持たない木は何も測らず空（rc を変えない）。外れは見出しつきの
+/// 列、key か木か宣言の根を読めない周は理由（段 ① の rc -1）。`@` と `!` の歯は測らない。
+fn done_teeth_sections(file: &Path, at: (&Path, &str), verify: &[String]) -> Result<Vec<String>, String> {
+    let named = named_teeth(done_teeth_of(file)?);
+    if named.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (worktree, base) = at;
+    let git = |args: &[&str], what: &str| git_bytes(worktree, args).ok_or_else(|| format!("{what}を読めない"));
+    let listed = git(&["ls-tree", "-r", "-z", "--name-only", "HEAD"], "便の HEAD の木")?;
+    let paths: Vec<String> = nul_split(&listed);
+    let sources = table::read_all(worktree, &paths, RS);
+    if sources.is_empty() {
+        return Ok(Vec::new());
+    }
+    if let Some(reason) = sources.iter().find_map(|source| source.body.as_ref().err()) {
+        return Err(reason.clone());
+    }
+    let roots = match RootsAtHead::read(worktree) {
+        RootsAtHead::Unreadable => return Err("便の HEAD の宣言の crate-roots を読めない".to_owned()),
+        RootsAtHead::Fixed => fixed_roots(),
+        RootsAtHead::Declared(added) => with_fixed(&added),
+    };
+    let head = Base { sources: &sources, snapshots: &[], tracked: &[], core_crate: NAME, roots: &roots };
+    let changed = nul_split(&git(&["diff", "--name-only", "-z", &format!("{base}..HEAD")], "diff の path")?);
+    let mut misses: Vec<(&str, String)> = Vec::new();
+    for (element, kept, name) in &named {
+        let lines: Vec<&String> = verify.iter().filter(|line| selects(line, name, NAME)).collect();
+        let sites = tooth_places(&lines, name, &head);
+        let miss = match sites.as_slice() {
+            [] if *kept => (VANISHED, element.clone()),
+            [] => (UNWRITTEN, element.clone()),
+            [one] if !*kept && (!changed.contains(&one.0) || unmoved(worktree, (base, &head), (&lines, name), one)) => {
+                (UNMOVED, element.clone())
+            }
+            [_] => continue,
+            many => (TWO_SITES, format!("{element}（{}）", many.iter().map(|(path, _)| path.as_str()).collect::<Vec<&str>>().join(", "))),
+        };
+        misses.push(miss);
+    }
+    Ok([UNWRITTEN, UNMOVED, TWO_SITES, VANISHED]
+        .iter()
+        .filter_map(|head| {
+            let items: Vec<&str> = misses.iter().filter(|(found, _)| found == head).map(|(_, item)| item.as_str()).collect();
+            (!items.is_empty()).then(|| format!("{head}:\n{}", items.join("\n")))
+        })
+        .collect())
+}
+
+/// NUL 区切りの path の列（空の区切りは落とす）。
+fn nul_split(bytes: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(bytes).split('\0').filter(|path| !path.is_empty()).map(str::to_owned).collect()
+}
+
+/// 欄の要素のうち名の歯（`(要素の字・既存の歯か・名)`）。形が読めない要素と `@` と `!` の歯は測らない。
+fn named_teeth(elements: Vec<String>) -> Vec<(String, bool, String)> {
+    elements
+        .into_iter()
+        .filter_map(|element| match parse_element(&element) {
+            Ok((_, Tooth::Named(name))) => Some((element, false, name)),
+            Ok((_, Tooth::Kept(name))) => Some((element, true, name)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 歯 `name` が `base` の木に在る所（path と本文・同じ file に 2 つ在れば 2 件）を、それを選ぶ検証行 `lines` の全部で集める
+/// （2 本の行が同じ file を指す周は 1 度に畳む）。
+fn tooth_places(lines: &[&String], name: &str, base: &Base<'_>) -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = Vec::new();
+    for line in lines {
+        let here = tooth_sites(line, name, base);
+        for (path, body) in &here {
+            let count = |list: &[(String, String)]| list.iter().filter(|(other, _)| other == path).count();
+            if count(&found) < count(&here) {
+                found.push((path.clone(), body.clone()));
+            }
+        }
+    }
+    found
+}
+
+/// 便の HEAD の歯 `site`（path と本文）が base と同じ本文か（base の同じ file の版を [`tooth_sites`] で読む・base に無い file と歯は
+/// 新しい歯で `false`）。
+fn unmoved(worktree: &Path, at: (&str, &Base<'_>), tooth: (&[&String], &str), site: &(String, String)) -> bool {
+    let (base, head) = at;
+    let (lines, name) = tooth;
+    let Some(old) = git_bytes(worktree, &["show", &format!("{base}:{}", site.0)]) else {
+        return false;
+    };
+    let before = [Source { path: site.0.clone(), body: Ok(String::from_utf8_lossy(&old).into_owned()) }];
+    let was = Base { sources: &before, ..*head };
+    lines.iter().flat_map(|line| tooth_sites(line, name, &was)).next().is_some_and(|(_, text)| text == site.1)
 }
 
 /// 項目の path が木に在るか（file の一致 か dir 項目〔末尾 `/`〕の配下の path・[`listed`] と同じ segment 境界）。
@@ -703,8 +816,8 @@ pub(crate) mod tests {
     // flip-check: moved s2-07l.286
     use super::super::record::USAGE_HEAD;
     use super::{
-        broken_promises, fill_holes, gate_checks, last_line, listed, run_line_captured, teeth_of, unwrapped, Broken, Check,
-        Source, NO_SOURCES, NO_TEETH, TEETH_HOLE, WRITE_SET_CMD,
+        broken_promises, done_teeth_sections, fill_holes, gate_checks, last_line, listed, run_line_captured, teeth_of, unwrapped,
+        Broken, Check, Source, NO_SOURCES, NO_TEETH, TEETH_HOLE, WRITE_SET_CMD,
     };
     use crate::pipe::confine::{read_usage, Limit, Reason, Wrap};
     use crate::seat::RuleRead;
@@ -937,6 +1050,17 @@ pub(crate) mod tests {
         let (forward, backward) = ([zeta, alpha, mid], [mid, alpha, zeta]);
         assert!(filled(&forward).ends_with("--teeth zeta_,alpha_,mid_"), "宣言順: {}", filled(&forward));
         assert!(filled(&backward).ends_with("--teeth mid_,alpha_,zeta_"), "入れ替えた順: {}", filled(&backward));
+    }
+
+    /// (1) key を読めない周: 在らない契約 file の path を名の歯の照らしに渡すと、外れの空ではなく読めない（`Err`・段 ① が rc -1 に倒す値）を返し、
+    /// 理由はその path を名乗る。
+    #[test]
+    fn done_teeth_gate_unreadable_key_file_is_minus_one() {
+        let root = scratch("teeth-key");
+        let missing = root.join("absent-contract.toml");
+        let found = done_teeth_sections(&missing, (&root, "abc"), &[]);
+        assert!(found.as_ref().is_err_and(|reason| reason.contains("absent-contract.toml")), "読めない理由は path を名乗る: {found:?}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 歯ごとの空の tmp dir（in-file の歯の置き場・env を読まないのは器の本体の規律〔C2.2〕）。

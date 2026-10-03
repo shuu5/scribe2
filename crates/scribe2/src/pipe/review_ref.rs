@@ -551,7 +551,7 @@ fn fire(ctx: &Ctx<'_>, at: (&Pointer, &Staged, String), base: Judged) -> Judged 
     drop(child.stdin.take());
     let waited = child.wait_with_output();
     let ran = waited.as_ref().ok().map(|out| (out.status.code(), String::from_utf8_lossy(&out.stdout).into_owned()));
-    let lensed = read_lens(waited, &confinement, (&staged.done, staged.promised));
+    let lensed = read_lens(waited, &confinement, (&staged.done, staged.promised), &staged.contract);
     let reason = (lensed.verdict != Verdict::Pass).then_some(lensed.evidence);
     Judged { verdict: lensed.verdict, kind: lensed.kind, usage: lensed.usage, ran, staged: Some(staged.dir.clone()), reason, ..base }
 }

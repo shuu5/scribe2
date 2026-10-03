@@ -91,6 +91,7 @@ fn verify_main_from(entry: &Land<'_>, new: &str, base: Option<&str>) -> MainChec
         detection: &[],
         // gate と同じ遮断器を同じ `Limits` から通す（設計 gate-cost.md §32 約束 9）。
         host: entry.limits.breaker(),
+        contract_file: None,
     });
     // 成果は `new` に載っているので、この tmp だけは remove してよい（設計 §5.4）。
     // `--force` は verify が tmp に生んだ中間物ごと畳むためで、履歴・データは触らない。

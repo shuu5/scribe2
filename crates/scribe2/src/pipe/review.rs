@@ -61,7 +61,7 @@ pub use outside::outside_block;
 pub use judgement::{judgement_of, review_dir, review_path, unaddressed, verdict_of};
 pub use judgement::{Judgement, Rework, ROW_SAME_KIND_STOP};
 use requirements::requirements_text;
-use super::contract::Contract;
+use super::contract::{done_teeth_of, Contract};
 use super::gate::{last_json_object, lens_usage, Verdict};
 use super::lens_record::LensSource;
 use super::dispatch::floor::Worktree;
@@ -332,8 +332,12 @@ pub fn review(entry: &Review<'_>) -> Outcome {
         (LensSource::Cmd(cmd), Some(sha)) => row_reused(entry, (&source, &dir), cmd, sha),
         _ => None,
     };
-    // done の項目の数（Promised の行は 0・材料の書き手 `materials` と同じ読み手 `done_items`・§64 形 5）。
-    let items = if promised { 0 } else { items::done_items(&entry.contract.done).len() };
+    // done の項目の数（Promised の行は 0・材料の書き手 `materials` と同じ読み手 `done_items`・§64 形 5）と宣言の歯（契約 file の key・§66 形 6）。
+    let teeth = match if promised { Ok(Vec::new()) } else { done_teeth_of(&source) } {
+        Ok(found) => found,
+        Err(reason) => return broken(reason),
+    };
+    let items = (if promised { 0 } else { items::done_items(&entry.contract.done).len() }, teeth.as_slice());
     let (finding, scope, usage, tree) = match &reused {
         Some((rc, text)) => (read_outcome(*rc, text, items), None, None, None),
         None => decide(entry, &contract, items, head.as_deref()),
@@ -364,15 +368,15 @@ pub(in crate::pipe) fn stage(
     dir: &Path,
     note: &str,
 ) -> Result<(PathBuf, bool), String> {
-    let mut material = materials(repo, contract.0, requirements);
+    let mut material = materials(repo, contract.0, requirements, &done_teeth_of(contract.1)?);
     if !note.is_empty() {
         material.design = format!("{}\n{note}", material.design);
     }
     keep(dir, contract.1, &material).map(|path| (path, !material.promises.is_empty()))
 }
 
-/// 材料を base から読む（読めなさは本文の明示の 1 行にする・C10）。
-fn materials(repo: &Path, contract: &Contract, requirements: &str) -> Material {
+/// 材料を base から読む（読めなさは本文の明示の 1 行にする・C10）。`teeth` は契約 file の key `done-teeth` の要素（done の項目に添える・§66 形 6）。
+fn materials(repo: &Path, contract: &Contract, requirements: &str, teeth: &[String]) -> Material {
     let design = design_text(repo, &contract.design);
     let promised = promise_rows(repo, &contract.design);
     // 外の材料の本文は節の本文（導出物の行は goal）・done・約束の行の text（§51 形 2）。
@@ -380,7 +384,7 @@ fn materials(repo: &Path, contract: &Contract, requirements: &str) -> Material {
     bodies.extend(promised.iter().map(|promise| promise.text.as_str()));
     let outside = outside::outside_text(repo, contract, &bodies);
     // Promised の行の done は器が約束の行から組む字なので項目に割らない（項目 0 個として扱う・§64 形 5）。
-    let items = if promised.is_empty() { items::items_text(&contract.done) } else { String::new() };
+    let items = if promised.is_empty() { items::items_text(&contract.done, teeth) } else { String::new() };
     Material {
         requirements: requirements_text(repo, requirements, &contract.req),
         promises: render_promises(&promised.iter().collect::<Vec<&table::PromiseRow>>()),
@@ -557,7 +561,7 @@ fn lens_cmd(source: &LensSource) -> Result<&str, Finding> {
 fn decide(
     entry: &Review<'_>,
     contract: &Path,
-    items: usize,
+    items: Items<'_>,
     head: Option<&str>,
 ) -> (Finding, Option<confine::Released>, Option<Usage>, Option<String>) {
     let cmd = match lens_cmd(entry.lens) {
@@ -606,7 +610,7 @@ fn decide(
 }
 
 /// 終わった lens の出力から判定を読む（箱の中の死 → rc → 最後の JSON 行の順・gate の lens と同じ極性）。
-fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &confine::Confinement, items: usize) -> Finding {
+fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &confine::Confinement, items: Items<'_>) -> Finding {
     let out = match waited {
         Ok(found) => found,
         Err(err) => return Finding::inconclusive(format!("lens の出力を読めない: {err}")),
@@ -622,9 +626,12 @@ fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &con
     read_outcome(out.status.code(), &text, items)
 }
 
+/// done の項目の数と宣言の歯（契約 file の key `done-teeth` の要素・key の無い契約は空・§66 形 6）。
+type Items<'a> = (usize, &'a [String]);
+
 /// 終わった lens の rc と stdout から判定を読む（rc → 最後の JSON 行 → done の対応の表の順・[`lens_outcome`] の後段の 1 本）。
-/// `items` は done の項目の数（0 は表を読まない・§64 形 5・lens を撃った周と行の審査の記録を使い回した周が同じこの 1 本を通る）。
-fn read_outcome(rc: Option<i32>, text: &str, items: usize) -> Finding {
+/// `items` は done の項目の数（0 は表を読まない・§64 形 5・lens を撃った周と行の審査の記録を使い回した周が同じこの 1 本を通る）と宣言の歯。
+fn read_outcome(rc: Option<i32>, text: &str, items: Items<'_>) -> Finding {
     if rc != Some(0) {
         return Finding::inconclusive(format!("lens が rc {} で終わった", rc.unwrap_or(-1)));
     }
@@ -632,15 +639,16 @@ fn read_outcome(rc: Option<i32>, text: &str, items: usize) -> Finding {
 }
 
 /// done の対応の表の倒し（§64 形 4）: JSON が読め verdict が 3 値の周だけ、表の欠けは INCONCLUSIVE・unparsed に、歯の無い項目を
-/// 持つ PASS は FAIL・vacuous-assert に、FAIL / INCONCLUSIVE は at と evidence の末尾に歯の無い項目を足す。他の周は不変。
-fn tip(found: Finding, text: &str, items: usize) -> Finding {
+/// 持つ PASS は FAIL・vacuous-assert に、FAIL / INCONCLUSIVE は at と evidence の末尾に歯の無い項目を足す。他の周は不変。宣言の歯を持つ契約は、
+/// 宣言の歯の外の表の歯も形の合わない項目に数える（§66 形 6）。
+fn tip(found: Finding, text: &str, items: Items<'_>) -> Finding {
     let pairs = last_json_object(text).unwrap_or_default();
     let get = |key: &str| pairs.iter().find(|(name, _)| name == key).map(|(_, value)| value);
-    if items == 0 || get("verdict").and_then(Value::as_str).and_then(Verdict::parse).is_none() {
+    if items.0 == 0 || get("verdict").and_then(Value::as_str).and_then(Verdict::parse).is_none() {
         return found;
     }
     let evidence = found.evidence.as_str();
-    match (items::holes(get("done"), items), found.verdict) {
+    match (items::holes(get("done"), items.0, items.1), found.verdict) {
         (Err(reason), verdict) => Finding {
             verdict: Verdict::Inconclusive,
             evidence: format!("done の対応の表が欠ける（{reason}）: {evidence}"),
@@ -676,16 +684,25 @@ pub(in crate::pipe) struct Lensed {
 
 /// 行の審査が撃った lens の判定を読む口（設計 row-review.md §3 形 5・Reviewed と同じ読みの 2 本 [`read_outcome`]（done の対応の表の倒しを含む）→
 /// [`narrow`]（約束の行の kind の絞り）をこの 1 本で通す・私有の 3 本は保つ）。`done` は契約の done の字と約束の行を持つかの対
-/// （約束の行を持つ行の done は項目に割らない・§64 形 5）。箱の scope は読む前に片付ける。
+/// （約束の行を持つ行の done は項目に割らない・§64 形 5）。宣言の歯は審査の材料の契約の写し `copy` の key `done-teeth` から読む（読めない周は
+/// INCONCLUSIVE・§66 形 6）。箱の scope は読む前に片付ける。
 pub(in crate::pipe) fn read_lens(
     waited: std::io::Result<std::process::Output>,
     confinement: &confine::Confinement,
     done: (&str, bool),
+    copy: &Path,
 ) -> Lensed {
     let _ = confine::release_scope(confinement);
     let usage = waited.as_ref().ok().filter(|out| out.status.success()).and_then(|out| lens_usage(&String::from_utf8_lossy(&out.stdout)));
     let (text, promised) = done;
-    let items = if promised { 0 } else { items::done_items(text).len() };
+    let teeth = match if promised { Ok(Vec::new()) } else { done_teeth_of(copy) } {
+        Ok(found) => found,
+        Err(reason) => {
+            let found = Finding::inconclusive(format!("宣言の歯を読めない: {reason}"));
+            return Lensed { verdict: found.verdict, kind: found.kind, evidence: found.evidence, usage };
+        }
+    };
+    let items = (if promised { 0 } else { items::done_items(text).len() }, teeth.as_slice());
     let found = narrow(lens_outcome(waited, confinement, items), promised);
     Lensed { verdict: found.verdict, kind: found.kind, evidence: found.evidence, usage }
 }
@@ -840,7 +857,8 @@ mod tests {
         requirement_row, requirement_yaml, requirements_text, section_text, split_at, strip_tags, unaddressed, verdict_of,
         write_review, Finding, FindingKind, Found, Judgement, ReviewCheck, Rework, FINDING_KINDS,
     };
-    use super::items::done_items;
+    use super::items::{done_items, holes, items_text};
+    use crate::fleet::json_lite::Value;
     use crate::pipe::closure::Source;
     use crate::pipe::gate::Verdict;
     use crate::pipe::lens_record::LensSource;
@@ -870,6 +888,45 @@ mod tests {
         for plain in ["d", "（1） e", "(１) f", ""] {
             assert!(bodies(plain).is_empty(), "{plain}: (1) を持たない done は 0 個");
         }
+    }
+
+    /// (5) 宣言の歯の添え: key の無い契約（歯の列が空）の材料は §64 の字のまま 1 字も変わらず、key を持つ契約は項目の行ごとに「 ／ 歯: <その番号の
+    /// 歯を , で並べた字>」を添え、`<歯>` の指示を宣言の歯の読みと仕組みの歯の読みの 2 文へ替える。
+    #[test]
+    fn done_teeth_review_items_carry_declared_teeth_only_with_the_key() {
+        let done = "(1) a (2) b (3) c";
+        let plain = "## done の項目（3 個・番号つき）\n最終行の JSON に key `done` を足し、値の 1 つの文字列に項目ごとの対応を `1:<歯>,2:<歯>,3:<歯>` の形で全部並べる（`<歯>` はその項目を外した実装で落ちる歯の名・落ちる歯が無い項目は `-`）。`-` の項目は見つけた 1〜3 個で止めず**全部**書く。番号が 1〜3 をちょうど 1 回ずつ覆わない表と key `done` の無い周は器が INCONCLUSIVE に倒し、`-` を持つ PASS は器が FAIL（`vacuous-assert`）に倒す。\n(1) a\n(2) b\n(3) c";
+        assert_eq!(items_text(done, &[]), plain, "key の無い契約の材料は 1 字も変えない");
+        let teeth = owned(&["1:tooth_a", "2:=tooth_kept", "3:@1", "3:!closure"]);
+        let keyed = items_text(done, &teeth);
+        let lines: Vec<&str> = keyed.lines().collect();
+        assert_eq!(lines.get(2..).unwrap_or_default(), ["(1) a ／ 歯: tooth_a", "(2) b ／ 歯: =tooth_kept", "(3) c ／ 歯: @1,!closure"], "項目ごとに宣言の歯: {keyed}");
+        for want in ["<歯> はその項目の宣言の歯のうち、約束を外した実装で落ちる 1 本・無ければ -", "! の仕組みの歯は構造の制約の項目にだけ当たり、挙動の約束に仕組みの歯しか無ければ -"] {
+            assert!(keyed.contains(want), "表の指示に {want}: {keyed}");
+        }
+        assert!(!keyed.contains("その項目を外した実装で落ちる歯の名"), "§64 の読みは宣言の歯の読みへ替わる: {keyed}");
+        assert!(!plain.contains("歯:") && keyed.starts_with("## done の項目（3 個・番号つき）\n"), "見出しは同じ");
+        assert_eq!(items_text("d", &teeth), "", "項目 0 個は key を持っても材料を置かない");
+    }
+
+    /// (6) 表の歯が宣言の歯の外: key を持つ契約は、表の歯（`-` を除く）がその番号の宣言の歯の外の項目を形の合わない項目に数え（その番号は覆われず
+    /// 表は欠ける）、`=` の有無は問わず、`-` は宣言の外でも形の合う項目のまま。key の無い契約（歯の列が空）は何を書いても形のまま。
+    #[test]
+    fn done_teeth_review_lens_tooth_outside_the_declared_is_misshaped() {
+        let teeth = owned(&["1:tooth_a", "2:=tooth_kept", "3:@1"]);
+        let table = |text: &str| Value::Str(text.to_owned());
+        let read = |text: &str, teeth: &[String]| holes(Some(&table(text)), 3, teeth);
+        assert_eq!(read("1:tooth_a,2:tooth_kept,3:@1", &teeth), Ok(Vec::new()), "宣言の歯だけの表は揃う（= を付けない書きも通る）");
+        assert_eq!(read("1:=tooth_a,2:=tooth_kept,3:@1", &teeth), Ok(Vec::new()), "= を付けた書きも通る");
+        assert_eq!(read("1:tooth_a,2:b,3:@1", &teeth), Err("無い番号 (2)・形の合わない項目 1 件".to_owned()), "宣言の外の歯は形の合わない項目");
+        assert_eq!(read("1:tooth_kept,2:tooth_kept,3:@1", &teeth), Err("無い番号 (1)・形の合わない項目 1 件".to_owned()), "別の番号の宣言の歯も外");
+        assert_eq!(read("1:tooth_a,2:-,3:-", &teeth), Ok(vec![2, 3]), "- は宣言の外でも形が合う（歯の無い項目の番号）");
+        assert_eq!(read("1:a,2:b,3:c", &[]), Ok(Vec::new()), "key の無い契約は歯の字を問わない（§64 のまま）");
+    }
+
+    /// 文字列の列（歯の fixture）。
+    fn owned(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| (*item).to_owned()).collect()
     }
 
     /// 節の本文は `## N.` の見出しの次の行から次の `## ` の前まで。fence の中の `## ` と契約表の区間は見出しに

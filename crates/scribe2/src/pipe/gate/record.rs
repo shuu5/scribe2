@@ -179,6 +179,7 @@ pub(crate) struct Logs<'a> {
 pub(crate) fn record_checks(shoot: &Shoot<'_>, worktree: &Path, base: &str, logs: &Logs<'_>) -> Result<Counted, String> {
     let frozen = frozen_copy(shoot.state_dir, shoot.run)?;
     let admit = Admit { state_dir: shoot.state_dir, run: shoot.run, rules: shoot.limits.admission(shoot.policy) };
+    let file = contract_path(shoot.state_dir, shoot.run);
     let checks = Checks {
         worktree,
         base,
@@ -186,6 +187,7 @@ pub(crate) fn record_checks(shoot: &Shoot<'_>, worktree: &Path, base: &str, logs
         common: frozen.common_verify(),
         detection: &[],
         host: shoot.limits.breaker(),
+        contract_file: Some(&file),
     };
     let steps = run_checks_admitted(&checks, &gate_checks(), Some(&admit));
     let (path, tail_path, policy) = (logs.record, logs.tail, shoot.policy);

@@ -4,7 +4,7 @@
 //! `use super::intake::{…}` で引く（歯の本文は `intake.rs` から移しただけ・`s2-07l.351`）。
 
 use super::*;
-use super::intake::{lens_finding, review_has, review_pairs, reviewed_detail};
+use super::intake::{lens_finding, review_has, review_pairs, reviewed_detail, teeth_doc, TEETH_FILES};
 
 // ───── 契約の審査の段（`s2-07l.241`・設計 contract-source.md §4・SRS FR49 / FR9 / AC22・接頭辞 `pipe_review_`） ─────
 
@@ -502,6 +502,28 @@ fn pipe_review_done_items_missing_table_falls_to_unparsed_and_vessel_inconclusiv
     let text = judged(&state, &out);
     assert!(text.starts_with("3|INCONCLUSIVE|unparsed|<無し>|") && text.contains("--lens"), "{text}");
     assert!(!text.contains("done の対応の表") && !text.contains("歯の無い"), "--lens 無しは表を求めない: {text}");
+    clean(&[&repo, &state]);
+}
+
+/// (5)(6) 欄 done-teeth を持つ契約（Reviewed の段）: 材料の items.txt は項目の行ごとに「 ／ 歯: <宣言の歯>」を添え、偽 lens の表が宣言の歯の外
+/// （項目 2 の `b`）の PASS は INCONCLUSIVE・unparsed で evidence の頭に理由が付き（rc 3）、宣言の歯だけの表の PASS は PASS のまま
+/// （`=` の有無は問わない）。
+#[test]
+fn done_teeth_review_outside_tooth_turns_the_run_inconclusive() {
+    let (repo, state) = derive_repo_with(&teeth_doc(&["ok"]), TEETH_FILES);
+    let (rules, repo_arg, state_arg) = (ceiling_rules(&state), repo.display().to_string(), state.display().to_string());
+    let shoot = |bead: &str, table: &str| {
+        let lens = says(&state, &table_pass(table));
+        run_pipe(&["intake", "--design", "docs/design/toy.md#ok", "--bead", bead, "--repo", &repo_arg, "--state-dir", &state_arg, "--rules", &rules, "--lens", &lens])
+    };
+    let outside = shoot("s2-out", "1:tooth_a,2:b,3:@1");
+    let want = "3|INCONCLUSIVE|unparsed|<無し>|done の対応の表が欠ける（無い番号 (2)・形の合わない項目 1 件）: fake";
+    assert_eq!(judged(&state, &outside), want, "宣言の歯の外は形の合わない項目: {}", stderr_of(&outside));
+    let items = fs::read_to_string(review_dir(&state, &run_id_of(&outside)).join("items.txt")).unwrap_or_default();
+    let lines: Vec<&str> = items.lines().collect();
+    assert_eq!(lines.get(2..).unwrap_or_default(), ["(1) a ／ 歯: tooth_a", "(2) b ／ 歯: =tooth_kept", "(3) c ／ 歯: @1"], "項目ごとに宣言の歯: {items}");
+    let inside = shoot("s2-in", "1:tooth_a,2:tooth_kept,3:@1");
+    assert_eq!(judged(&state, &inside), "0|PASS|<無し>|<無し>|fake", "宣言の歯だけの表は通る（= を付けない書き）: {}", stderr_of(&inside));
     clean(&[&repo, &state]);
 }
 
@@ -1852,6 +1874,37 @@ fn pipe_review_ref_reads_the_lens_through_the_done_table_and_the_promised_narrow
     assert_eq!(kind("i2"), ("PASS".to_owned(), "-".to_owned()), "揃った表の PASS は PASS のまま");
     assert_eq!(kind("pr"), ("INCONCLUSIVE".to_owned(), "teeth-outside-write-set".to_owned()), "約束の行の 3 語の外の kind は INCONCLUSIVE・kind は lens の値のまま");
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の行が在る周は fail");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// 欄 done-teeth を持つ行 `id`（歯の file は main に在る `crates/toy/tests/<id>.rs`・done は 3 項目・宣言は `pre_<id>_one` と `pre_<id>_two` と `@1`）。
+fn rv_keyed_row(id: &str) -> Vec<String> {
+    let write_set = format!("[\"crates/toy/tests/{id}.rs\"]");
+    let verify = format!("[\"cargo nextest run -p toy --no-tests=fail pre_{id}_\"]");
+    let teeth = format!("[\"1:pre_{id}_one\", \"2:pre_{id}_two\", \"3:@1\"]");
+    let done = "\"(1) 甲を作る (2) 乙を測る (3) 丙を足す\"";
+    rv_row(id, 1, &[("write-set", &write_set), ("verify", &verify), ("done", done), ("done-teeth", &teeth)])
+}
+
+/// (6) 行の審査の読み口: 欄 done-teeth を持つ行で偽 lens の表が宣言の歯の外（項目 2 の `b`）の PASS を返すと、行の記録は INCONCLUSIVE・unparsed（ref の
+/// 結果は actual の INCONCLUSIVE なので fail・rc 1）で、宣言の歯だけの表の PASS を返す行は PASS のまま。
+#[test]
+fn done_teeth_review_outside_tooth_turns_the_row_review_inconclusive() {
+    let files = [("crates/toy/tests/o1.rs", rv_tooth_file("o1")), ("crates/toy/tests/i1.rs", rv_tooth_file("i1"))];
+    let place = rv_place(&["本文 1"], &[rv_row("m", 1, &[])], &files);
+    rv_out(&place, "o1", &table_pass("1:pre_o1_one,2:b,3:@1"));
+    rv_out(&place, "i1", &table_pass("1:pre_i1_one,2:pre_i1_two,3:@1"));
+    let rows = [rv_row("m", 1, &[]), rv_keyed_row("o1"), rv_keyed_row("i1")];
+    let sha = rv_commit(&place, None, &[(DESIGN_FILE, rv_doc(&["本文 1"], &rows))]);
+    let out = rv_review(&place, &sha);
+    let kind = |id: &str| {
+        let record = rv_record(&place, rv_row_out(&out, id).get("record").map_or("", String::as_str));
+        (record.get("verdict").cloned().unwrap_or_default(), record.get("kind").cloned().unwrap_or_default())
+    };
+    let msg = format!("{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(kind("o1"), ("INCONCLUSIVE".to_owned(), "unparsed".to_owned()), "宣言の歯の外の表は倒れる: {msg}");
+    assert_eq!(kind("i1"), ("PASS".to_owned(), "-".to_owned()), "宣言の歯だけの表は PASS のまま: {msg}");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "actual の INCONCLUSIVE の行が在る周は fail: {msg}");
     clean(&[&place.repo, &place.state]);
 }
 

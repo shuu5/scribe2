@@ -879,6 +879,7 @@ pub(super) fn teeth_doc(ids: &[&str]) -> String {
     table_doc(&table_region(&rows))
 }
 
+// flip-check: retroactive s2-07l.736.33.20.5
 /// (8) 受付と preflight の側: 6 行（適合の行を除く）はどれも `contract-table:done-teeth` の断り（rc 1）で、理由は行ごとの外れを名乗り、
 /// run dir も event も作らない。`gone`（base に無い既存の歯）は受付と preflight だけが名指す（表の検査は名指さない）。適合の行は受付が
 /// 通す（rc 0）。base は欄を読んで捨てるので 6 行とも通ってしまう（RED）。
@@ -911,13 +912,14 @@ fn done_teeth_table_intake_refuses_six_rows() {
     // 適合の行は done が番号つきの 3 項目なので、偽 lens は key done に項目ごとの表を返す（審査の表の読み・§64）。
     let ok = pointed_contract(&repo, "t.toml", "ok");
     let (rules, repo_arg, state_arg) = (ceiling_rules(&state), repo.display().to_string(), state.display().to_string());
-    let table = format!("{},\"done\":\"1:a,2:b,3:c\"}}", lens_verdict("PASS").trim_end_matches('}'));
+    let table = format!("{},\"done\":\"1:tooth_a,2:tooth_kept,3:@1\"}}", lens_verdict("PASS").trim_end_matches('}'));
     let lens = fake_lens(&state.join(REVIEW_MARKER), &table);
-    let passed = run_pipe(&["intake", "--design", &ok, "--bead", "s2-ok", "--repo", &repo_arg, "--state-dir", &state_arg, "--rules", &rules, "--lens", &lens]);
+    let passed =run_pipe(&["intake", "--design", &ok, "--bead", "s2-ok", "--repo", &repo_arg, "--state-dir", &state_arg, "--rules", &rules, "--lens", &lens]);
     assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "適合の行は受ける: {}", stderr_of(&passed));
     clean(&[&repo, &state]);
 }
 
+// flip-check: retroactive s2-07l.736.33.20.5
 /// §66 行 bx の写し（(1)(3)）: 欄 done-teeth を持つ行と持たない行を受付と preflight に通し、run dir の契約 file の key は欄を持つ行にだけ在り、
 /// preflight は `design=` の次に `done-teeth=present|absent` の 1 行を出し、受付の stdout は done-teeth の字を持たない。
 #[test]
@@ -930,9 +932,9 @@ fn done_teeth_copy_intake_writes_the_key_and_preflight_names_presence() {
     let without = derive_row("plain", &[("verify", "[\"cargo nextest run -p toy --no-tests=fail derive_\"]")]);
     let (repo, state) = derive_repo_with(&table_doc(&table_region(&[with, without])), TEETH_FILES);
     let (rules, repo_arg, state_arg) = (ceiling_rules(&state), repo.display().to_string(), state.display().to_string());
-    let table = format!("{},\"done\":\"1:a,2:b,3:c\"}}", lens_verdict("PASS").trim_end_matches('}'));
+    let table = format!("{},\"done\":\"1:tooth_a,2:tooth_kept,3:@1\"}}", lens_verdict("PASS").trim_end_matches('}'));
     let lens = fake_lens(&state.join(REVIEW_MARKER), &table);
-    let taken = run_pipe(&["intake", "--design", &pointed_contract(&repo, "t.toml", "ok"), "--bead", "s2-ok", "--repo", &repo_arg, "--state-dir", &state_arg, "--rules", &rules, "--lens", &lens]);
+    let taken =run_pipe(&["intake", "--design", &pointed_contract(&repo, "t.toml", "ok"), "--bead", "s2-ok", "--repo", &repo_arg, "--state-dir", &state_arg, "--rules", &rules, "--lens", &lens]);
     assert_eq!(taken.status.code(), Some(i32::from(RC_OK)), "欄を持つ行は受ける: {}", stderr_of(&taken));
     let plain = intake_raw(&repo, &state, &pointed_contract(&repo, "t.toml", "plain"), "s2-plain");
     assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "欄の無い行は受ける: {}", stderr_of(&plain));

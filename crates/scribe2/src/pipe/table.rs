@@ -45,6 +45,7 @@ pub use parse::{
 };
 pub(crate) use check::{check_repo, declared_files, design_docs, read, read_all, repo_findings, tracked_files, Located};
 pub(crate) use parse::{code_fact, Claim};
+pub(crate) use teeth::{parse_element, Tooth};
 /// 区間の始まりの行（CLAUDE.md の憲法区間と同じ marker 形・行全体が marker の行だけを数える）。
 pub const BEGIN: &str = "<!-- contracts:begin -->";
 

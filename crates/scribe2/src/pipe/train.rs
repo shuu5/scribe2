@@ -214,6 +214,7 @@ fn checks_on(entry: &Land<'_>, candidate: &Path, base: &str, contract: &Contract
         common,
         detection: &[],
         host: entry.limits.breaker(),
+        contract_file: None,
     })
 }
 
