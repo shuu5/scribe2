@@ -180,9 +180,9 @@ terms:
     relationships: [fleet, doctor, 口座の登録]
   - canonical: host の manifest
     domain: consumer
-    definition: manifest の host の面。 state dir の 1 file (host.toml) が host 固有の宣言値 (口座 label・席に積む plugin dir・起動引数) を持ち、 tracked の面と同じ loader が読む。 ADR-0064 (proposed) の後は tick の宣言の表 [[tick]] も持つ。 ADR-0076 の後は端末の表 [[device]] も持つ。 rules 行は置けない (C10.2 の読み・ADR-0026 §2.1)。
+    definition: manifest の host の面。 state dir の 1 file (host.toml) が host 固有の宣言値 (口座 label・席に積む plugin dir・起動引数) を持ち、 tracked の面と同じ loader が読む。 ADR-0064 (proposed) の後は tick の宣言の表 [[tick]] も持つ。 ADR-0076 の後は端末の表 [[device]] も持つ。 ADR-0112 (proposed) の後は書き込みの検出線の装置の表 [[write-budget]] も持つ。 rules 行は置けない (C10.2 の読み・ADR-0026 §2.1)。
     # forbidden から外した語（凍った決定記録の本文が使い、folio validate は全文の部分一致で数えるので外す・新しい文では使わない）: 私用 manifest・overlay
-    relationships: [manifest, state dir, 口座, 端末の表]
+    relationships: [manifest, state dir, 口座, 端末の表, 書き込みの検出線]
     flagged_ambiguities: [SRS の用語集では表示名を「host の面」とする (生成器は manifest を部分文字列に持つ用語を term-inline の曖昧化として拒む)。 同一 entity で正本は本 entry]
   - canonical: 端末の表
     domain: consumer
@@ -376,7 +376,7 @@ terms:
   - canonical: 検出線
     domain: consumer
     definition: 超えたら機械が検知して記録・起票する線。 PR は止めない。 CI が落とす deny 閾値とは区別する。
-    relationships: [rules 行]
+    relationships: [rules 行, 書き込みの検出線]
   - canonical: 歯
     domain: consumer
     definition: 違反を機械が止める仕組みのうち test / lint / CI gate を指す。 Rust の 1 framework だけで持つ (C12)。
@@ -511,8 +511,8 @@ terms:
     relationships: [管理 tick, 席, 打刻の合図, 開発 session]
   - canonical: 管理 tick
     domain: consumer
-    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。 ADR-0066 の後は、 自席の anchor が群に属する周に群の移動の判定を群ごとに鮮度の窓 (fleet.usage_fresh_s) に 1 回まで host の lock の内側で撃ち (lock を取れない周は撃たず今の列へ)、 判定の周だけ計測を起こしてよい (退避と起こし直しは自席の移動の門のまま)。 管理 tick の周は局面の出力の部分の書き直しの契機でもある (SRS FR27 / FR90・ADR-0088)。 ADR-0098 (proposed) の後は、 登録 row の口座が口座の墓標の席に合図を送らず判定行の理由を account-dead とし (heartbeat の実効の値が off の席は理由 heartbeat-off が先)、 打刻を読まずに群の移動の判定へ進み、 窓が shell の群の席は群の今の口座が墓標なら起こす前に判定を撃つ。 ADR-0108 の後は、 台帳の印か main の sha が局面の出力の印と違い、 書き直しの下限を過ぎた周に全部の書き直しも撃つ (撃った記録を書く・tick の rc と字は変えない)。
-    relationships: [開発 session, 打刻の合図, backoff, 変化の digest, tick の unit, 群の移動の判定, 判定の打刻, 移動の門, 局面の出力, alarm, 口座の墓標, 口座の門]
+    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。 ADR-0066 の後は、 自席の anchor が群に属する周に群の移動の判定を群ごとに鮮度の窓 (fleet.usage_fresh_s) に 1 回まで host の lock の内側で撃ち (lock を取れない周は撃たず今の列へ)、 判定の周だけ計測を起こしてよい (退避と起こし直しは自席の移動の門のまま)。 管理 tick の周は局面の出力の部分の書き直しの契機でもある (SRS FR27 / FR90・ADR-0088)。 ADR-0098 (proposed) の後は、 登録 row の口座が口座の墓標の席に合図を送らず判定行の理由を account-dead とし (heartbeat の実効の値が off の席は理由 heartbeat-off が先)、 打刻を読まずに群の移動の判定へ進み、 窓が shell の群の席は群の今の口座が墓標なら起こす前に判定を撃つ。 ADR-0108 の後は、 台帳の印か main の sha が局面の出力の印と違い、 書き直しの下限を過ぎた周に全部の書き直しも撃つ (撃った記録を書く・tick の rc と字は変えない)。 ADR-0112 (proposed) の後は、 host の面が書き込みの検出線の装置の表を持つ周に、 判定の後で host の根の書き込みの記録を fleet の store の lock の内で 1 回だけ進める (tick の rc と字は変えない)。
+    relationships: [開発 session, 打刻の合図, backoff, 変化の digest, tick の unit, 群の移動の判定, 判定の打刻, 移動の門, 局面の出力, alarm, 口座の墓標, 口座の門, 書き込みの検出線]
   - canonical: 口座の門
     domain: consumer
     aliases: [account gate, account-pressed]
@@ -1047,8 +1047,8 @@ terms:
   - canonical: host の根
     domain: consumer
     aliases: [host root]
-    definition: state dir の親の下の host 用 dir (NAME-host)。 同じ host の全 project が共有する置き場で、 受付札 (並列の枠・ADR-0021 §2.3) と群の置き場 (群の今の口座の記録・移動を頼む記録・群の段の lock と履歴・ADR-0049) がここに在る。 env を読まず state dir から導く。 state の真実は置かない (憲法 C3)。
-    relationships: [並列の枠, 受付札, host の manifest, 群の今の口座]
+    definition: state dir の親の下の host 用 dir (NAME-host)。 同じ host の全 project が共有する置き場で、 受付札 (並列の枠・ADR-0021 §2.3) と群の置き場 (群の今の口座の記録・移動を頼む記録・群の段の lock と履歴・ADR-0049) がここに在る。 ADR-0112 (proposed) の後は、 書き込みの検出線の記録 (装置ごとの dir の 2 file・装置の累計から取った出所つきの実測) もここに在る。 env を読まず state dir から導く。 state の真実は置かない (憲法 C3)。
+    relationships: [並列の枠, 受付札, host の manifest, 群の今の口座, 書き込みの検出線]
   - canonical: 実効の口座
     domain: consumer
     aliases: [effective role account]
@@ -2068,3 +2068,10 @@ terms:
     aliases: [ledger client, bd]
     definition: 台帳 (beads) を読み書きする command bd。 器は既定で素の名 bd を子 process の PATH で解く。 ADR-0108 の後は、 seat tick が flag --bd でその場所を受け、 tick の宣言の任意の key bd か unit を入れる口の flag が絶対 path を名乗った unit だけが ExecStart で渡す (器は env・home・PATH の探索で解かない・C2.2)。
     relationships: [管理 tick, tick の unit, tick の宣言, 台帳の印, 書き直しの契機]
+
+  - canonical: 書き込みの検出線
+    domain: consumer
+    aliases: [write detection line, write-budget, "[[write-budget]]"]
+    definition: host の manifest の表 [[write-budget]] (0〜n 行・欄は name と stat) が名指す block 装置ごとに、 管理 tick の周が装置の stat file の書いた区の数から測った UTC の 1 日の書き込みを比べる検出線で、 rules 行 4 本 (host.write_avg_gb・host.write_day_gb・host.write_avg_days・host.write_owner_days) が線と窓と持ち主の段の連続日数を持つ (ADR-0112・proposed)。 記録は host の根の write-budget の dir の下の装置ごとの 2 file (今日の 1 行と閉じた日の追記の log・schema=1) で、 測れない日は unmeasured・欠けた日は partial (下限) と書き 0 と書かない (C10)。 越えは doctor の write-budget の行と、 席の UserPromptSubmit の追加文脈の 1 行が示し (持ち主の段の行は owner=yes)、 作業は止めず、 台帳には起票しない (C15)。 装置ごとに独立に判じ、 和を取らない。
+    relationships: [検出線, rules 行, 管理 tick, host の manifest, host の根, doctor, 裁定 id]
+    flagged_ambiguities: ["file・key・表の名 write-budget の budget は C6 の Budget (起動に必要な予算の型) とは別で、 予算は canonical にしない", 書き込みの検出線 (host の装置の書き込み・ADR-0112) と、 変異検出線 (歯に撃墜されない変異の数・R-C12-1) は別, 検出線の定義の起票は本語には当たらない (器は台帳に memo を起こさず、 越えの記録は器の記録と doctor の行が持つ)]
