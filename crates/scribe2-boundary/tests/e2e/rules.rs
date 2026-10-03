@@ -1036,30 +1036,32 @@ fn rules_lifecycle_rows_refuse_an_age_word_outside_the_seat_words() {
     parsed(&one_row(RuleKind::LifecycleClosedWindowH, "72")).expect("窓の行は id を縛らない");
 }
 
-/// 事前審査の先撃ちの 1 周の本数の行（設計 dispatcher.md §27 形 1・行 aa・`s2-07l.718`）が埋め込み manifest に id / kind / 形 Int /
-/// 値 0（先撃ちの退役の段 1・設計 row-review.md §6）/ enabled / 裁定 id / 裁定日で 1 本在り、行は `gate.lens_count` の直後・kind は
-/// `ALL` の `GateLensCount` の直後で `GateTokenCap` の前、字面から引け、形は Int だけ（base では値が 1 ＝ RED）。
+/// 事前審査の先撃ちの 2 行（`pipe.precheck_lens_per_round`・`pipe.precheck_lens_model`）と 2 つの kind（`PipePrecheckLensPerRound`・
+/// `PipePrecheckLensModel`）は**もう無い**（先撃ちの退役の段 2・設計 row-review.md §6）: (a) `rules get` は無い id と同じ断り
+/// （rc が 0 でなく stderr が `rules: no such id` の 1 行）で、(b) その kind の行を持つ写しは、行の id と kind の字を名指す未知の kind の
+/// 断りで読めず、(c) kind は字面から引けず `ALL` にも無い。base では 2 行とも在り kind も引けるので RED。
 #[test]
-fn rules_prelens_row_follows_the_lens_count() {
+fn rules_prelens_retired_rows_and_kinds_are_gone() {
+    let bin = env!("CARGO_BIN_EXE_scribe2");
+    let retired = [("pipe.precheck_lens_per_round", "PipePrecheckLensPerRound", "0"), ("pipe.precheck_lens_model", "PipePrecheckLensModel", "\"sonnet\"")];
+    for (id, kind, value) in retired {
+        let out = Command::new(bin).args(["rules", "get", id]).output().expect("binary を起動できる");
+        assert_ne!(out.status.code(), Some(0), "{id}: 無い id は rc 0 でない");
+        assert_eq!(String::from_utf8_lossy(&out.stderr).trim_end(), "rules: no such id", "{id}: 断りの 1 行");
+        assert!(out.stdout.is_empty(), "{id}: stdout は空");
+        let text = format!(
+            "schema = 1\n\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-09\"\n"
+        );
+        let errors = rejected(&text).expect("退役した kind の行を持つ写しが受理された");
+        let joined = errors.join("\n");
+        assert!(joined.contains(&format!("{id} の kind {kind} は未知である")), "{id}: 未知の kind の断りが id と kind を名指す: {joined}");
+        assert_eq!(RuleKind::parse(kind), None, "{kind} は字面から引けない");
+        assert!(!ALL.iter().any(|found| found.as_str() == kind), "{kind} は ALL に無い");
+    }
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
-    let id = "pipe.precheck_lens_per_round";
-    let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
-    let kind = RuleKind::parse("PipePrecheckLensPerRound").expect("字面から引ける");
-    assert_eq!((kind.as_str(), kind.shape()), ("PipePrecheckLensPerRound", ValueShape::Int), "kind の字面と形");
-    assert_eq!(row.kind, kind, "{id} の kind");
-    assert_eq!(row.value, RuleValue::Int(0), "{id} の値（撃たない）");
-    assert!(row.enabled, "{id} は既定で効く");
-    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-30T22:13Z 項 precheck", "2026-09-30"), "{id} の裁定 id と裁定日");
-    assert_eq!(int_row(&manifest, id), Ok(0), "{id} を整数の読み手で引ける");
-    assert_eq!(manifest.rows().iter().filter(|found| found.kind == kind).count(), 1, "kind の行は 1 本");
-    let at = ALL.iter().position(|found| *found == RuleKind::GateLensCount).expect("GateLensCount は ALL に在る");
-    let after: Vec<RuleKind> = ALL.iter().skip(at + 1).take(2).copied().collect();
-    assert_eq!(after, [kind, RuleKind::GateTokenCap], "kind は GateLensCount の直後で GateTokenCap の前");
-    let rows: Vec<&str> = manifest.rows().iter().map(|found| found.id.as_str()).collect();
-    let lens = rows.iter().position(|found| *found == "gate.lens_count").expect("gate.lens_count の行が在る");
-    assert_eq!(rows.get(lens + 1).copied(), Some(id), "行も gate.lens_count の直後（母集団 {} 行）", rows.len());
-    let errors = rejected(&one_row(kind, "\"one\"")).expect("文字列の値の fixture が受理された");
-    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+    for (id, _, _) in retired {
+        assert!(manifest.get(id).is_none(), "{id} の行は残らない");
+    }
 }
 
 /// 終端の CI の照合の間隔の行（設計 contract-source.md §50 形 1・`s2-07l.694`）が埋め込み manifest に id / kind / 形 Int /
