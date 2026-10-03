@@ -162,6 +162,13 @@ pub(in crate::pipe) fn detect(entry: &Detect<'_>, sha: &str) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
+    // 測り終えた周（測れた・面の外）だけ起点を進める。測れなかった周は動かさない（その差分は次の日次の検出に含まれる）。
+    // event を見た読み手が進む前の起点を読まないよう、起点を進めてから event を書く（event が口の最後の書き・設計 §51）。
+    let advanced = if entry.daily.is_some() && matches!(finished, Finished::Measured | Finished::Skipped) {
+        advance_origin(entry, sha)
+    } else {
+        None
+    };
     let emitted = emit(
         entry.state_dir,
         &Emit {
@@ -179,10 +186,7 @@ pub(in crate::pipe) fn detect(entry: &Detect<'_>, sha: &str) -> Outcome {
         return broken(err.to_string());
     }
     let mut outcome = Outcome::ok_line(format!("run={} detection={}", entry.run, finished.as_str()));
-    // 測り終えた周（測れた・面の外）だけ起点を進める。測れなかった周は動かさない（その差分は次の日次の検出に含まれる）。
-    if entry.daily.is_some() && matches!(finished, Finished::Measured | Finished::Skipped) {
-        outcome.err.extend(advance_origin(entry, sha));
-    }
+    outcome.err.extend(advanced);
     outcome
 }
 

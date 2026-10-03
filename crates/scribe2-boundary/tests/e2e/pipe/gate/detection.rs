@@ -886,3 +886,45 @@ fn pipe_detection_daily_without_a_readable_row_keeps_the_landing_form() {
     assert!(shown_copies(&b).iter().all(|line| !line.contains("since=")), "show の行に since= が無い: {:?}", shown_copies(&b));
     clean(&[&b.repo, &b.state]);
 }
+
+/// (1)(3) 日次の周の口は起点を進めてから終えた語の event を書く: lock の待ちを 600000 ms にした rules の写しで、stub が起点の
+/// lock file を歯の process の pid で置く（子の起点を進める手は待つ）。land は rc 0・stub の呼出が見えてから 5 秒の間、便の
+/// detail に終えた語が 1 件も無く起点の 1 語目は `measured=-` のまま。lock file を消して子を待つと、detail はちょうど
+/// spawned と measured で、起点は `measured=<A> fired=<A の land の前後の間>`。
+#[test]
+fn pipe_detection_daily_records_the_finish_after_the_origin_advances() {
+    let world = daily_world(&[DailyCar::crates("a", "s2-2e5", &["landed_a_"])]);
+    let rules = write_rules_full(&world.1, "rules-daily-lock.toml", (1, 1_000_000), FOLLOW_RETRIES, default_slots());
+    let text = fs::read_to_string(&rules).unwrap_or_default();
+    let patched = text
+        .replace("kind = \"LockRetryMs\"\nvalue = 5000", "kind = \"LockRetryMs\"\nvalue = 600000")
+        .replace("kind = \"LockStaleMs\"\nvalue = 30000", "kind = \"LockStaleMs\"\nvalue = 600000");
+    assert!(patched.contains("kind = \"LockRetryMs\"\nvalue = 600000"), "待ちを 600000 に置き換えた");
+    assert!(patched.contains("kind = \"LockStaleMs\"\nvalue = 600000"), "stale を 600000 に置き換えた");
+    let daily = "[[rule]]\nid = \"detection.daily_min_s\"\nkind = \"DetectionDailyMinS\"\nvalue = 86400\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
+    assert!(fs::write(&rules, format!("{patched}\n{daily}")).is_ok(), "日次の行を足せる");
+    let lock = world.1.join("pipe").join("detection-origin").join("origin.lock");
+    let (lock_path, pid) = (lock.display().to_string(), std::process::id().to_string());
+    let body = format!(
+        "printf '%s\\n' \"$*\" >> \"$(git rev-parse --git-common-dir)/{LANDED_CALLS}\"\nprintf '%s\\n' '{LANDED_LINE}'\nmkdir -p \"$(dirname '{lock_path}')\"\nprintf '%s\\n' {pid} > '{lock_path}'\nexit 0\n"
+    );
+    assert!(body.contains(&lock_path) && body.contains(&pid), "stub は lock の path と pid を書く");
+    assert!(fs::write(world.0.join(".git").join(LANDED_STUB), body).is_ok(), "stub を書き換えられる");
+    let t0 = epoch_now();
+    let (a, out) = daily_land(&world, &DailyCar::crates("a", "s2-2e5", &["landed_a_"]), Some(&rules));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "A の land: {} / {}", stdout_of(&out), stderr_of(&out));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while landed_calls(&a.repo).is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(landed_calls(&a.repo).len(), 1, "stub の呼出が 1 行見える");
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    assert_eq!(detection_details(&a.state, &a.id), [SPAWNED_DETAIL], "起点を進める間は終えた語を書かない");
+    assert_eq!(origin_measured(&a.state), "measured=-", "起点の 1 語目は進まない");
+    assert!(fs::remove_file(&lock).is_ok(), "lock を外せる");
+    await_detection_child(&a.state, &a.id);
+    let t1 = epoch_now();
+    assert_eq!(detection_details(&a.state, &a.id), [SPAWNED_DETAIL, "detection:measured"], "子は測って終える");
+    assert_origin_in(&a.state, &a.sha, (t0, t1));
+    clean(&[&a.repo, &a.state]);
+}
