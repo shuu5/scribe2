@@ -3273,3 +3273,373 @@ fn seat_tick_full_lifecycle_fires_only_when_the_place_has_one_anchor() {
     crate::pipe::clean(&[&fx.life.repo, &fx.life.state]);
     fs::remove_dir_all(&other).ok();
 }
+
+// ─────────────────── 書き込みの検出線の測り（設計 write-budget.md §2〜§4・接頭辞 `seat_tick_write_budget_`） ───────────────────
+//
+// 置き場は [`tick_place`]（登録 row の在る形）。host の面（`<state>/host.toml`）の表 `[[write-budget]]` の stat は tmp の根の下の fixture の
+// file（17 欄の 1 行・7 欄目が書いた区の数）を指す（sysfs は読まない）。記録は host の根（`<tmp の根>/<NAME>-host/write-budget/<name>/`）の
+// `open` と `days.log` で、字は設計 §4 の形を歯が組んで書き・読む（器の口を使わない）。
+
+/// 記録の dir（契約の字面から組む）。
+fn wb_dir(place: &TickPlace, name: &str) -> PathBuf {
+    place.at(&format!("{NAME}-host")).join("write-budget").join(name)
+}
+
+/// 装置 `name` の stat の fixture の path。
+fn wb_stat(place: &TickPlace, name: &str) -> PathBuf {
+    place.at(&format!("stat-{name}"))
+}
+
+/// 装置 `name` の stat の fixture を 17 欄の 1 行で書く（7 欄目が `sectors`）。
+fn wb_stat_put(place: &TickPlace, name: &str, sectors: u64) {
+    fs::write(wb_stat(place, name), format!("1 2 3 4 5 6 {sectors} 8 9 10 11 12 13 14 15 16 17\n")).ok();
+}
+
+/// 置き場に装置の stat の fixture を書き、`table` なら host の面へ表の行を足す。
+fn wb_fill(place: &TickPlace, rows: &[(&str, u64)], table: bool) {
+    let mut host = "schema = 1\n".to_owned();
+    for (name, sectors) in rows {
+        wb_stat_put(place, name, *sectors);
+        host.push_str(&format!("\n[[write-budget]]\nname = \"{name}\"\nstat = \"{}\"\n", wb_stat(place, name).display()));
+    }
+    if table {
+        fs::write(place.state.join(vessel::rules::HOST_MANIFEST), host).ok();
+    }
+}
+
+/// 登録 row の在る置き場に表と fixture を置く（`table` が false なら表の無い同じ fixture）。
+fn wb_place(rows: &[(&str, u64)], table: bool) -> TickPlace {
+    let place = tick_place(true);
+    wb_fill(&place, rows, table);
+    place
+}
+
+/// 記録の `open` の字（無ければ空）。
+fn wb_open(place: &TickPlace, name: &str) -> String {
+    fs::read_to_string(wb_dir(place, name).join("open")).unwrap_or_default()
+}
+
+/// 記録の `days.log` の字（無ければ空）。
+fn wb_days(place: &TickPlace, name: &str) -> String {
+    fs::read_to_string(wb_dir(place, name).join("days.log")).unwrap_or_default()
+}
+
+/// 記録の `open` を書く（dir ごと作る）。
+fn wb_put_open(place: &TickPlace, name: &str, text: &str) {
+    fs::create_dir_all(wb_dir(place, name)).ok();
+    fs::write(wb_dir(place, name).join("open"), text).ok();
+}
+
+/// `open` の 10 語（schema=1 stat=… の順・契約の字面）。
+fn wb_open_line(place: &TickPlace, name: &str, date: &str, nums: (u64, u64, u64), tail: (&str, u64, u64, &str)) -> String {
+    let (sectors, at, written) = nums;
+    let (state, reboots, probed, probe) = tail;
+    format!(
+        "schema=1 stat={} date={date} sectors={sectors} at={at} written={written} state={state} reboots={reboots} probed={probed} probe={probe}\n",
+        wb_stat(place, name).display()
+    )
+}
+
+/// UNIX 秒の UTC の日付（`YYYY-MM-DD`）。
+fn wb_date(secs: u64) -> String {
+    vessel::fleet::cli::format_utc(secs).chars().take(10).collect()
+}
+
+/// `open` の数の語（無ければ 0）。
+fn wb_word(text: &str, key: &str) -> u64 {
+    tick_token(text, key).and_then(|word| word.parse().ok()).unwrap_or(0)
+}
+
+/// `open` の語から probed と probe を除いた列（数が変わっていないことを測る）。
+fn wb_numbers(text: &str) -> Vec<String> {
+    text.split_whitespace().filter(|word| !word.starts_with("probed=") && !word.starts_with("probe=")).map(str::to_owned).collect()
+}
+
+/// `open` の probed を 0 に書き換える（書き換えた字を assert・次の周を早抜けさせない）。
+fn wb_zero_probed(place: &TickPlace, name: &str) {
+    let open = wb_open(place, name);
+    let zeroed = open.replace(&format!("probed={} ", wb_word(&open, "probed")), "probed=0 ");
+    assert_ne!(zeroed, open, "probed を 0 に書き換えた: {open:?}");
+    assert!(zeroed.contains(" probed=0 "), "書き換えた字: {zeroed:?}");
+    wb_put_open(place, name, &zeroed);
+}
+
+/// 周期の行と lock の 2 行を選べる rules の写し（tick の判定が読む行と lock の 2 行・`None` の行は書かない）。path を返す。
+fn wb_rules(place: &TickPlace, (interval, retry, stale): (Option<u64>, Option<u64>, Option<u64>)) -> String {
+    let mut rows = tick_rule_rows();
+    rows.retain(|(id, _, _)| *id != "seat.tick_interval_s");
+    rows.extend(interval.map(|value| ("seat.tick_interval_s", "SeatTickIntervalS", value.to_string())));
+    rows.extend(
+        [
+            ("pipe.stop_grace_ms", "StopGraceMs", 2000),
+            ("fleet.usage_fresh_s", "UsageFreshS", 300),
+            ("fleet.group_pressure_5h_pct", "GroupPressure5hPct", 85),
+            ("fleet.group_pressure_7d_pct", "GroupPressure7dPct", 95),
+            ("fleet.group_pressure_model_pct", "GroupPressureModelPct", 95),
+        ]
+        .map(|(id, kind, value)| (id, kind, value.to_string())),
+    );
+    rows.extend(retry.map(|value| ("fleet.lock_retry_ms", "LockRetryMs", value.to_string())));
+    rows.extend(stale.map(|value| ("fleet.lock_stale_ms", "LockStaleMs", value.to_string())));
+    fixture(&place.dir, "wb-rules.toml", &tick_rules_body(&rows))
+}
+
+/// 周期を `interval` にした（lock の行は埋め込みと同じ）rules の写しで撃つ（黙り 100 秒の noop の周）。
+fn wb_fire_with(place: &TickPlace, interval: u64) -> Output {
+    tick_silent_for(place, 100);
+    let rules = wb_rules(place, (Some(interval), Some(5000), Some(30_000)));
+    tick_run(place, &["--rules", &rules])
+}
+
+/// 黙り 100 秒の noop の周を埋め込みの rules で撃つ。
+fn wb_fire(place: &TickPlace) -> Output {
+    tick_silent_for(place, 100);
+    tick_run(place, &[])
+}
+
+/// 今日の 0 時（UNIX 秒）。
+fn wb_today0() -> u64 {
+    let now = unix_now();
+    now - now % 86_400
+}
+
+/// (a) 表 2 行の置き場と表の無い同じ fixture の置き場を同じ周で撃つと rc・stdout・stderr と tick-last（`ts=` を除く）が等しく、
+/// 表の無い置き場の host の根に `write-budget` が無い。表の置き場は記録の無い周に今日を partial・written 0 で開き（行ごと）、次の周は
+/// 差 × 512 を行ごとに足す（和を取らない）。
+#[test]
+fn seat_tick_write_budget_opens_a_partial_day_then_adds_the_sectors() {
+    let rows = [("nvme-a", 1000), ("nvme-b", 70)];
+    let (table, plain) = (wb_place(&rows, true), wb_place(&rows, false));
+    tick_silent_for(&table, 100);
+    tick_silent_for(&plain, 100);
+    let before = unix_now();
+    let (out_table, out_plain) = (tick_run(&table, &[]), tick_run(&plain, &[]));
+    let after = unix_now();
+    assert_eq!(rc_of(&out_table), i32::from(RC_OK), "stderr={}", stderr_of(&out_table));
+    assert_eq!(
+        (rc_of(&out_table), stdout_of(&out_table), stderr_of(&out_table)),
+        (rc_of(&out_plain), stdout_of(&out_plain), stderr_of(&out_plain)),
+        "rc・stdout・stderr は表の無い置き場と同じ"
+    );
+    let last = |place: &TickPlace| fs::read_to_string(status_last_path(place)).unwrap_or_default().split_once(' ').map(|(_, rest)| rest.to_owned()).unwrap_or_default();
+    assert!(last(&table).starts_with("decision="), "tick-last が在る: {:?}", last(&table));
+    assert_eq!(last(&table), last(&plain), "tick-last は ts を除いて等しい");
+    assert!(!plain.at(&format!("{NAME}-host")).join("write-budget").exists(), "表の無い置き場は host の根に dir を作らない");
+    let open_a = wb_open(&table, "nvme-a");
+    let t = wb_word(&open_a, "at");
+    assert!((before..=after).contains(&t), "at は撃つ前後の間: {open_a:?}");
+    assert_eq!(
+        open_a,
+        format!("schema=1 stat={} date={} sectors=1000 at={t} written=0 state=partial reboots=0 probed={t} probe=ok\n", wb_stat(&table, "nvme-a").display(), wb_date(before)),
+        "記録の無い周は今日を partial・written 0 で開く"
+    );
+    assert_eq!((wb_word(&wb_open(&table, "nvme-b"), "sectors"), wb_word(&wb_open(&table, "nvme-b"), "written")), (70, 0), "nvme-b も独立に開く");
+    assert!(wb_days(&table, "nvme-a").is_empty() && wb_days(&table, "nvme-b").is_empty(), "days.log は無い");
+    wb_stat_put(&table, "nvme-a", 3000);
+    for name in ["nvme-a", "nvme-b"] {
+        wb_zero_probed(&table, name);
+    }
+    let out = wb_fire(&table);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let (open_a, open_b) = (wb_open(&table, "nvme-a"), wb_open(&table, "nvme-b"));
+    assert_eq!((wb_word(&open_a, "written"), wb_word(&open_a, "sectors")), (1_024_000, 3000), "差 2000 × 512: {open_a:?}");
+    assert!(open_a.contains(" state=partial "), "state は partial のまま: {open_a:?}");
+    assert_eq!((wb_word(&open_b, "written"), wb_word(&open_b, "sectors")), (0, 70), "和を取らない: {open_b:?}");
+}
+
+/// (b) 周期の内の周（埋め込みの rules・周期 15）は `open` を 1 byte も変えず、probed を 0 に書き換えた次の周は差 × 512 を足す。
+#[test]
+fn seat_tick_write_budget_skips_a_round_inside_the_period() {
+    let place = wb_place(&[("nvme-a", 1000)], true);
+    assert_eq!(rc_of(&wb_fire(&place)), i32::from(RC_OK));
+    let first = wb_open(&place, "nvme-a");
+    assert!(first.contains(" sectors=1000 "), "最初の周は開く: {first:?}");
+    wb_stat_put(&place, "nvme-a", 5000);
+    assert_eq!(rc_of(&wb_fire(&place)), i32::from(RC_OK));
+    assert_eq!(wb_open(&place, "nvme-a"), first, "周期の内の周は何も書かない");
+    wb_zero_probed(&place, "nvme-a");
+    assert_eq!(rc_of(&wb_fire(&place)), i32::from(RC_OK));
+    assert_eq!(wb_word(&wb_open(&place, "nvme-a"), "written"), 2_048_000, "対照: 周期の外の周は 4000 × 512 を足す");
+}
+
+/// (c) 同じ日の読みが前より小さい周は再起動と読み、読み × 512 を足し、reboots を 1 増やし、state を partial にする。
+#[test]
+fn seat_tick_write_budget_counts_a_reboot_inside_the_day() {
+    let place = wb_place(&[("nvme-a", 1200)], true);
+    let today0 = wb_today0();
+    wb_put_open(&place, "nvme-a", &wb_open_line(&place, "nvme-a", &wb_date(today0), (5000, today0, 100), ("measured", 0, 0, "ok")));
+    assert_eq!(rc_of(&wb_fire(&place)), i32::from(RC_OK));
+    let open = wb_open(&place, "nvme-a");
+    assert_eq!((wb_word(&open, "written"), wb_word(&open, "sectors"), wb_word(&open, "reboots")), (614_500, 1200, 1), "{open:?}");
+    assert!(open.contains(" state=partial "), "{open:?}");
+}
+
+/// (d) 周期の行 86400 の写しで、昨日の記録を 2 × 周期の内に閉じる周は measured のまま差 × 512 を足して `days.log` へ閉じ、今日を measured で開く。
+#[test]
+fn seat_tick_write_budget_closes_the_day_measured_within_two_periods() {
+    let place = wb_place(&[("nvme-a", 3000)], true);
+    let today0 = wb_today0();
+    let at = today0 - 5;
+    wb_put_open(&place, "nvme-a", &wb_open_line(&place, "nvme-a", &wb_date(today0 - 86_400), (1000, at, 7000), ("measured", 0, at, "ok")));
+    assert_eq!(rc_of(&wb_fire_with(&place, 86_400)), i32::from(RC_OK));
+    assert_eq!(wb_days(&place, "nvme-a"), format!("schema=1 date={} written=1031000 state=measured reboots=0 tail=-\n", wb_date(today0 - 86_400)));
+    let open = wb_open(&place, "nvme-a");
+    assert_eq!((open.contains(" date="), wb_word(&open, "sectors"), wb_word(&open, "written"), wb_word(&open, "reboots")), (true, 3000, 0, 0), "{open:?}");
+    assert!(open.contains(&format!(" date={} ", wb_date(unix_now()))) && open.contains(" state=measured "), "今日を measured で開く: {open:?}");
+}
+
+/// (e) (d) と同じ記録で読みが減った周は前の日を partial・tail = 読み × 512 で閉じ、今日を partial・reboots 1 で開く。
+#[test]
+fn seat_tick_write_budget_closes_the_day_partial_after_a_reboot() {
+    let place = wb_place(&[("nvme-a", 600)], true);
+    let today0 = wb_today0();
+    let at = today0 - 5;
+    wb_put_open(&place, "nvme-a", &wb_open_line(&place, "nvme-a", &wb_date(today0 - 86_400), (1000, at, 7000), ("measured", 0, at, "ok")));
+    assert_eq!(rc_of(&wb_fire_with(&place, 86_400)), i32::from(RC_OK));
+    assert_eq!(wb_days(&place, "nvme-a"), format!("schema=1 date={} written=7000 state=partial reboots=0 tail=307200\n", wb_date(today0 - 86_400)));
+    let open = wb_open(&place, "nvme-a");
+    assert_eq!((wb_word(&open, "sectors"), wb_word(&open, "written"), wb_word(&open, "reboots")), (600, 0, 1), "{open:?}");
+    assert!(open.contains(" state=partial "), "{open:?}");
+}
+
+/// (f) 埋め込みの rules（周期 15）で、昨日の昼の記録を閉じる周は 2 × 周期の外なので partial・tail = 差 × 512 で閉じ、今日を partial で開く。
+#[test]
+fn seat_tick_write_budget_closes_the_day_partial_after_a_late_sample() {
+    let place = wb_place(&[("nvme-a", 3000)], true);
+    let today0 = wb_today0();
+    let at = today0 - 43_200;
+    wb_put_open(&place, "nvme-a", &wb_open_line(&place, "nvme-a", &wb_date(at), (1000, at, 7000), ("measured", 0, at, "ok")));
+    assert_eq!(rc_of(&wb_fire(&place)), i32::from(RC_OK));
+    assert_eq!(wb_days(&place, "nvme-a"), format!("schema=1 date={} written=7000 state=partial reboots=0 tail=1024000\n", wb_date(at)));
+    let open = wb_open(&place, "nvme-a");
+    assert!(open.contains(" state=partial ") && open.contains(" reboots=0 ") && open.contains(" written=0 "), "{open:?}");
+}
+
+/// (g) 周期の行 345600 の写し（2 × 周期が 8 日）で 3 日前の昼の記録を閉じる周は、3 日前を partial で、間の 2 日を unmeasured で閉じ、今日を partial で開く。
+#[test]
+fn seat_tick_write_budget_closes_a_gap_with_unmeasured_days() {
+    let place = wb_place(&[("nvme-a", 4000)], true);
+    let today0 = wb_today0();
+    let at = today0 - 3 * 86_400 + 43_200;
+    wb_put_open(&place, "nvme-a", &wb_open_line(&place, "nvme-a", &wb_date(at), (1000, at, 500), ("measured", 0, at, "ok")));
+    assert_eq!(rc_of(&wb_fire_with(&place, 345_600)), i32::from(RC_OK));
+    let (second, third) = (wb_date(today0 - 2 * 86_400), wb_date(today0 - 86_400));
+    assert_eq!(
+        wb_days(&place, "nvme-a"),
+        format!(
+            "schema=1 date={} written=500 state=partial reboots=0 tail=1536000\nschema=1 date={second} written=- state=unmeasured reboots=0 tail=-\nschema=1 date={third} written=- state=unmeasured reboots=0 tail=-\n",
+            wb_date(at)
+        )
+    );
+    assert!(wb_open(&place, "nvme-a").contains(" state=partial "), "今日は partial");
+}
+
+/// (h) 読めない stat（無い）は probe=unreadable・形でない stat（6 欄・7 欄目が x）は probe=malformed で、どれも数を変えず probed と probe だけを
+/// 書き換える。記録の無い置き場に読めない stat は何も書かず、stat を置くと開く（対照）。
+#[test]
+fn seat_tick_write_budget_names_an_unreadable_or_malformed_stat() {
+    let place = wb_place(&[("nvme-a", 1000)], true);
+    assert_eq!(rc_of(&wb_fire(&place)), i32::from(RC_OK));
+    let first = wb_open(&place, "nvme-a");
+    assert!(first.ends_with(" probe=ok\n"), "{first:?}");
+    let stat = wb_stat(&place, "nvme-a");
+    for (probe, body) in [("unreadable", None), ("malformed", Some("1 2 3 4 5 6\n")), ("malformed", Some("1 2 3 4 5 6 x 8\n"))] {
+        wb_zero_probed(&place, "nvme-a");
+        match body {
+            Some(text) => fs::write(&stat, text).ok().unwrap_or_default(),
+            None => fs::remove_file(&stat).ok().unwrap_or_default(),
+        }
+        let (before, out) = (unix_now(), wb_fire(&place));
+        let after = unix_now();
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+        let open = wb_open(&place, "nvme-a");
+        assert!(open.contains(&format!(" probe={probe}\n")), "{probe}: {open:?}");
+        assert!((before..=after).contains(&wb_word(&open, "probed")), "probed は撃った時刻: {open:?}");
+        assert_eq!(wb_numbers(&open), wb_numbers(&first), "{probe}: 数は前と等しい");
+    }
+    let fresh = wb_place(&[("nvme-a", 1000)], true);
+    fs::remove_file(wb_stat(&fresh, "nvme-a")).ok();
+    assert_eq!(rc_of(&wb_fire(&fresh)), i32::from(RC_OK));
+    assert!(wb_open(&fresh, "nvme-a").is_empty() && wb_days(&fresh, "nvme-a").is_empty(), "記録の無い周に読めなければ何も書かない");
+    wb_stat_put(&fresh, "nvme-a", 1000);
+    assert_eq!(rc_of(&wb_fire(&fresh)), i32::from(RC_OK));
+    assert!(!wb_open(&fresh, "nvme-a").is_empty(), "対照: stat を置くと開く");
+}
+
+/// (i) 記録の stat が表の stat と違う周は probe=stat-mismatch で、数を変えず probed と probe だけを書き換える。
+#[test]
+fn seat_tick_write_budget_refuses_a_changed_stat_path() {
+    let place = wb_place(&[("nvme-a", 1200)], true);
+    let today0 = wb_today0();
+    let line = wb_open_line(&place, "nvme-a", &wb_date(today0), (5000, today0, 100), ("measured", 0, 0, "ok"));
+    let other = line.replace(&format!("stat={}", wb_stat(&place, "nvme-a").display()), "stat=/other/stat");
+    assert_ne!(other, line, "stat を別の path に書き換えた");
+    wb_put_open(&place, "nvme-a", &other);
+    let (before, out) = (unix_now(), wb_fire(&place));
+    let after = unix_now();
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let open = wb_open(&place, "nvme-a");
+    assert!(open.ends_with(" probe=stat-mismatch\n"), "{open:?}");
+    assert!((before..=after).contains(&wb_word(&open, "probed")), "{open:?}");
+    assert_eq!(wb_numbers(&open), wb_numbers(&other), "数は前と等しい（stat の語も記録のまま）");
+}
+
+/// (j) lock を持つ者が居る周（`open.lock` に生きた pid の 1 語）は記録を 1 byte も変えず、lock を消すと進む。`open` が dir の置き場は
+/// 何も書かない（dir の中身が空のまま・days.log が無い）。
+#[test]
+fn seat_tick_write_budget_leaves_the_record_while_the_lock_is_held_or_the_record_is_unreadable() {
+    let place = wb_place(&[("nvme-a", 1000)], true);
+    assert_eq!(rc_of(&wb_fire(&place)), i32::from(RC_OK));
+    let first = wb_open(&place, "nvme-a");
+    wb_zero_probed(&place, "nvme-a");
+    let held = wb_open(&place, "nvme-a");
+    let lock = wb_dir(&place, "nvme-a").join("open.lock");
+    fs::write(&lock, format!("{}\n", std::process::id())).ok();
+    assert_eq!(fs::read_to_string(&lock).unwrap_or_default(), format!("{}\n", std::process::id()), "lock の字");
+    wb_stat_put(&place, "nvme-a", 2000);
+    tick_silent_for(&place, 100);
+    let rules = wb_rules(&place, (Some(15), Some(200), Some(30_000)));
+    let out = tick_run(&place, &["--rules", &rules]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(wb_open(&place, "nvme-a"), held, "lock を持つ者が居る周は 1 byte も変えない");
+    assert_ne!(held, first, "書き換えた open と最初の open は違う");
+    fs::remove_file(&lock).ok();
+    assert_eq!(rc_of(&wb_fire(&place)), i32::from(RC_OK));
+    assert_eq!(wb_word(&wb_open(&place, "nvme-a"), "written"), 512_000, "対照: lock を消すと差 1000 × 512 を足す");
+    let unreadable = wb_place(&[("nvme-a", 1000)], true);
+    let open_dir = wb_dir(&unreadable, "nvme-a").join("open");
+    fs::create_dir_all(&open_dir).ok();
+    assert_eq!(rc_of(&wb_fire(&unreadable)), i32::from(RC_OK));
+    assert!(fs::read_dir(&open_dir).is_ok_and(|mut found| found.next().is_none()), "open の dir の中身は空のまま");
+    assert!(open_dir.is_dir() && wb_days(&unreadable, "nvme-a").is_empty(), "open は dir のまま・days.log は無い");
+}
+
+/// (k) 登録 row の無い target の置き場は表が在っても host の根に `write-budget` を作らない。登録 row の在る置き場は、周期の行・
+/// `fleet.lock_retry_ms`・`fleet.lock_stale_ms` を欠く写しの周に記録を書かず（打刻は書く）、埋め込みの rules の周に書く（対照）。
+#[test]
+fn seat_tick_write_budget_writes_nothing_outside_a_registered_seat_with_a_table() {
+    let bare = tick_place(false);
+    wb_fill(&bare, &[("nvme-a", 1000)], true);
+    assert_eq!(rc_of(&wb_fire(&bare)), i32::from(RC_OK));
+    assert!(!bare.at(&format!("{NAME}-host")).join("write-budget").exists(), "登録 row の無い target は dir も作らない");
+    let place = wb_place(&[("nvme-a", 1000)], true);
+    for (label, rows, refused) in [
+        ("周期の行を欠く", (None, Some(5000), Some(30_000)), true),
+        ("lock_retry_ms を欠く", (Some(15), None, Some(30_000)), false),
+        ("lock_stale_ms を欠く", (Some(15), Some(5000), None), false),
+    ] {
+        tick_silent_for(&place, 100);
+        let rules = wb_rules(&place, rows);
+        let before = unix_now();
+        let out = tick_run(&place, &["--rules", &rules]);
+        let after = unix_now();
+        assert_eq!(rc_of(&out), i32::from(if refused { RC_REFUSED } else { RC_OK }), "{label}: stderr={}", stderr_of(&out));
+        let text = fs::read_to_string(status_last_path(&place)).unwrap_or_default();
+        let ts = text.strip_prefix("ts=").and_then(|rest| rest.split(' ').next()).and_then(|secs| secs.parse::<u64>().ok()).unwrap_or(0);
+        assert!((before..=after).contains(&ts), "{label}: tick は撃たれた: {text:?}");
+        assert_eq!(text.ends_with(" decision=error reason=no-rule\n"), refused, "{label}: {text:?}");
+        assert!(wb_open(&place, "nvme-a").is_empty(), "{label}: 記録は書かない");
+    }
+    assert_eq!(rc_of(&wb_fire(&place)), i32::from(RC_OK));
+    assert!(!wb_open(&place, "nvme-a").is_empty(), "対照: 埋め込みの rules の周は開く");
+}

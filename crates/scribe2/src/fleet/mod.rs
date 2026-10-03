@@ -19,6 +19,7 @@ pub mod phase;
 pub mod select;
 pub mod store;
 pub mod usage;
+pub mod write_budget;
 mod event;
 mod replay;
 mod wait;

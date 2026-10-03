@@ -499,6 +499,8 @@ pub fn run(flags: &Flags, manifest: Result<Manifest, Vec<RuleError>>) -> Outcome
         let _ = crate::fleet::lifecycle_partial::rewrite(&state.path);
         if let Some((manifest, events)) = &read {
             full_rewrite(&state.path, flags, (manifest, events));
+            // 書き込みの測り（host の面の表の行ごとに host の根の記録を進める・返りは捨てる＝rc と字は変えない・write-budget.md §2）。
+            let _ = crate::fleet::write_budget::sample(&state.path, flags.target, manifest, events);
         }
     }
     let rc = if matches!(verdict.decision, TickDecision::Error(_)) { RC_REFUSED } else { RC_OK };

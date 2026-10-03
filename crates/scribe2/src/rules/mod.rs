@@ -12,6 +12,7 @@ pub mod device;
 pub mod exclusion;
 mod groups;
 pub mod manifest;
+pub mod write_budget;
 
 use crate::case::{turn_of, Phase, Turn, PHASES};
 use crate::fleet::select::{Model, MODELS};

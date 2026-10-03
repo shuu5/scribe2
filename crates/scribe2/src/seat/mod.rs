@@ -345,6 +345,12 @@ pub fn host_groups_dir(state_dir: &Path) -> PathBuf {
     host_root(state_dir).join("groups")
 }
 
+/// 書き込みの測りの記録の置き場（`<state_dir の親>/<NAME>-host/write-budget/<name>/`・設計 write-budget.md §2 形 4）: 表 `[[write-budget]]`
+/// の行 `name` ごとに `open` と `days.log` と lock file を置く。[`host_groups_dir`] と同じ host の根から導く（env を読まない）。
+pub fn host_write_budget_dir(state_dir: &Path, name: &str) -> PathBuf {
+    host_root(state_dir).join("write-budget").join(name)
+}
+
 /// host の根（`<state_dir の親>/<NAME>-host`・親を持たない path はそれ自身を親と読む）。
 fn host_root(state_dir: &Path) -> PathBuf {
     state_dir.parent().unwrap_or(state_dir).join(format!("{}-host", crate::name::NAME))

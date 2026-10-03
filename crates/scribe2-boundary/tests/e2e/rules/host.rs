@@ -859,3 +859,67 @@ fn host_group_heartbeat_key_is_on_or_off_and_any_other_value_is_refused_on_the_k
     assert_eq!(joined_manifest(&dir).groups().first().map(|group| group.heartbeat()), Some(None), "key の無い行は None");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// 1 行の `[[write-budget]]`（見出しは 3 行目・name 4・stat 5）。
+const HOST_WRITE_BUDGET_ONE: &str = "schema = 1\n\n[[write-budget]]\nname = \"a\"\nstat = \"/sys/block/a/stat\"\n";
+
+/// (l) 2 行の `[[write-budget]]` の面は `validate --state-dir` が rc 0 で、stdout が表の無い面の 1 行と同じ字面（表を数えない）。
+/// base は `[[write-budget]]` を未知の section として断る（RED）。
+#[test]
+fn rules_host_write_budget_two_rows_validate_like_a_tableless_face() {
+    let tableless = host_state_dir(Some("schema = 1\n")).expect("tmp の state dir を作れる");
+    let two = host_state_dir(Some(&format!("{HOST_WRITE_BUDGET_ONE}\n[[write-budget]]\nname = \"b_2\"\nstat = \"/sys/block/b/stat\"\n"))).expect("tmp の state dir を作れる");
+    let want = rules_dispatch(&["validate", "--state-dir", &tableless.display().to_string()]);
+    let got = rules_dispatch(&["validate", "--state-dir", &two.display().to_string()]);
+    assert_eq!(got.rc, RC_OK, "{got:?}");
+    assert_eq!(want.out, vec![format!("{} accounts=0 plugins=0 launch-args=0 host=present", embedded_validate_line())]);
+    assert_eq!((got.out, got.err), (want.out, want.err), "表を数えず、表の無い面と同じ字");
+    std::fs::remove_dir_all(&tableless).ok();
+    std::fs::remove_dir_all(&two).ok();
+}
+
+/// (m) stat の欠け・未知の key・name `a/b`・name が空・相対の stat・空白を含む stat・name の重複は、行番号つきで 1 件ずつ断る
+/// （`host.toml:` の接頭辞・rc 1・stdout 0 行）。崩す前の 1 行は rc 0。
+#[test]
+fn rules_host_write_budget_refuses_each_defect_once_with_its_line() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let host = dir.join(vessel::rules::HOST_MANIFEST);
+    let name_rule = "は英数字と - と _ の 1 字以上でない";
+    let second = "\n[[write-budget]]\nname = \"a\"\nstat = \"/sys/block/b/stat\"\n";
+    for (body, want) in [
+        (HOST_WRITE_BUDGET_ONE.replace("stat = \"/sys/block/a/stat\"\n", ""), "必須 key stat が無い line=3".to_owned()),
+        (format!("{HOST_WRITE_BUDGET_ONE}color = \"red\"\n"), "未知の key color line=6".to_owned()),
+        (HOST_WRITE_BUDGET_ONE.replace("name = \"a\"", "name = \"a/b\""), format!("name \"a/b\" {name_rule} line=4")),
+        (HOST_WRITE_BUDGET_ONE.replace("name = \"a\"", "name = \"\""), format!("name \"\" {name_rule} line=4")),
+        (HOST_WRITE_BUDGET_ONE.replace("\"/sys/block/a/stat\"", "\"sys/block/a/stat\""), "stat \"sys/block/a/stat\" が絶対 path でない line=5".to_owned()),
+        (HOST_WRITE_BUDGET_ONE.replace("/sys/block/a/stat", "/sys/block/a b/stat"), "stat が空白を含む: \"/sys/block/a b/stat\" line=5".to_owned()),
+        (format!("{HOST_WRITE_BUDGET_ONE}{second}"), "書き込みの測りの名 a が重複する line=7".to_owned()),
+    ] {
+        std::fs::write(&host, &body).expect("host の面を書ける");
+        let refused = rules_dispatch(&["validate", "--state-dir", &dir.display().to_string()]);
+        assert_eq!(refused.rc, RC_REFUSED, "{body:?}: {refused:?}");
+        assert!(refused.out.is_empty(), "{body:?}: stdout へは書かない");
+        assert_eq!(refused.err, vec![format!("rules: host.toml: {want}")], "{body:?}: 1 件");
+    }
+    std::fs::write(&host, HOST_WRITE_BUDGET_ONE).expect("host の面を書ける");
+    let alone = rules_dispatch(&["validate", "--state-dir", &dir.display().to_string()]);
+    assert_eq!(alone.rc, RC_OK, "崩す前の 1 行は通る: {alone:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (n) tracked の面（`--rules` の写し）に置いた 2 表は、中身を検査せず 1 表 1 件で断る（見出しの行番号つき）。
+#[test]
+fn rules_host_write_budget_table_on_the_tracked_face_is_refused_once_per_table() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let tracked = dir.join("tracked.toml");
+    // `GOOD` は 17 行なので、空行を挟んで足した 2 表の見出しは 19 行目と 23 行目（各表は 3 行・表の間に空行 1 行）。
+    let table = HOST_WRITE_BUDGET_ONE.trim_start_matches("schema = 1\n\n");
+    std::fs::write(&tracked, format!("{GOOD}\n{table}\n{table}")).expect("tracked の fixture を書ける");
+    let outcome = rules_dispatch(&["validate", "--rules", &tracked.display().to_string(), "--state-dir", &dir.display().to_string()]);
+    assert_eq!(outcome.rc, RC_REFUSED, "{outcome:?}");
+    assert_eq!(
+        outcome.err,
+        [19, 23].map(|line| format!("rules: [[write-budget]] は tracked の manifest に置けない（書き込みの測りの装置は host の面だけ） line={line}"))
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
