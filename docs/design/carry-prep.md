@@ -283,6 +283,32 @@
   - 歯 (a) を、入れ子の宣言まで辿る形に書き直して残す: 行 e の歯と同じことを 2 本の歯で測ることになる（増殖）。
   - dispatch.rs の `super::` を持つ歯 6 本を子へ移し、本文の `super::` を書き換える: 純移動でなくなる。
 
+## 11. 行 p — 器の木を別の repo の subdir に置いた写しで、xtask の check の 4 門が `n/a(not-a-repo-root)` で黙らずに、根の下の追跡 file を母集団にして測る
+
+やさしく言うと: 器の木を別の repo の下の dir に置いて `cargo xtask check` を撃つと、公開の字面の 4 つの門（paths-clean・private-clean・non-rust-exec・prose-gate）が「repo の根でない」と名乗って何も測らずに rc 0 で通る。置いた先でも器の木の file は追跡されているので、根の下の追跡 file だけを母集団にして測る。根の下に追跡 file が 1 本も無い dir だけは、今どおり測らない（`n/a`）。
+
+- 出所（隣の project の席の予行・2026-10-02T23:5xZ・verified）: 器の main 38cbb667 を外側の repo の subdir に置いた写しで、`cargo xtask check` は rc 0 だが 4 門の値が `n/a(not-a-repo-root)` だった。
+- 現物（main 86cc4a25・verified）:
+  - 4 門は `crates/xtask/src/paths_clean.rs` の `tracked_files` を共通の母集団の口にする（`crates/xtask/src/private_clean.rs`・`crates/xtask/src/non_rust_exec.rs`・`crates/xtask/src/prose_gate.rs` が同じ口を呼ぶ）。
+  - `tracked_files` は `root_is_repo_root`（`git rev-parse --show-toplevel` と根を canonical で比べる）が偽の周に、`git ls-files` を撃たずに `NotRepoRoot` を返す。各門はそれを `n/a(not-a-repo-root)` の値にする。
+  - flip-check の base の木は自前の git repo に作られる（`crates/xtask/src/flipcheck/git.rs` の `index_base`）ので、今この枝に当たるのは、別の repo の subdir に置いた木と、追跡 file の無い dir（歯の fixture）だけである。
+  - `git -C <dir> ls-files -s -z` は、subdir の下の追跡 file だけを subdir からの相対 path で返す（verified）。
+- 形（番号は done と 1:1）:
+  1. `tracked_files` は根が toplevel でない周に `git -C <根> ls-files -s -z` を撃ち、1 本以上あれば根からの相対の列を母集団に返す（toplevel の周と同じ読み・形の読めない件が在れば全体を測れないへ倒す）。0 本の周だけ `NotRepoRoot` を返す。paths-clean は、根の下の追跡 file の本文の private path 形を違反と数え、値は走査した件数になる。
+  2. private-clean も同じ口を通り、根の下の追跡 file の本文の needle（email の形ほか）を違反と数え、値は `n/a` でなくなる。
+  3. 根の下に追跡 file の無い dir は、paths-clean と private-clean とも今どおり `n/a(not-a-repo-root)` で違反 0（既存の歯 2 本）。
+  4. `cargo xtask check` の判定行（`summary`）は、subdir に置いた根でも paths-clean・private-clean・non-rust-exec を数で出す（`n/a` でない）。
+- 設計の線（歯を持たない・審査が読む）: non-rust-exec と prose-gate は同じ口を通るので、同じ周から測る。門ごとの読み（needle・免除・閾値）は変えない。根が toplevel の周の読みと値は 1 字も変えない。
+- 設計の線（歯を持たない・審査が読む・入れ子の写しでしか分岐が出ないので本 repo の木の歯では測れず、測るのは置いた先の repo の入れ子の nextest）: 現物の木を根にして撃つ既存の歯 3 本（`crates/xtask/src/check_tests.rs` の `check_paths_clean_scans_noncanonical_root` と `check_summary_shape_pins_names_order_and_value_forms`・`crates/xtask/src/check_prose_tests.rs` の `prose_gate_fact_counts_zero_violations_on_workspace`）は、根の `.git` の有無で「数が出る周」と「出ない周」を分けている。subdir に置いた写しの根は `.git` を持たないのに数が出るようになるので、判別子を「根で `git rev-parse --is-inside-work-tree` が `true` を返すか」に替える（git の中の木では数を、git の外の木では今どおり数が出ないことを測る）。`check_prose_tests.rs` は既存の歯の本文だけが動くので、その歯の区間に札 retroactive（便の bead id）を置く。
+- 歯（xtask の lib・既存の `mod tests` の区間に 1 本ずつ）: fixture は一時 dir を `git init` し、その下の dir に file を書いて `git add` し（commit はしない）、下の dir を根にした `Layout` で門の `measure` を撃つ。違反の字は門の needle の定数から組み、字を doc と歯に字のまま書かない。
+  - `paths_clean_measures_a_nested_root_by_its_own_tracked_files`（`paths_clean.rs`）: 下の dir の追跡 file 2 本のうち 1 本に private path 形を持たせると、値は `paths-clean=` の後ろが 2 で始まり（`n/a` でない）、違反が 1 件だけ在ってその file を名指す。
+  - `private_clean_measures_a_nested_root_by_its_own_tracked_files`（`private_clean.rs`）: 同じ形で email の needle を持たせると、値は `n/a` でなく、違反が 1 件だけ在る。
+  - `check_summary_numbers_git_facts_in_a_nested_root`（`check_tests.rs`）: 一時 dir を `git init` し、その下の dir に健全な workspace の fixture を書いて `git add -A` し、下の dir を根に `summary` を撃つと、判定行の `paths-clean=`・`private-clean=`・`non-rust-exec=` の後ろがどれも数字で始まる。
+  - base で RED: base は根が toplevel でない周を `n/a` にするので、3 本とも値の assert で落ちる（機能不在）。
+- 触らない: 4 門の needle・免除・値の書式・根が toplevel の周・flip-check・`cargo xtask check` の判定行の並び・`check_tests.rs` のほかの歯。
+- 限界: 置いた先の repo の CI がこの check を撃つかは、置いた先の repo の側の約束である。根の下に追跡されていない file は、どの周でも母集団に入らない（今と同じ）。
+- ADR: 書かない（xtask の母集団の口の直しで、判定・rc の意味・on-disk の形・跨版の約束を変えない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -438,5 +464,16 @@ write-set = ["-crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "+crates/scribe
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_resume_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_approval_"]
 size = "S"
 done = "(1) 子 pipe/spawn/question.rs に名が pipe_question_・pipe_resume_ で始まる歯 18 本、子 pipe/spawn/approval.rs に pipe_approval_・run_cost_・pipe_report_ で始まる歯 14 本が在る。2 つの子は spawn.rs の mod 宣言で宣言され、頭が use super::*; である (2) 親 spawn.rs には他の歯 37 本・helper と const と use の行の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head で、行 e の歯と pipe_hermetic_sites_stay_one は GREEN のまま不変 (6) write-set の spawn.rs の - は縮む面（file は残り、約 950 行が減る）で、diff は親の M と子 2 つの A だけ（この doc を含まない）"
+
+[[contract]]
+id = "p"
+title = "xtask の check の公開の字面の門の母集団の口 tracked_files は、根が git の toplevel でない周も根の下の追跡 file が 1 本以上あれば根からの相対の列を返し、paths-clean と private-clean が n/a で黙らずに測る（0 本の周だけ今どおり n/a・§11）"
+req = ["FR52"]
+section = "11"
+write-set = ["crates/xtask/src/paths_clean.rs", "crates/xtask/src/private_clean.rs", "crates/xtask/src/check_tests.rs", "crates/xtask/src/check_prose_tests.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail paths_clean_measures_a_nested_root_by_its_own_tracked_files", "cargo nextest run -p xtask --no-tests=fail private_clean_measures_a_nested_root_by_its_own_tracked_files", "cargo nextest run -p xtask --no-tests=fail paths_clean_is_na_outside_repo_root", "cargo nextest run -p xtask --no-tests=fail private_clean_is_na_outside_repo_root", "cargo nextest run -p xtask --no-tests=fail check_summary_numbers_git_facts_in_a_nested_root"]
+size = "S"
+done = "(1) tracked_files は根が toplevel でない周に git -C <根> ls-files -s -z を撃ち、1 本以上あれば根からの相対の列を母集団に返し（形の読めない件が在れば全体を測れないへ倒す・toplevel の周と同じ読み）、paths-clean は根の下の追跡 file の本文の private path 形を違反と数えて値は走査した件数になる (2) private-clean も同じ口を通り、根の下の追跡 file の本文の email の needle を違反と数えて値は n/a でない (3) 根の下に追跡 file の無い dir は paths-clean と private-clean とも今どおり n/a(not-a-repo-root) で違反 0 (4) cargo xtask check の判定行は subdir に置いた根でも paths-clean・private-clean・non-rust-exec を数で出す"
+done-teeth = ["1:paths_clean_measures_a_nested_root_by_its_own_tracked_files", "2:private_clean_measures_a_nested_root_by_its_own_tracked_files", "3:=paths_clean_is_na_outside_repo_root", "3:=private_clean_is_na_outside_repo_root", "4:@5"]
 
 <!-- contracts:end -->
