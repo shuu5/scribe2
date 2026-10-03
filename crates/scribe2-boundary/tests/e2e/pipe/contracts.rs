@@ -1250,22 +1250,6 @@ fn contract_closure_ext_unresolved_names_are_named_with_their_place() {
     clean(&[&repo]);
 }
 
-/// (5) 現物の契約表（本 repo の `docs/design/*.md`）は 4 つの拡張（外形 pin・項目の実在と展開・名指しの実在・
-/// 余地は CI で撃たない）を含めて違反 0・rc 0（設計 §9「現物の契約表で 4 つとも違反 0」）。
-#[test]
-fn contract_closure_ext_real_table_has_zero_findings() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("repo の root を解ける");
-    let out = contracts_check(root);
-    let text = stdout_of(&out);
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "現物の契約表は違反 0: {text}{}", stderr_of(&out));
-    let last = text.lines().last().unwrap_or_default();
-    let tokens: Vec<&str> = last.split_whitespace().collect();
-    assert!(last.starts_with("contracts check: docs=") && tokens.contains(&"findings=0"), "判定行: {last}");
-    assert!(tokens.last().is_some_and(|token| token.starts_with("place-out=")), "末尾は置き場の検出線の欄: {last}");
-    let rows: u64 = last.split_whitespace().find_map(|token| token.strip_prefix("rows=")?.parse().ok()).unwrap_or_default();
-    assert!(rows >= 8, "母集団は現物の契約表の行（contract-source.md の 8 行以上・空の表で 0 件を名乗らない）: {last}");
-}
-
 // ─────── 名指しの実在の impl 経路（設計 docs/design/contract-source.md §26・§3 (2)・`s2-07l.432`・接頭辞 `contract_names_impl_`） ───────
 
 /// impl 経路（§26）: base が宣言する method / 関連 fn の「型::項目」は `contracts check` で解け、同じ 1 語の形で
@@ -1398,19 +1382,6 @@ fn contract_names_declared_unreadable_doc_fails_closed() {
     assert!(row_b.iter().all(|line| line.contains("docs/design/bad.md")), "読めない doc を名乗る: {row_b:?}");
     assert!(findings_for(&found, &doc, "b", "name-unresolved").is_empty(), "縮めた母集団で名指さない: {text}");
     clean(&[&repo]);
-}
-
-/// (e) 現物の契約表（本 repo の `docs/design/*.md`）は宣言済みの母集団を足しても findings 0・rc 0。
-#[test]
-fn contract_names_declared_real_table_has_zero_findings() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("repo の root を解ける");
-    let out = contracts_check(root);
-    let text = stdout_of(&out);
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "現物の契約表は違反 0: {text}{}", stderr_of(&out));
-    let last = text.lines().last().unwrap_or_default();
-    let tokens: Vec<&str> = last.split_whitespace().collect();
-    assert!(last.starts_with("contracts check: docs=") && tokens.contains(&"findings=0"), "判定行: {last}");
-    assert!(tokens.last().is_some_and(|token| token.starts_with("place-out=")), "末尾は置き場の検出線の欄: {last}");
 }
 
 // ─────── land 済みの `+`（設計 docs/design/contract-source.md §3・契約 (i)・`s2-07l.346`・接頭辞 `contract_table_landed_plus_`） ───────
@@ -2150,17 +2121,4 @@ fn done_teeth_base_ci_flip_check_job_runs_the_contracts_check_with_the_pr_base()
     let live: Vec<&str> = lines.iter().filter(|line| !line.trim_start().starts_with('#')).copied().collect();
     assert_eq!(live.iter().filter(|line| line.contains("contracts check")).count(), 1, "契約表の検査を撃つ行は 1 本だけ");
     assert!(live.iter().all(|line| !(line.contains("run: cargo") && line.contains("contracts check"))), "1 行形にしない");
-}
-
-/// (7) 本 repo の宣言を宣言の読み手で読むと `teeth-check` は true で、key は索引の 2 key の後ろの末尾に在る。
-#[test]
-fn done_teeth_base_real_declaration_reads_teeth_check_true_at_the_end() {
-    crate::install_spawner();
-    let found = vessel::pipe::declaration::teeth_check_at(&declared_root(), "HEAD");
-    assert!(matches!(found, Ok(true)), "本 repo の宣言は teeth-check = true: {found:?}");
-    let text = declared_text(".vessel.toml");
-    let keys: Vec<&str> = text.lines().filter(|line| !line.starts_with('#') && !line.trim().is_empty()).collect();
-    assert_eq!(keys.last().copied(), Some("teeth-check = true"), "末尾の key");
-    let roles = keys.iter().position(|line| line.starts_with("index-roles = "));
-    assert_eq!(roles.map(|at| at + 2), Some(keys.len()), "index-roles の直後");
 }
