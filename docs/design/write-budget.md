@@ -1,8 +1,8 @@
 # 設計: 書き込みの検出線 — host の面が名指す装置の 1 日の書き込みを管理 tick の周で測って host の根に記し、7 日平均・1 日・続いた日数の線と比べて doctor の行と席の 1 行で示す（作業は止めない）
 
-- 要件: [FR27](../../design-intent/spec/srs.html#FR27) 管理 tick（**暫定**）/ [NFR4](../../design-intent/spec/srs.html#NFR4) 読めない記録は測れないと言う / [NFR5](../../design-intent/spec/srs.html#NFR5) hook の予算 / [FR44](../../design-intent/spec/srs.html#FR44) 入力欄への差し込みは足さない。**SRS の穴**: 器が host の装置の書き込みを測って線と比べる FR と AC は SRS に無い（FR27 の tick の仕事の列に標本は無く、NFR6 は封じ込めと並列度の約束で書き込みの量を測らない）。行の req は暫定で FR27 を指し、SRS の改訂の round（新しい FR と AC・持ち主が撃つ）の後に req を差し替える。起票は差し替えの後。
+- 要件: [FR113](../../design-intent/spec/srs.html#FR113) 書き込みの検出線 / [AC90](../../design-intent/spec/srs.html#AC90) その受け入れの基準 / [FR27](../../design-intent/spec/srs.html#FR27) 管理 tick（周が書き込みの記録の契機を兼ねる）/ [FR57](../../design-intent/spec/srs.html#FR57) host の面（表の読みと断り）/ [NFR4](../../design-intent/spec/srs.html#NFR4) 読めない記録は測れないと言う / [NFR5](../../design-intent/spec/srs.html#NFR5) hook の予算 / [FR44](../../design-intent/spec/srs.html#FR44) 入力欄への差し込みは使わない。
 - 憲法: [C1](../../design-intent/spec/constitution.html#c1) / [C5](../../design-intent/spec/constitution.html#c5) 線と窓と段の値は rules 行・裁定 id 付き / [C2.2](../../design-intent/spec/constitution.html#c2) env を読まない・置き場は state dir の親から導く / [C3](../../design-intent/spec/constitution.html#c3) host の根に state の真実を置かない（記録は装置の累計から取った出所つきの実測）/ [C10](../../design-intent/spec/constitution.html#c10) 測れない日と欠けた日を 0 や完全な値と書かない / [C15](../../design-intent/spec/constitution.html#c15) 台帳は task と裁定だけ（実測は器の記録）/ [C17](../../design-intent/spec/constitution.html#c17) 新しい timer・verb・口を足さない / [N1](../../design-intent/spec/constitution.html#n1) 記録を消さない / [N3](../../design-intent/spec/constitution.html#n3) host ごとの値は面にだけ置き code は分岐しない。
-- 決定: [ADR-0112](../../design-intent/decisions/ADR-0112-the-vessel-measures-the-daily-host-writes-against-the-write-detection-line.html)（本 doc の決定の正本・proposed・SRS の改訂の round の後に accepted にする）。
+- 決定: [ADR-0112](../../design-intent/decisions/ADR-0112-the-vessel-measures-the-daily-host-writes-against-the-write-detection-line.html)（本 doc の決定の正本）。
 - 土台: [seat-heartbeat.md](./seat-heartbeat.md) §2（管理 tick の判定の列）/ §12（tick-last の打刻と「2 × 周期」の健全）・[rules-manifest.md](./rules-manifest.md) §4（rules 行と §4.1 の表）・[account-lifecycle.md](./account-lifecycle.md) §2 / §7（host の面 `host.toml` と読み手）/ §19 形 5（席の追加文脈の群の逼迫の 1 行）/ §20（host の根の群用 dir）・[host-init.md](./host-init.md) §15（host の面の表 `[[device]]` の前例）・[vessel-hook.md](./vessel-hook.md) §19（host の面の表 `[[publish-exclusion]]` の前例）。
 - この設計から出る契約: 行 a（§2〜§4・面の表と標本と記録）→ 行 b（§5・§6・rules 行 4 本と判定と doctor の行）→ 行 c（§7・席の 1 行）。値の裁定は持ち主 2026-10-03T02:42Z（器の rules 行の裁定の字は `user 2026-10-03T02:42Z 項 <語>`〔行ごとに項の語で分ける〕・裁定日 2026-10-03・逐語は本 repo の外の台帳）。
 
@@ -221,7 +221,7 @@ schema = 1
 [[contract]]
 id = "a"
 title = "書き込みの検出線の測り — host の面の表 [[write-budget]]（name と stat）が名指す装置の stat file の書いた区の数を、管理 tick の判定の後に表の行ごとに host の根の記録（open と days.log・schema=1）へ lock の内で 1 回だけ進め、測れない日は unmeasured・欠けた日は partial と書き 0 と書かない（§2・ADR-0112）"
-req = ["FR27", "NFR4"]
+req = ["FR113", "FR27", "FR57", "AC90", "NFR4"]
 section = "2"
 write-set = ["+crates/scribe2/src/rules/write_budget.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/rules/mod.rs", "+crates/scribe2/src/fleet/write_budget.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/rules/host.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_write_budget_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_host_write_budget_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_status_tick_last_mirrors_the_judgement_line", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
@@ -233,7 +233,7 @@ done-teeth = ["1:rules_host_write_budget_two_rows_validate_like_a_tableless_face
 [[contract]]
 id = "b"
 title = "書き込みの検出線の判定と doctor の行 — rules 行 4 本（host.write_avg_gb 1500・host.write_day_gb 3000・host.write_avg_days 7・host.write_owner_days 3・裁定 user 2026-10-03T02:42Z を行ごとに項の語で分ける）を足し、行 a の記録から today・yesterday・昨日で終わる窓の平均（下限は :partial）・越え・続いた越えの日数・持ち主の段を判定の 1 本で求め、doctor に表の行ごとの write-budget: の 1 行を出す（§5・§6・ADR-0112）"
-req = ["FR27", "NFR4"]
+req = ["FR113", "AC90", "NFR4"]
 section = "5"
 depends = ["a"]
 touches = ["crate::rules::RuleKind"]
@@ -247,7 +247,7 @@ done-teeth = ["1:rules_write_detection_rows_follow_the_host_health_rows", "1:rul
 [[contract]]
 id = "c"
 title = "書き込みの検出線の席の 1 行 — UserPromptSubmit で --pane を持つ席の hook が、群の段の行の後ろに、判定の 1 本の over が - でない表の行ごとに write-budget: の 1 行を追加文脈へ足して注入の記録を残し、over が - の周・表の無い host・読めず越えの値が無い周・pane の無い呼び出しは 0 byte で、入力欄へは送らない（§7・ADR-0112）"
-req = ["FR27", "FR44", "NFR5"]
+req = ["FR113", "AC90", "FR44", "NFR5"]
 section = "7"
 depends = ["b"]
 write-set = ["crates/scribe2/src/hook/mod.rs", "crates/scribe2-boundary/tests/e2e/hook/group.rs"]
