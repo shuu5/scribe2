@@ -5,7 +5,7 @@
 //! **同じ 1 本**（C2・2 本目を作らない）で、断りを最初の 1 件で止めず**全部**（判定関数 1 本につき高々 1 件）並べる。
 //! run dir・写し・event は一切書かず、宣言の写しは読むだけ・置き場は交差の読みにだけ使う。
 //!
-//! stdout は **1 行 1 事実**: `design=<doc>#<id> section=<n>` / `write-set=<declared|derived> files=<n>` /
+//! stdout は **1 行 1 事実**: `design=<doc>#<id> section=<n>` / `done-teeth=<present|absent>`（行が欄 done-teeth を持つか）/ `write-set=<declared|derived> files=<n>` /
 //! `teeth=<filter>:<本数>@<file,…>`（verify の nextest 行ごと）/ `headroom=<file>:<余地>/<file の見込み>`（余地の小さい順・
 //! 見込みは行の growth に在ればその値・無ければ size の見積・設計 contract-source.md §46）/
 //! `overlap=<live run>:<file,…>`（突き合わせた live な run ごと・交差 0 は `-`・置き場が無ければ `overlap=unmeasured`）/
@@ -76,8 +76,8 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
         },
         Err(denial) => return tailed(denial),
     };
-    let contract = match generated(&repo, &pointer, &materials) {
-        Ok((found, _)) => found,
+    let (contract, teeth) = match generated(&repo, &pointer, &materials) {
+        Ok((found, body)) => (found, !crate::pipe::contract::done_teeth_in(&body).is_empty()),
         Err(denial) => return tailed(denial),
     };
     let index = materials.index_tail(&contract.touches);
@@ -94,7 +94,7 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
     let entrance = early.base.as_ref().map(BaseRun::fact);
     let judged = judge(&material);
     let widen = widen_lines(&repo, &sha, &pointer, &contract.write_set);
-    render(&judged, state_dir.is_some(), (entrance, index), widen)
+    render(&judged, state_dir.is_some(), (entrance, index), (widen, teeth))
 }
 
 /// `widen=<項目>@<doc>#<行 id>:<file,…>`（設計 reverse-index.md の閉包の広がりの予想）: 自分の行の § の本文が語として名指す型形の項目を
@@ -161,12 +161,15 @@ fn tailed(denial: Denial) -> Outcome {
 }
 
 /// judge の結果を 1 行 1 事実に描く。`measured` は置き場が在った（交差を撃った）か。`facts` は base の木で撃った周の欄 `entrance` と、
-/// 索引を作れない周の尾 `index=unavailable:<語>`（設計 reverse-index.md §7 (b)）。
-fn render(judged: &Judged, measured: bool, facts: (Option<String>, Option<String>), widen: Vec<String>) -> Outcome {
+/// 索引を作れない周の尾 `index=unavailable:<語>`（設計 reverse-index.md §7 (b)）。`tail` は閉包の広がりの行と、行が欄 `done-teeth` を持つか
+/// （`done-teeth=present|absent`・`design=` の行の次・設計 contract-source.md §66 行 bx）。
+fn render(judged: &Judged, measured: bool, facts: (Option<String>, Option<String>), tail: (Vec<String>, bool)) -> Outcome {
     let (entrance, index) = facts;
+    let (widen, teeth) = tail;
     let mut out: Vec<String> = Vec::new();
     if let Some((design, section)) = &judged.design {
         out.push(format!("design={design} section={section}"));
+        out.push(format!("done-teeth={}", if teeth { "present" } else { "absent" }));
     }
     if let Some((kind, files)) = judged.write_set {
         out.push(format!("write-set={} files={files}", kind.as_str()));

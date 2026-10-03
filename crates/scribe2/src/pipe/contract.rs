@@ -423,6 +423,24 @@ pub fn targets_of(path: &Path) -> Result<Vec<String>, String> {
     Ok(list_of(&found, TARGETS, 0, &mut errors))
 }
 
+/// 契約 file の歯の欄の要素の列（key が無ければ空・設計 contract-source.md §66 行 bz〔gate と審査の材料が呼ぶ〕）。読みは
+/// [`targets_of`] と同じ（読めない file は理由を返す）。[`Contract`] の field にはしない。
+pub fn done_teeth_of(path: &Path) -> Result<Vec<String>, String> {
+    let text = std::fs::read_to_string(path).map_err(|err| format!("{} を読めない: {err}", path.display()))?;
+    Contract::parse(&text).map_err(|errors| {
+        let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+        format!("{} を読めない: {}", path.display(), lines.join(" / "))
+    })?;
+    Ok(done_teeth_in(&text))
+}
+
+/// 契約 file の本文（[`Contract::parse`] を通る形）が持つ歯の欄の要素の列（key が無ければ空・preflight が生成の本文から欄の有無を読む）。
+pub(crate) fn done_teeth_in(text: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+    let (found, _) = scan(text, &mut errors);
+    list_of(&found, DONE_TEETH, 0, &mut errors)
+}
+
 /// 生成の写しの `owner`（**導出値**・宣言値ではない・C10）。契約の正本は設計 doc の行で、行は owner を持たない
 /// ＝器が固定の 1 語を書く（値の形は [`REQUIRED`] の text のまま）。
 pub const GENERATED_OWNER: &str = "generated";
@@ -474,6 +492,9 @@ pub fn render(row: &crate::pipe::table::ContractRow, design: &str, write_set: &[
     if !row.growth.is_empty() {
         out.push_str(&format!("{GROWTH} = {}\n", list(&row.growth)));
     }
+    if !row.done_teeth.is_empty() {
+        out.push_str(&format!("{DONE_TEETH} = {}\n", list(&row.done_teeth)));
+    }
     out
 }
 
@@ -506,7 +527,7 @@ pub fn promised_done(promises: &[&crate::pipe::table::PromiseRow]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        class_element, promised_done, promised_verify, render, target_unfit, Class, ClassElement, Contract, CLASSES,
+        class_element, done_teeth_of, promised_done, promised_verify, render, target_unfit, Class, ClassElement, Contract, CLASSES,
         CLASS_ALL, GENERATED_DISPOSITION, GENERATED_OWNER,
     };
     use crate::order::is_declaration_order;
@@ -596,6 +617,28 @@ mod tests {
         assert!(found.classes.is_empty() && found.opens.is_empty(), "空の任意 key は書かない");
         assert!(!body.contains("targets ="), "的の無い行は targets を書かない: {body}");
         assert!(!body.contains("growth =") && found.growth.is_empty(), "見込みの無い行は growth を書かない: {body}");
+    }
+
+    /// §66 の写し: 欄 done-teeth を持つ行だけ契約 file が key を行の要素の順で 1 行書き、持たない行は key を書かない。読み手は往復で
+    /// 要素の列を返し、key の無い file は空の列を返す。
+    #[test]
+    fn done_teeth_copy_renders_the_key_only_for_a_row_with_the_field_and_reads_it_back() {
+        let plain = row();
+        let plain_body = render(&plain, "docs/design/contract-source.md#b", &plain.write_set);
+        assert!(!plain_body.contains("done-teeth"), "欄の無い行は key を書かない: {plain_body}");
+        let teethed = ContractRow { done_teeth: vec!["b_tooth".to_owned(), "a_tooth".to_owned()], ..row() };
+        let body = render(&teethed, "docs/design/contract-source.md#b", &teethed.write_set);
+        assert!(body.lines().any(|line| line == "done-teeth = [\"b_tooth\", \"a_tooth\"]"), "要素の順で 1 行: {body}");
+        assert_eq!(Contract::parse(&body).map(|found| found.goal), Ok(teethed.title.clone()), "key を持つ本文も読める");
+        let dir = std::env::temp_dir().join(format!("done-teeth-copy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let (with, without) = (dir.join("with.toml"), dir.join("without.toml"));
+        std::fs::write(&with, &body).expect("write");
+        std::fs::write(&without, &plain_body).expect("write");
+        assert_eq!(done_teeth_of(&with), Ok(vec!["b_tooth".to_owned(), "a_tooth".to_owned()]), "往復で要素の順");
+        assert_eq!(done_teeth_of(&without), Ok(Vec::new()), "key の無い file は空の列");
+        assert!(done_teeth_of(&dir.join("missing.toml")).is_err(), "読めない file は理由を返す");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// 的の形（設計 gate-cost.md §16）: `<file>:<行>:<変異の名>`（桁 1 つを挟んでよい）は通り、file・行・名のどれかが

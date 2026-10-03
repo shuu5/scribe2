@@ -326,8 +326,12 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")),
     };
+    let teeth = match crate::pipe::contract::done_teeth_of(contract_path) {
+        Ok(found) => found,
+        Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: 契約を読めない: {reason}")),
+    };
     note_ignored(contract_path, mode.as_deref());
-    let prompt = match prompt_of(contract_path, &state(&contract), &rulings, (cap, Path::new(&worktree))) {
+    let prompt = match prompt_of(contract_path, &state(&contract, &teeth), &rulings, (cap, Path::new(&worktree))) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
@@ -587,7 +591,10 @@ fn rulings_of(contract: &Path) -> Result<String, String> {
 ///
 /// **契約 file を丸写ししない**。lens が要るのは「何を作る契約か」と「何で測るか」で、
 /// owner や disposition は判定の材料にならない——渡すほど cap（NFR1）を食う。
-fn state(contract: &Contract) -> String {
+///
+/// 契約 file が歯の欄の key を持つ周だけ、done の行の次に `done-teeth: <要素を ", " で継いだ列>` の 1 行を足す（`teeth` が空
+/// ＝key の無い契約の字は 1 字も変わらない・設計 contract-source.md §66 行 bx）。
+fn state(contract: &Contract, teeth: &[String]) -> String {
     let listed = |lines: &[String]| {
         lines
             .iter()
@@ -595,8 +602,9 @@ fn state(contract: &Contract) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let teeth = if teeth.is_empty() { String::new() } else { format!("done-teeth: {}\n", teeth.join(", ")) };
     format!(
-        "goal: {}\ndone: {}\nverify:\n{}\nwrite-set:\n{}",
+        "goal: {}\ndone: {}\n{teeth}verify:\n{}\nwrite-set:\n{}",
         contract.goal,
         contract.done,
         listed(&contract.verify),
@@ -724,6 +732,20 @@ mod tests {
     use crate::cli_outcome::Outcome;
     use crate::pipe::review::{BASE_FILE, DESIGN_FILE, INDEX_FILE, ITEMS_FILE, OUTSIDE_FILE, REQUIREMENTS_FILE};
     use std::path::{Path, PathBuf};
+
+    /// §66 の写し: 契約 file が歯の欄の key を持つ周だけ、state は done の行の次に `done-teeth:` の 1 行を足す。key の無い契約の字は変わらない。
+    #[test]
+    fn done_teeth_copy_adds_the_line_after_done_only_when_the_contract_has_the_key() {
+        let body = "goal = \"g\"\ndone = \"d\"\nsize = \"S\"\nowner = \"o\"\ndisposition = \"A-now\"\nwrite-set = [\"a.rs\"]\nverify = [\"v\"]\nreq = [\"FR1\"]\ndesign = \"docs/d.md#a\"\n";
+        let plain = crate::pipe::contract::Contract::parse(body).expect("契約を読める");
+        assert_eq!(super::state(&plain, &[]), "goal: g\ndone: d\nverify:\n- v\nwrite-set:\n- a.rs", "key の無い契約の字は変わらない");
+        let teeth = ["x_tooth".to_owned(), "y_tooth".to_owned()];
+        assert_eq!(
+            super::state(&plain, &teeth),
+            "goal: g\ndone: d\ndone-teeth: x_tooth, y_tooth\nverify:\n- v\nwrite-set:\n- a.rs",
+            "done の行の次に 1 行"
+        );
+    }
 
     /// (h) 雛形が差し替えの句をちょうど 1 回持つ（差し替えは `replacen` の 1 回・句が雛形から消えると Declared の周の差し替えが空振りする）。
     #[test]

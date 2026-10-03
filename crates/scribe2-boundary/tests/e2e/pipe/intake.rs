@@ -918,6 +918,42 @@ fn done_teeth_table_intake_refuses_six_rows() {
     clean(&[&repo, &state]);
 }
 
+/// §66 行 bx の写し（(1)(3)）: 欄 done-teeth を持つ行と持たない行を受付と preflight に通し、run dir の契約 file の key は欄を持つ行にだけ在り、
+/// preflight は `design=` の次に `done-teeth=present|absent` の 1 行を出し、受付の stdout は done-teeth の字を持たない。
+#[test]
+fn done_teeth_copy_intake_writes_the_key_and_preflight_names_presence() {
+    let write_set = "[\"crates/toy/src/tint.rs\", \"crates/toy/tests/teeth.rs\"]";
+    let verify = "[\"cargo nextest run -p toy --no-tests=fail tooth_\"]";
+    let teeth = TEETH_ROWS.iter().find(|(id, _)| *id == "ok").map_or("[]", |(_, found)| *found);
+    let with = table_row("ok", &[("write-set", write_set), ("verify", verify), ("done", "\"(1) a (2) b (3) c\""), ("done-teeth", teeth)]);
+    // 欄の無い行は write-set が欄を持つ行と交わらない導出の行（live な run との交差で断られない）。
+    let without = derive_row("plain", &[("verify", "[\"cargo nextest run -p toy --no-tests=fail derive_\"]")]);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&[with, without])), TEETH_FILES);
+    let (rules, repo_arg, state_arg) = (ceiling_rules(&state), repo.display().to_string(), state.display().to_string());
+    let table = format!("{},\"done\":\"1:a,2:b,3:c\"}}", lens_verdict("PASS").trim_end_matches('}'));
+    let lens = fake_lens(&state.join(REVIEW_MARKER), &table);
+    let taken = run_pipe(&["intake", "--design", &pointed_contract(&repo, "t.toml", "ok"), "--bead", "s2-ok", "--repo", &repo_arg, "--state-dir", &state_arg, "--rules", &rules, "--lens", &lens]);
+    assert_eq!(taken.status.code(), Some(i32::from(RC_OK)), "欄を持つ行は受ける: {}", stderr_of(&taken));
+    let plain = intake_raw(&repo, &state, &pointed_contract(&repo, "t.toml", "plain"), "s2-plain");
+    assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "欄の無い行は受ける: {}", stderr_of(&plain));
+    for out in [&taken, &plain] {
+        assert!(!stdout_of(out).contains("done-teeth"), "受付の stdout は欄の字を持たない: {}", stdout_of(out));
+    }
+    let copy = |out: &Output| fs::read_to_string(state.join("pipe").join(run_id_of(out)).join("contract.toml")).expect("契約の写しを読める");
+    let kept = copy(&taken);
+    let key = kept.lines().find(|line| line.starts_with("done-teeth")).unwrap_or_default();
+    assert_eq!(key, format!("done-teeth = {teeth}"), "欄の要素を順に 1 行で写す: {kept}");
+    assert!(!copy(&plain).contains("done-teeth"), "欄の無い行の契約 file は key を持たない");
+    for (id, want) in [("ok", "done-teeth=present"), ("plain", "done-teeth=absent")] {
+        let out = preflight_raw(&repo, &state, &pointed_contract(&repo, "t.toml", id), &format!("s2-{id}"), true);
+        let lines: Vec<String> = stdout_of(&out).lines().map(str::to_owned).collect();
+        assert_eq!(fact_lines(&out, "done-teeth="), [want], "{id}: {}", stdout_of(&out));
+        let at = lines.iter().position(|line| line.starts_with("design=")).unwrap_or_default();
+        assert_eq!(lines.get(at + 1).map(String::as_str), Some(want), "{id}: design= の行の次: {lines:?}");
+    }
+    clean(&[&repo, &state]);
+}
+
 // flip-check: moved s2-07l.198.2
 /// 現物の 2 つの cli module と、それぞれの件数 pin の歯の file（base の字面そのもの・`include_str!`・core の src は
 /// 境界 crate の外＝`crates/scribe2/src/` を指す）。
