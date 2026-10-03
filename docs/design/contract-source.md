@@ -1290,6 +1290,16 @@ size = "M"
 growth = ["crates/scribe2/src/pipe/cli/preflight.rs:60", "crates/scribe2/src/pipe/spawn.rs:8", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs:220"]
 done = "(1) preflight は judge の後に、HEAD の木の契約表から読んだほかの行のうち、自分の行の § の本文が語として名指す型形の項目を touches に持ち write-set を宣言した行ごとに、widen=<項目>@<doc>#<行 id>:<file,…> の 1 行を refuse の行の直前（refuse の行が無い周は末尾の判定行の直前）にまとめて出し、file は自分の行の write-set の .rs の項目のうち接頭辞が無いか + のもの（+ は剥がす）でその行の write-set が覆わないものを自分の write-set の順に並べ、並びは項目の辞書順・同じ項目の中は doc と行の順で、作業木だけの行は読まず、断りの無い周の rc 0 と末尾 preflight: ok は変えない〔preflight_widen_names_the_row_and_its_missing_files: 行 h と行 k2 の 2 本がこの順・h は paint.rs と other.rs・k2 は paint.rs だけ・候補でない = と - と ~ と dir と .rs でない file の項目は並ばない・作業木だけの行 z は並ばない・2 本の直後が末尾の判定行・rc 0 と preflight: ok と refuse の行 0〕 (2) その行の write-set が候補を全部覆う行（refuse.rs の covered の照らし・dir の項目は配下を覆う）は出さない〔preflight_widen_skips_a_row_whose_write_set_covers_the_files〕 (3) write-set の欄を持たない行は出さない〔preflight_widen_skips_a_row_without_a_declared_write_set〕 (4) fn 形（末尾の段が小文字始まり）の項目は § の本文に語として在っても照らさない〔preflight_widen_reads_only_type_form_items〕 (5) 項目の末尾の段が § の本文に語の境界で無く長い名の部分の字としてだけ在る行は出さない〔preflight_widen_needs_the_name_as_a_word_in_the_section〕 (6) HEAD の木の契約表を読めない周は widen=unmeasured:<理由> の 1 行（理由は doc の path を持つ・ほかの行の touches 節と同じ字）を出し rc と末尾の判定行は変えない〔preflight_widen_says_unmeasured_when_the_head_table_is_unreadable: HEAD の別の doc の区間が壊れ作業木の同じ path は壊れていない toy・撃つ前に HEAD の other.md が壊れた区間を持つ前提と作業木の other.md が持たない前提に加えて、HEAD の doc の § 2 の本文が語 Tint を持つ前提も歯の中で assert する〕 (7) judge の断りが在る周も予想の行を出し、refuse の行と rc と末尾の判定行の件数は judge の断りだけで決まる〔preflight_widen_stays_out_of_the_refusal_count: 行 a の growth が other.rs の上限の余地を越える toy で rc 1・refuse の行は cap-headroom の 1 本・末尾 preflight: refused n=1・h の 1 本がその refuse の行の直前〕 (8) runner の stdin の「ほかの行の touches」節の字と順は変わらない〔既存の歯 runner_touches_section_ の 3 本が本文を変えずに緑〕 (9) preflight.rs と spawn.rs は契約表の行の型を構造として持たず、器の repo の contracts check は findings 0 のまま〔verify の最終行の contracts check が便の木で findings 0〕 歯: e2e の preflight_widen_ の 7 本（e2e の spawn.rs・toy は親の derive_repo_with と table_row・§ 2 の本文が語 Tint と語 show を持つ doc・行 a は § 2 で write-set に + の paint.rs と other.rs と候補でない 5 形の項目を 1 つずつ・行 h は touches に crate::tint::Tint で write-set に tint.rs と show.rs）が base で RED（機能不在: base の preflight は widen= の行を出さない）。各歯は撃つ前に HEAD の doc の § 2 の本文が語 Tint を持つ前提を歯の中で assert し、done (2)〜(5) の歯は行 h の 1 本だけが出ることを assert する"
 done-teeth = ["1:preflight_widen_names_the_row_and_its_missing_files", "2:preflight_widen_skips_a_row_whose_write_set_covers_the_files", "3:preflight_widen_skips_a_row_without_a_declared_write_set", "4:preflight_widen_reads_only_type_form_items", "5:preflight_widen_needs_the_name_as_a_word_in_the_section", "6:preflight_widen_says_unmeasured_when_the_head_table_is_unreadable", "7:preflight_widen_stays_out_of_the_refusal_count", "8:=runner_touches_section_lists_other_rows_from_the_base_tree_without_own_row", "8:=runner_touches_section_says_why_when_a_doc_region_is_unreadable", "8:=runner_touches_section_lines_skip_own_row_and_bundle_pointers", "9:!closure"]
+[[contract]]
+id = "cj"
+title = "本 repo の宣言と現物の契約表を git の根の commit から読む歯 4 本と、その歯だけが使う pub fn teeth_check_at（と再輸出）と helper declared_head を外す — 器の木を別の repo の subdir に置いた写しでも nextest が根の宣言を読んで落ちない（§72）"
+req = ["FR48", "FR55", "FR105", "FR107"]
+section = "72"
+write-set = ["-crates/scribe2-boundary/tests/e2e/pipe.rs", "-crates/scribe2-boundary/tests/e2e/pipe/contracts.rs", "-crates/scribe2/src/pipe/declaration/optional_keys.rs", "-crates/scribe2/src/pipe/declaration.rs", "=crates/scribe2/src/pipe/dispatch/index_build.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail done_teeth_base_teeth_check_names_changed_rows_only_when_true_with_a_base", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_index_treats_a_dir_without_git_as_absent", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_index_status_reads_the_place_values_without_firing", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo .", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_table_places_reads_items_and_refuses_the_four_bad_forms"]
+size = "S"
+done = "(1) e2e の歯 pipe_index_declared_reads_the_two_keys_without_defects・done_teeth_base_real_declaration_reads_teeth_check_true_at_the_end・contract_closure_ext_real_table_has_zero_findings・contract_names_declared_real_table_has_zero_findings の 4 本と、helper declared_head と、pub fn teeth_check_at とその再輸出を外す。ほかの読み手・宣言・契約表の字と挙動は変えず、flip-check の入口は tests-removed-only で受ける。書く file は write-set の - の 4 本で閉じ、どれも縮むだけ（= の index_build.rs は歯の置き場だけで書かない） (2) 宣言の key teeth-check の読みは toy の宣言で今どおり測られる (3) 索引の 2 key の commit からの読み（index_at）は toy で今どおり測られる (4) 現物の契約表は宣言済みの母集団を含めて findings 0・rc 0 (5) 置き場の宣言 contract-tables の読みは今どおり"
+done-teeth = ["1:!write-set", "2:=done_teeth_base_teeth_check_names_changed_rows_only_when_true_with_a_base", "3:=declaration_index_treats_a_dir_without_git_as_absent", "3:=pipe_index_status_reads_the_place_values_without_firing", "4:@4", "5:=declaration_table_places_reads_items_and_refuses_the_four_bad_forms"]
 <!-- contracts:end -->
 
 
@@ -2702,3 +2712,29 @@ done-teeth = ["1:preflight_widen_names_the_row_and_its_missing_files", "2:prefli
   - 予想は preflight の stdout にだけ出し、起動の列の事前審査の置き場の file には書かない。
 - 他の設計との順: preflight.rs は [reverse-index.md](./reverse-index.md) の行 d（preflight の出力に索引の 1 語を足す）と本 doc の行 bx（preflight の 1 語）も持つ。行の間に blocks は張らない（起動の列が write-set の交差で直列にし、出力の行の位置は互いに独立）。
 - ADR: 書かない（preflight の出力に行を 1 種足すだけで、判定と rc と on-disk の形を変えない）。
+
+## 72. 本 repo の宣言と現物の契約表を git の根の commit から読む歯 4 本を退かせる — 器の木を別の repo の subdir に置いた写しでは、宣言の読み手が根の宣言を読んで落ちる（契約表の行 cj）
+
+やさしく言うと: 器の木を別の repo の下の dir に置いて歯を撃つと、4 本の歯だけが落ちる。4 本は「この repo 自身の宣言（`.vessel.toml`）と契約表」を測る歯で、宣言の読み手は git の根（外側の repo）の宣言を読むからである。置いた先では器は外側の repo の宣言で動くので、4 本が測る物はそこでは意味を持たない。4 本と、その歯だけが使う読み手 1 本と helper 1 本を外す。読み手そのものは toy の repo の歯が測り続ける。
+
+- 出所（隣の project の席の予行・2026-10-02T23:5xZ・verified）: 器の main 38cbb667 を外側の repo の subdir に番号を保つ merge で置いた写しで、`cargo nextest run --workspace` が 3,952 本のうち 4 本で落ちる（rc 100）。読むだけの監査（2026-10-03T00:xZ）が写しを作り直して同じ 4 本の落ちを確かめた（contracts check は docs=30 rows=502 findings=502）。
+- 現物（main 38cbb667・verified）:
+  - 宣言の commit からの読み手は `crates/scribe2/src/pipe/declaration.rs` の `head_declaration` と、`crates/scribe2/src/pipe/declaration/optional_keys.rs` の 9 本（`index_at`・`teeth_check_at` ほか）で、どれも `<rev>:.vessel.toml` の形（git の根からの相対）で読む。
+  - 落ちる 4 本: `crates/scribe2-boundary/tests/e2e/pipe.rs` の `pipe_index_declared_reads_the_two_keys_without_defects`（`index_at` で本 repo の宣言の索引の 2 key を測る）、`crates/scribe2-boundary/tests/e2e/pipe/contracts.rs` の `done_teeth_base_real_declaration_reads_teeth_check_true_at_the_end`（`teeth_check_at` で本 repo の宣言の teeth-check を測る）・`contract_closure_ext_real_table_has_zero_findings` と `contract_names_declared_real_table_has_zero_findings`（crate の 2 つ上を repo として現物の契約表の検査を撃つ）。
+  - `teeth_check_at` を呼ぶのは上の歯 1 本だけで、`declaration.rs` が再輸出する。helper `declared_head`（`pipe.rs`）を呼ぶのも上の歯 1 本だけ。
+- 形（番号は done と 1:1）:
+  1. 4 本の歯と、helper `declared_head` と、pub fn `teeth_check_at` とその再輸出を外す。ほかの読み手・宣言・契約表の字と挙動は変えない。flip-check の入口は歯を外すだけの便の形（tests-removed-only）で受ける。書く file は write-set の - の 4 本で閉じ、どれも縮むだけ（= の `crates/scribe2/src/pipe/dispatch/index_build.rs` は形 3 の既存の歯の置き場だけで書かない）。
+  2. 宣言の key teeth-check の読みは、toy の宣言で今どおり測られる（既存の歯 `done_teeth_base_teeth_check_names_changed_rows_only_when_true_with_a_base`）。
+  3. 索引の 2 key の commit からの読み（`index_at`）は、toy で今どおり測られる（既存の歯 `declaration_index_treats_a_dir_without_git_as_absent`・`pipe_index_status_reads_the_place_values_without_firing`）。
+  4. 現物の契約表は宣言済みの母集団を含めて findings 0・rc 0（行の検証行 `contracts check --repo .` と、PR の CI の `contracts check --base`）。
+  5. 置き場の宣言 contract-tables の読みは今どおり（既存の歯 `declaration_table_places_reads_items_and_refuses_the_four_bad_forms`）。
+- base で RED の理由: 歯を外すだけの便で挙動を変えないので、base で RED になる新しい歯は原理として書けない（CLAUDE.md の作業の流れの例外。bead の notes に記す）。入口は flip-check の tests-removed-only で、done は既存の歯と検証行と仕組みの歯で受ける。
+- 触らない: 宣言の読み手 10 本の読む形（根からの相対）・`head_declaration`・契約表の検査・表と要件と設計 doc の commit からの読み・ほかの歯（本 repo の file を fs で読む歯を含む）。
+- 却下:
+  - **宣言の読みを渡された dir からの相対（`<rev>:./.vessel.toml`）にする**: 写しで 4 本は緑になる（verified）。ただ本番の読み手 10 本の意味を変え、表・要件・設計 doc の commit からの読み（約 25 か所）は根からの相対のまま残るので「subdir を repo として扱う」形が半分だけになる。作業木の外の dir では git が `./` の形を断る。宣言をどの dir から読むかは跨版の約束で ADR が要る。置いた先の repo が置いた器の `.vessel.toml` を退役させれば、4 本はまた落ちる。
+  - **入れ子のときだけ 4 本を飛ばす**: 測らずに緑を名乗る歯になる（0 件は測れていないかもしれない）。
+- 限界:
+  - 4 本の名を検証行に持つ着地済みの行（本 doc の行 s・av・aw・az・bf・bw・by・cb・cf と reverse-index.md の行 b）は、歴史の行として字を直さない。その検証行を撃ち直すと該当 0 本で rc 4 になる。
+  - main の現物の契約表の findings 0 を測るのは、push の CI と gate の nextest から、PR の CI の `contracts check --base` と各行の検証行に移る。
+  - 本 repo の file を fs で読むほかの歯（宣言の字の pin など）は、置いた先の repo の退役の便が扱う範囲で、本行は触らない。
+- ADR: 書かない（歯を外すだけで、判定・rc・on-disk の形・跨版の約束を変えない）。
