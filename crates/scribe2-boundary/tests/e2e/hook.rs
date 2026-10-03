@@ -1401,6 +1401,32 @@ fn hook_role_bash_face_allows_answer_and_denies_launch() {
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
+/// 上限の許可の口 `pipe permit`（設計 limit-permit.md §19 約束 8）: orchestrator の登録 row を持つ席から記帳と取り消しの 2 形が通り（rc 0・stdout 0 byte・記録
+/// `role-allow capability=approve`）、登録の無い席から 2 形が deny（`reason=unregistered`・記録 `role-deny capability=approve`）、`approve` を抜いた行の manifest では
+/// orchestrator の席の記帳も deny で approve を名指す（通したのは行の値であって判定の穴ではない）。
+#[test]
+fn hook_role_permit_is_an_approve_mouth_in_both_forms() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolepermit", Some("orchestrator"));
+    let ghost = stub_seat(&place, "permitghost", None);
+    let grant = format!("{NAME} pipe permit --bead s2-p.7 --rule gate.token_cap --value 350000 --until 2026-10-03T12:00Z --ruling s2-q.9:20261003T0000Z-1 --repo .");
+    let revoke = format!("{NAME} pipe permit --bead s2-p.7 --rule gate.token_cap --revoke --repo .");
+    for line in [&grant, &revoke] {
+        let before = role_records(&place.state).len();
+        assert_silent(&run_stop_hook(&place, &path, Some(&place.rules), line), "行が持つ approve の口は通す");
+        assert_role_record(&place.state, before, "role-allow capability=approve", "rolepermit_rolepermit");
+        let before = role_records(&place.state).len();
+        let text = assert_role_deny(&run_stop_hook(&place, &ghost, Some(&place.rules), line), "登録の無い席");
+        assert!(text.contains("権能なし") && text.contains("reason=unregistered"), "理由を名指す: {text}");
+        assert_role_record(&place.state, before, "role-deny capability=approve", "permitghost_permitghost");
+        let stripped = place.sock_dir.join("no-approve.toml");
+        assert!(fs::write(&stripped, role_rules_text(&caps_without("approve"))).is_ok(), "rules を書ける");
+        let text = assert_role_deny(&run_stop_hook(&place, &path, Some(&stripped.display().to_string()), line), "approve の無い行");
+        assert!(text.contains("approve"), "欠けた権能を名指す: {text}");
+    }
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
 /// (3)(4): 登録の無い pane → deny（権能なし・FailClosed・記録 1 行）／`--pane` 無し・空 → 通す（記録なし）。
 #[test]
 fn hook_role_denies_unregistered_pane_and_is_inactive_without_pane() {

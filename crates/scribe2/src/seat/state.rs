@@ -289,6 +289,44 @@ pub fn last_sid(text: &str) -> Option<String> {
     is_session_id(&last.sid).then_some(last.sid)
 }
 
+/// 打刻 file の最後の行の読み（**閉じた 6 値**・上限の許可の口が会話 id の照合に読む・設計 limit-permit.md §19 約束 6）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LastLine {
+    /// 最後の行が打刻の形で、会話 id が形どおり（その字）。
+    Sid(String),
+    /// file が無い。
+    Absent,
+    /// 空白でない行を持たない（空の file を含む）。
+    Blank,
+    /// 最後の行は打刻の形だが、会話 id が空か形でない。
+    Unshaped,
+    /// 最後の行が打刻の形でない（空白だけの最後の行も）。
+    NotStamp,
+    /// NotFound の外の理由で開けない。
+    Unopened,
+}
+
+/// 席の置き場の打刻の **file の最後の行**を読む（[`last_sid`] の隣・前の行へ戻らない＝読めた行のうち最後ではなく `lines` の最後の要素）。
+/// 形は [`Stamp::from_line`] と [`is_session_id`] をそのまま使う（写しを持たない）。
+pub(crate) fn last_line(seat_dir: &Path) -> LastLine {
+    let text = match std::fs::read_to_string(path(seat_dir)) {
+        Ok(found) => found,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return LastLine::Absent,
+        Err(_) => return LastLine::Unopened,
+    };
+    if text.lines().all(|line| line.trim().is_empty()) {
+        return LastLine::Blank;
+    }
+    let Some(stamp) = text.lines().next_back().and_then(|line| Stamp::from_line(line).ok()) else {
+        return LastLine::NotStamp;
+    };
+    if is_session_id(&stamp.sid) {
+        LastLine::Sid(stamp.sid)
+    } else {
+        LastLine::Unshaped
+    }
+}
+
 /// 会話 id の形か: UUID の 8-4-4-4-12 の 16 進（claude の session id）。起動行へ写す字面なので形の外は 1 字も通さない。
 fn is_session_id(sid: &str) -> bool {
     let parts: Vec<&str> = sid.split('-').collect();
@@ -359,6 +397,37 @@ mod tests {
         }
         assert_eq!(last_sid(""), None, "空の本文");
         assert_eq!(last_sid("not json\n"), None, "読める行が無い");
+    }
+
+    /// file の最後の行の読み手は閉じた 6 値を返し、前の行へ戻らない: 会話 id・file 無し・空白だけ・形違いの会話 id・壊れた最後の行
+    /// （空白だけの最後の行も）・開けない（dir）。
+    #[test]
+    fn stamp_last_line_reader_returns_the_closed_six_without_going_back() {
+        use super::{last_line, LastLine};
+        let dir = std::env::temp_dir().join(format!("stamp-last-line-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let put = |text: &str| {
+            let _ = std::fs::remove_dir_all(super::path(&dir));
+            let _ = std::fs::write(super::path(&dir), text);
+        };
+        assert_eq!(last_line(&dir), LastLine::Absent, "file 無し");
+        let good = format!("{}\n", sid_line(Event::UserPromptSubmit, UUID));
+        for (text, want) in [
+            ("", LastLine::Blank),
+            (" \n\n", LastLine::Blank),
+            (&good, LastLine::Sid(UUID.to_owned())),
+            (&format!("{good}{}\n", sid_line(Event::Stop, "sid-1")), LastLine::Unshaped),
+            (&format!("{good}not json\n"), LastLine::NotStamp),
+            (&format!("{good}  \n"), LastLine::NotStamp),
+        ] {
+            put(text);
+            assert_eq!(last_line(&dir), want, "{text:?}");
+        }
+        let _ = std::fs::remove_file(super::path(&dir));
+        let _ = std::fs::create_dir_all(super::path(&dir));
+        assert_eq!(last_line(&dir), LastLine::Unopened, "file が dir");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// carry は sid あり / なし / 形違いで `[--resume, sid, 初手]` / `[初手]` / `[初手]`（空を返す周は無い）。

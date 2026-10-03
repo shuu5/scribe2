@@ -168,6 +168,8 @@ pub const CAPABILITY_COMMANDS: &[(&str, Capability)] = &[
     ("pipe stop", Capability::Stop),
     ("pipe retire", Capability::Launch),
     ("pipe land", Capability::Merge),
+    // 上限の許可の口（記帳と取り消しの 2 形とも approve・設計 limit-permit.md §19 約束 8）。
+    ("pipe permit", Capability::Approve),
 ];
 
 /// 停止の 2 語（[`CAPABILITY_COMMANDS`] の `Stop` の行の名）。

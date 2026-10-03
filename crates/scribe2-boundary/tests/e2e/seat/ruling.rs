@@ -1469,3 +1469,602 @@ fn seat_ruling_rewrites_lifecycle_marks_the_ledger_gate_when_the_child_cannot_st
     assert!(within(|| twin.ended()), "本物の argv[0] は期限の内に list を撃つ");
     assert!(twin.stale_of(Kind::LedgerGate).is_empty(), "起こせた周は印を足さない");
 }
+
+// ─────────────────── 許可の口 `pipe permit`（設計 docs/design/limit-permit.md §19 行 c・接頭辞 `pipe_permit_mouth_`） ───────────────────
+//
+// 偽の bd（show の JSON に description を足す [`described`]）・偽の event log・偽の打刻・tmp の置き場。orchestrator の登録 row は同じ置き場に
+// `seat register --anchor <repo>` で積み（登録は打刻の会話 id を要るので、打刻の形を壊す fixture は登録の後に file を書き換える）、時刻は撃つ時点の
+// 今から組む。manifest は埋め込みで、値（`gate.token_cap` と `pipe.permit_max_h`）は埋め込みから読んで期待を組む（数を焼かない）。
+// 各歯は rc・stdout と stderr の byte の完全一致と、event log の byte が撃つ前と同じか（断る周・rc 2 の周）を測る。
+
+/// 対話面の席の会話 id（打刻の最後の行・UUID の形）と、別の会話 id。
+const SESSION: &str = "0b7c3f5e-9a1d-4c2e-8f6a-1d2e3f4a5b6c";
+const OTHER_SESSION: &str = "7f3a1c9e-2b4d-4e6f-8a0b-5c7d9e1f3a2b";
+
+/// orchestrator の席の target・上げる bead・行・問い。
+const P_SEAT: &str = "permit:orch";
+const P_BEAD: &str = "s2-p.7";
+const P_RULE: &str = "gate.token_cap";
+const P_QUESTION: &str = "s2-q.9";
+
+/// 埋め込み manifest の整数の行の値。
+fn embedded_int(id: &str) -> u64 {
+    let manifest = vessel::rules::manifest::Manifest::embedded();
+    assert!(manifest.is_ok(), "埋め込み manifest を読める");
+    let found = manifest.ok().and_then(|rows| match rows.get(id).map(|row| &row.value) {
+        Some(vessel::rules::RuleValue::Int(value)) => Some(*value),
+        _ => None,
+    });
+    assert!(found.is_some(), "{id} は整数の行");
+    found.unwrap_or_default()
+}
+
+/// 通る周の値（埋め込みの `gate.token_cap` + 100000・10 進の字）。
+fn permit_value() -> String {
+    embedded_int(P_RULE).saturating_add(100_000).to_string()
+}
+
+/// 問いの本文（bead・行 id・値を字のまま書く）。
+fn body_of(bead: &str, rule: &str, value: &str) -> String {
+    format!("{bead} の {rule} を {value} へ上げてよいか。")
+}
+
+/// UNIX 秒を分の形 `YYYY-MM-DDTHH:MMZ` にする（秒は切り捨て）。
+fn minute_of(secs: u64) -> String {
+    let head = vessel::fleet::cli::format_utc(secs - secs % 60);
+    format!("{}Z", head.get(..16).unwrap_or_default())
+}
+
+/// 発話の ts（ミリ秒つき）を UNIX ミリ秒から作る。
+fn said_at(secs: u64, millis: u64) -> String {
+    vessel::fleet::cli::format_utc_ms(secs.saturating_mul(1_000).saturating_add(millis))
+}
+
+/// 裁定 id `<問い id>:<発話の YYYYMMDDTHHMMZ>-1`（契約の字面から組む）。
+fn permit_ruling_id(question: &str, said: &str) -> String {
+    let digits = |range: std::ops::Range<usize>| said.get(range).unwrap_or_default().to_owned();
+    format!("{question}:{}{}{}T{}{}Z-1", digits(0..4), digits(5..7), digits(8..10), digits(11..13), digits(14..16))
+}
+
+/// 偽の bd の show の JSON（bd の配列 1 要素・問いの label つき・本文は key `description` で渡し、`None` は key ごと無い）。
+fn described(created_at: &str, description: Option<&str>) -> String {
+    let body = description.map_or_else(String::new, |text| format!(",\"description\":{}", json_lite::quote(text)));
+    format!("[{{\"id\":\"x\",\"status\":\"open\",\"labels\":[\"intake:question\"],\"created_at\":{}{body}}}]", json_lite::quote(created_at))
+}
+
+/// 断りの 1 行（設計 §19 約束 3）。
+fn refusal(reason: &str, naming: &str) -> String {
+    format!("pipe: permit refused reason={reason} {naming}")
+}
+
+/// 通る fixture の材料（既定は p1 の形・各歯が条件 1 つだけ替える）。
+struct Scene {
+    channel: Channel,
+    session: Option<String>,
+    actor: &'static str,
+    /// 発話の ts と、それから組む裁定 id。
+    said: String,
+    ruling: String,
+    /// 問いの起票（show の created_at と裁定 event の question_ts）。
+    asked: String,
+    /// 問いの本文（`None` は description の key が無い）。
+    body: Option<String>,
+    said_event: bool,
+    ruling_event: bool,
+}
+
+impl Scene {
+    /// p1 の形: chat・session は打刻の会話 id・human・起票は発話より前・本文は bead と行 id と値を持つ。
+    fn new(now: u64) -> Self {
+        let said = said_at(now.saturating_sub(120), 123);
+        Self {
+            channel: Channel::Chat,
+            session: Some(SESSION.to_owned()),
+            actor: ACTOR_HUMAN,
+            ruling: permit_ruling_id(P_QUESTION, &said),
+            said,
+            asked: vessel::fleet::cli::format_utc(now.saturating_sub(3_600)),
+            body: Some(body_of(P_BEAD, P_RULE, &permit_value())),
+            said_event: true,
+            ruling_event: true,
+        }
+    }
+
+    /// 発話の ts を替える（裁定 id も同じ分から組み直す）。
+    fn said(&mut self, said: String) {
+        self.ruling = permit_ruling_id(P_QUESTION, &said);
+        self.said = said;
+    }
+}
+
+/// 撃つ引数（既定は p1 の形）。
+struct Cmd {
+    bead: String,
+    rule: String,
+    value: String,
+    until: String,
+    ruling: String,
+}
+
+impl Cmd {
+    /// 期限は今から 2 時間後の分。
+    fn new(scene: &Scene, now: u64) -> Self {
+        Self { bead: P_BEAD.to_owned(), rule: P_RULE.to_owned(), value: permit_value(), until: minute_of(now + 7_200), ruling: scene.ruling.clone() }
+    }
+}
+
+/// 許可の口の置き場（偽の bd と event log・登録 row と打刻の file）。
+struct Permit {
+    fake: Fake,
+    now: u64,
+    /// orchestrator の席の打刻の file。
+    stamp: PathBuf,
+}
+
+/// `pipe permit` を撃つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn pipe_permit(args: &[&str]) -> Output {
+    Command::new(bin()).args(["pipe", "permit"]).args(args).output().expect("binary を起動できる")
+}
+
+impl Permit {
+    /// 偽の置き場を作る。`seated` なら orchestrator の登録 row（anchor は repo・席の打刻の最後の行は [`SESSION`]）を積む。
+    fn new(seated: bool) -> Self {
+        let fake = Fake::new();
+        let seat = fake.state.join("seat").join(P_SEAT.replace(':', "_"));
+        let stamp = state_file(&seat);
+        if seated {
+            fs::create_dir_all(&seat).ok();
+            fs::write(&stamp, format!("{}\n", stamp_line("idle", "SessionStart", unix_now(), SESSION))).ok();
+            let launch = fixture(&fake.dir, "launch.txt", LAUNCH_BODY);
+            let (state, repo) = (fake.state.display().to_string(), fake.repo.display().to_string());
+            let out = run_seat(&["register", "--state-dir", &state, "--target", P_SEAT, "--role", "orchestrator", "--account", "acct-1", "--launch", &launch, "--anchor", &repo]);
+            assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+        }
+        Self { fake, now: unix_now(), stamp }
+    }
+
+    /// 材料を置く（発話 event・裁定 event・偽の bd の show）。
+    fn lay(&self, scene: &Scene) {
+        if scene.said_event {
+            let case = Case::Utterance { channel: scene.channel, session: scene.session.clone() };
+            self.fake.put(&Event { actor: scene.actor.to_owned(), ..event(EventKind::UtteranceReceived, &scene.said, "", Some("よい"), Some(case)) });
+        }
+        if scene.ruling_event {
+            let case = Case::Ruling { ruling: scene.ruling.clone(), utterance: scene.said.clone(), channel: scene.channel, question_ts: scene.asked.clone(), asked: None };
+            self.fake.put(&event(EventKind::RulingReceived, &vessel::fleet::cli::format_utc(self.now), P_QUESTION, Some("よい"), Some(case)));
+        }
+        self.fake.show(P_QUESTION, &described(&scene.asked, scene.body.as_deref()));
+    }
+
+    /// 記帳を撃つ（`extra` は追加の flag）。
+    fn run(&self, cmd: &Cmd, extra: &[&str]) -> Output {
+        let (state, repo) = (self.fake.state.display().to_string(), self.fake.repo.display().to_string());
+        let mut args = vec!["--state-dir", &state, "--repo", &repo, "--bd", &self.fake.bd];
+        args.extend_from_slice(&["--bead", &cmd.bead, "--rule", &cmd.rule, "--value", &cmd.value, "--until", &cmd.until, "--ruling", &cmd.ruling]);
+        args.extend_from_slice(extra);
+        pipe_permit(&args)
+    }
+
+    /// 取り消しを撃つ。
+    fn revoke(&self, bead: &str, rule: &str, extra: &[&str]) -> Output {
+        let (state, repo) = (self.fake.state.display().to_string(), self.fake.repo.display().to_string());
+        let mut args = vec!["--state-dir", &state, "--repo", &repo, "--bd", &self.fake.bd, "--bead", bead, "--rule", rule, "--revoke"];
+        args.extend_from_slice(extra);
+        pipe_permit(&args)
+    }
+
+    /// 許可の記帳の event（物理順）。
+    fn permits(&self) -> Vec<Event> {
+        store::read_all(&self.fake.state).unwrap_or_default().into_iter().filter(|found| found.kind == EventKind::LimitPermitted).collect()
+    }
+
+    /// 断る周: rc 1・stdout 0 byte・stderr が `line` の 1 行・event log の byte は撃つ前と同じ。
+    fn refused(&self, cmd: &Cmd, line: &str) {
+        let before = self.fake.log();
+        let out = self.run(cmd, &[]);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{line}: stderr={}", stderr_of(&out));
+        assert!(stdout_of(&out).is_empty(), "{line}: stdout 0 byte");
+        assert_eq!(stderr_of(&out), format!("{line}\n"), "断りの 1 行");
+        assert_eq!(self.fake.log(), before, "{line}: 何も書かない");
+    }
+
+    /// 通る周: rc 0 で許可の記帳が 1 件増える。
+    fn passes(&self, cmd: &Cmd, label: &str) {
+        let before = self.permits().len();
+        let out = self.run(cmd, &[]);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{label}: stderr={}", stderr_of(&out));
+        assert_eq!(self.permits().len(), before + 1, "{label}: 記帳は 1 件増える");
+    }
+}
+
+/// rc 2 の外形（stdout 0 byte・stderr が `prefix` で始まる 1 行）と、event log の byte が撃つ前と同じなことを測る。
+fn assert_unreadable(out: &Output, before: &str, after: &str, prefix: &str) {
+    let line = stderr_of(out);
+    assert_eq!(rc_of(out), i32::from(RC_BROKEN), "{prefix}: stderr={line}");
+    assert!(stdout_of(out).is_empty(), "{prefix}: stdout 0 byte");
+    assert!(line.starts_with(prefix) && line.ends_with('\n') && line.lines().count() == 1, "stderr は {prefix} で始まる 1 行: {line:?}");
+    assert_eq!(after, before, "{prefix}: 何も書かない");
+}
+
+/// 通る fixture を置いた置き場と、通る引数。`tweak` が材料を条件 1 つだけ替える。
+fn arrange(seated: bool, tweak: impl FnOnce(&mut Scene, u64)) -> (Permit, Cmd) {
+    let place = Permit::new(seated);
+    let mut scene = Scene::new(place.now);
+    tweak(&mut scene, place.now);
+    place.lay(&scene);
+    let cmd = Cmd::new(&scene, place.now);
+    (place, cmd)
+}
+
+/// p1（通る・回帰の歯）: event 1 件（kind LimitPermitted・bead・actor machine・run 無し・detail は `rule=… value=<値> until=<渡した分>:00Z ruling=<id>` の
+/// 完全一致）と stdout 1 行の完全一致（列の 1 周の行が無い）・stderr 0 byte。書きは追記だけ。
+#[test]
+fn pipe_permit_mouth_p1_a_passing_grant_writes_one_event_and_one_line() {
+    let (place, cmd) = arrange(true, |_, _| {});
+    let before = place.fake.log();
+    let out = place.run(&cmd, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let until = format!("{}:00Z", cmd.until.trim_end_matches('Z'));
+    let line = format!("permit: bead={P_BEAD} rule={P_RULE} value={} declared={} until={until} ruling={}\n", cmd.value, embedded_int(P_RULE), cmd.ruling);
+    assert_eq!(stdout_of(&out), line, "stdout は 1 行の完全一致");
+    assert!(stderr_of(&out).is_empty(), "stderr 0 byte");
+    let permits = place.permits();
+    let [one] = permits.as_slice() else {
+        panic!("許可の記帳は 1 件: {permits:?}");
+    };
+    assert_eq!((one.bead.as_str(), one.actor.as_str(), one.run.as_str()), (P_BEAD, "machine", ""), "bead・actor・run 無し");
+    assert!(one.stage.is_none() && one.seat.is_none() && one.pid.is_none(), "段・席・pid を持たない");
+    assert_eq!(one.detail.as_deref(), Some(format!("rule={P_RULE} value={} until={until} ruling={}", cmd.value, cmd.ruling).as_str()), "detail の完全一致");
+    let after = place.fake.log();
+    assert!(after.starts_with(&before) && after.lines().count() == before.lines().count() + 1, "追記は 1 行だけ");
+}
+
+/// w1 rule-not-listed: 列に無い行（本文はその行 id を持つ）は rc 1・行 id と列の字を名指す。
+#[test]
+fn pipe_permit_mouth_w1_rule_not_listed() {
+    let rule = "review.same_kind_stop";
+    let (place, mut cmd) = arrange(true, |scene, _| scene.body = Some(body_of(P_BEAD, rule, &permit_value())));
+    cmd.rule = rule.to_owned();
+    place.refused(&cmd, &refusal("rule-not-listed", &format!("bead={P_BEAD} rule={rule} listed={P_RULE}")));
+}
+
+/// w2 not-raise: manifest の値と等しい値・`250k`・先頭 0 の値は rc 1・渡された字と manifest の値を名指す。
+#[test]
+fn pipe_permit_mouth_w2_not_raise() {
+    let declared = embedded_int(P_RULE);
+    for value in [declared.to_string(), "250k".to_owned(), format!("0{}", declared + 1)] {
+        let (place, mut cmd) = arrange(true, |scene, _| scene.body = Some(body_of(P_BEAD, P_RULE, &value)));
+        cmd.value.clone_from(&value);
+        place.refused(&cmd, &refusal("not-raise", &format!("bead={P_BEAD} rule={P_RULE} value={value} declared={declared}")));
+    }
+}
+
+/// w3 no-ruling: event の無い id・`batch:` の形・`policy:` の形（どれも裁定 event と台帳の問いは在る）は rc 1・渡した字を名指す。
+#[test]
+fn pipe_permit_mouth_w3_no_ruling() {
+    let (place, mut cmd) = arrange(true, |_, _| {});
+    cmd.ruling = format!("{P_QUESTION}:20200101T0000Z-1");
+    place.refused(&cmd, &refusal("no-ruling", &format!("ruling={}", cmd.ruling)));
+    for id in ["batch:2026-10-03-permit", "policy:permit"] {
+        let (place, mut cmd) = arrange(true, |scene, _| scene.ruling = id.to_owned());
+        cmd.ruling = id.to_owned();
+        place.refused(&cmd, &refusal("no-ruling", &format!("ruling={id}")));
+    }
+}
+
+/// w4 no-utterance: 発話の無い ts と、actor が machine の発話は rc 1・裁定 id と発話の ts を名指す。
+#[test]
+fn pipe_permit_mouth_w4_no_utterance() {
+    for absent in [true, false] {
+        let (place, cmd) = arrange(true, |scene, _| match absent {
+            true => scene.said_event = false,
+            false => scene.actor = "machine",
+        });
+        let said = Scene::new(place.now).said;
+        place.refused(&cmd, &refusal("no-utterance", &format!("ruling={} utterance={said}", cmd.ruling)));
+    }
+}
+
+/// w5 not-surface: gui の発話と、別の会話 id の発話は rc 1・経路と session と打刻の会話 id を名指す。
+#[test]
+fn pipe_permit_mouth_w5_not_surface() {
+    let (place, cmd) = arrange(true, |scene, _| {
+        scene.channel = Channel::Gui;
+        scene.session = None;
+    });
+    let said = Scene::new(place.now).said;
+    place.refused(&cmd, &refusal("not-surface", &format!("utterance={said} channel=gui session=- stamp={SESSION}")));
+    let (place, cmd) = arrange(true, |scene, _| scene.session = Some(OTHER_SESSION.to_owned()));
+    let said = Scene::new(place.now).said;
+    place.refused(&cmd, &refusal("not-surface", &format!("utterance={said} channel=chat session={OTHER_SESSION} stamp={SESSION}")));
+}
+
+/// w6 before-question: 起票が発話より後は rc 1・同じ歯の起票と発話が同じ秒の fixture（発話は 999 ミリ秒）は通る。
+#[test]
+fn pipe_permit_mouth_w6_before_question() {
+    let (place, cmd) = arrange(true, |scene, now| scene.asked = vessel::fleet::cli::format_utc(now - 60));
+    let (said, asked) = (Scene::new(place.now).said, vessel::fleet::cli::format_utc(place.now - 60));
+    place.refused(&cmd, &refusal("before-question", &format!("utterance={said} question={P_QUESTION} question_ts={asked}")));
+    let (place, cmd) = arrange(true, |scene, now| {
+        scene.said(said_at(now - 120, 999));
+        scene.asked = vessel::fleet::cli::format_utc(now - 120);
+    });
+    place.passes(&cmd, "同じ秒は後でない");
+}
+
+/// w7 bad-until: 過去の期限・発話の秒 + `pipe.permit_max_h` 時間を 1 分越える期限・`2099-01-01` の形の外は rc 1。同じ歯の、発話を秒 0 に置いて期限を
+/// 発話 + `pipe.permit_max_h` 時間ちょうどの分にした fixture は通る。
+#[test]
+fn pipe_permit_mouth_w7_bad_until() {
+    let max_h = embedded_int("pipe.permit_max_h");
+    let (place, _) = arrange(true, |_, _| {});
+    let said = Scene::new(place.now).said;
+    let over = minute_of(place.now - 120 + max_h * 3_600 + 60);
+    for until in [minute_of(place.now - 3_600), over, "2099-01-01".to_owned()] {
+        let cmd = Cmd { until: until.clone(), ..Cmd::new(&Scene::new(place.now), place.now) };
+        place.refused(&cmd, &refusal("bad-until", &format!("until={until} utterance={said} max_h={max_h}")));
+    }
+    let zero = ((place.now - 120) / 60) * 60;
+    let (place, mut cmd) = arrange(true, |scene, _| scene.said(said_at(zero, 0)));
+    cmd.until = minute_of(zero + max_h * 3_600);
+    place.passes(&cmd, "窓ちょうど");
+}
+
+/// w8 reused: 同じ裁定 id の 2 度目と、同じ発話に結んだ別の裁定 id の 2 度目は rc 1・裁定 id と発話の ts を名指す。
+#[test]
+fn pipe_permit_mouth_w8_reused() {
+    let (place, cmd) = arrange(true, |_, _| {});
+    let said = Scene::new(place.now).said;
+    let detail = |ruling: &str| format!("rule={P_RULE} value=1 until=2099-01-01T00:00:00Z ruling={ruling}");
+    let permit = |ruling: &str| Event { actor: "machine".to_owned(), ..event(EventKind::LimitPermitted, "2026-10-03T00:00:00Z", "s2-other", Some(&detail(ruling)), None) };
+    place.fake.put(&permit(&cmd.ruling));
+    place.refused(&cmd, &refusal("reused", &format!("ruling={} utterance={said}", cmd.ruling)));
+    let (place, cmd) = arrange(true, |_, _| {});
+    let said = Scene::new(place.now).said;
+    let other = permit_ruling_id("s2-q.8", &said);
+    let case = Case::Ruling { ruling: other.clone(), utterance: said.clone(), channel: Channel::Chat, question_ts: Scene::new(place.now).asked, asked: None };
+    place.fake.put(&event(EventKind::RulingReceived, "2026-10-03T00:00:00Z", "s2-q.8", Some("よい"), Some(case)));
+    place.fake.put(&permit(&other));
+    place.refused(&cmd, &refusal("reused", &format!("ruling={} utterance={said}", cmd.ruling)));
+}
+
+/// w9 not-stated: bead・行 id・値のどれか 1 つを欠く本文と、description の key の無い問い（3 つとも欠け）は rc 1・欠けた語を名指す。
+#[test]
+fn pipe_permit_mouth_w9_not_stated() {
+    let value = permit_value();
+    let forms = [
+        (format!("{P_RULE} を {value} へ"), "bead"),
+        (format!("{P_BEAD} を {value} へ"), "rule"),
+        (format!("{P_BEAD} の {P_RULE} を上げる"), "value"),
+    ];
+    for (text, missing) in forms {
+        let (place, cmd) = arrange(true, |scene, _| scene.body = Some(text.clone()));
+        place.refused(&cmd, &refusal("not-stated", &format!("question={P_QUESTION} missing={missing}")));
+    }
+    let (place, cmd) = arrange(true, |scene, _| scene.body = None);
+    place.refused(&cmd, &refusal("not-stated", &format!("question={P_QUESTION} missing=bead,rule,value")));
+}
+
+/// w10 landed: bead の便に Landed の RunDone を積むと rc 1・名指しはその便 id。
+#[test]
+fn pipe_permit_mouth_w10_landed() {
+    let (place, cmd) = arrange(true, |_, _| {});
+    let run = "s2-p.7-20261003T000000Z";
+    place.fake.put(&Event { actor: "machine".to_owned(), run: run.to_owned(), stage: Some(vessel::fleet::Stage::Landed), ..event(EventKind::RunDone, "2026-10-03T00:00:00Z", P_BEAD, None, None) });
+    place.refused(&cmd, &refusal("landed", &format!("bead={P_BEAD} run={run}")));
+}
+
+/// o1（AC84 の依存の境目 3 組）: (i) 渡した id の event は無く、同じ問いに起票が発話より後の別の id の裁定 event が在る → no-ruling（問いで引く実装なら
+/// before-question） (ii) 発話が無く打刻の file も無い → no-utterance (iii) 発話が無く期限が過去 → no-utterance。
+#[test]
+fn pipe_permit_mouth_o1_the_dependency_boundaries_name_the_earlier_word() {
+    let (place, mut cmd) = arrange(true, |scene, now| scene.asked = vessel::fleet::cli::format_utc(now - 60));
+    cmd.ruling = format!("{P_QUESTION}:20200101T0000Z-1");
+    place.refused(&cmd, &refusal("no-ruling", &format!("ruling={}", cmd.ruling)));
+    let (place, cmd) = arrange(true, |scene, _| scene.said_event = false);
+    fs::remove_file(&place.stamp).ok();
+    let said = Scene::new(place.now).said;
+    place.refused(&cmd, &refusal("no-utterance", &format!("ruling={} utterance={said}", cmd.ruling)));
+    let (place, mut cmd) = arrange(true, |scene, _| scene.said_event = false);
+    let said = Scene::new(place.now).said;
+    cmd.until = minute_of(place.now - 3_600);
+    place.refused(&cmd, &refusal("no-utterance", &format!("ruling={} utterance={said}", cmd.ruling)));
+}
+
+/// s1（打刻の rc 1 の 4 形）: file が無い（`stamp=absent`）・空の file（`blank`）・最後の行の会話 id が空と `sid-1`（`unshaped`）はそれぞれ not-surface、
+/// 登録 row の無い置き場は `stamp=no-seat`。
+#[test]
+fn pipe_permit_mouth_s1_the_four_stamp_forms_and_a_seat_without_a_row_are_not_surface() {
+    let word = |stamp: &str, said: &str| refusal("not-surface", &format!("utterance={said} channel=chat session={SESSION} stamp={stamp}"));
+    let line = |sid: &str| format!("{}\n", stamp_line("idle", "SessionStart", unix_now(), sid));
+    let forms: [(&str, Option<String>); 4] = [("absent", None), ("blank", Some(String::new())), ("unshaped", Some(line(""))), ("unshaped", Some(line("sid-1")))];
+    for (stamp, content) in forms {
+        let (place, cmd) = arrange(true, |_, _| {});
+        match content {
+            Some(text) => {
+                fs::write(&place.stamp, text).ok();
+            }
+            None => {
+                fs::remove_file(&place.stamp).ok();
+            }
+        }
+        place.refused(&cmd, &word(stamp, &Scene::new(place.now).said));
+    }
+    let (place, cmd) = arrange(false, |_, _| {});
+    place.refused(&cmd, &word("no-seat", &Scene::new(place.now).said));
+}
+
+/// s2（壊れた最後の行）: 会話 id の合う行の後に `not json` の行を持つ打刻は rc 2 `source=stamp`・event 0 件（前の行へ戻る実装なら rc 0）。
+#[test]
+fn pipe_permit_mouth_s2_a_broken_last_stamp_line_is_unreadable_and_does_not_go_back() {
+    let (place, cmd) = arrange(true, |_, _| {});
+    let good = format!("{}\n", stamp_line("idle", "SessionStart", unix_now(), SESSION));
+    fs::write(&place.stamp, format!("{good}not json\n")).ok();
+    let before = place.fake.log();
+    let out = place.run(&cmd, &[]);
+    let line = format!("pipe: permit unreadable source=stamp path={} why=last-line\n", place.stamp.display());
+    assert_unreadable(&out, &before, &place.fake.log(), &line);
+    assert_eq!(stderr_of(&out), line, "stderr 1 行の完全一致");
+    assert!(place.permits().is_empty(), "event 0 件");
+}
+
+/// r1（取り消し 4 形）: 裁定 id 無しの取り消しが event 1 件と 1 行を書き、許可の無い置き場でも 1 件を書き、偽の bd が壊れて打刻の file が dir の置き場でも
+/// 1 件を書き（台帳と打刻を読まない）、列に無い行の取り消しが rule-not-listed で rc 1・event 0 件。
+#[test]
+fn pipe_permit_mouth_r1_a_revoke_needs_no_ruling_and_reads_neither_ledger_nor_stamp() {
+    let line = format!("permit: bead={P_BEAD} rule={P_RULE} revoked\n");
+    let detail = format!("rule={P_RULE} revoked");
+    let last = |place: &Permit| place.permits().last().and_then(|found| found.detail.clone());
+    let (granted, cmd) = arrange(true, |_, _| {});
+    granted.passes(&cmd, "許可");
+    let out = granted.revoke(P_BEAD, P_RULE, &[]);
+    assert_eq!((rc_of(&out), stdout_of(&out), stderr_of(&out)), (i32::from(RC_OK), line.clone(), String::new()), "許可の後の取り消し");
+    assert_eq!((granted.permits().len(), last(&granted)), (2, Some(detail.clone())), "許可の後に取り消し 1 件");
+    let empty = Permit::new(true);
+    let out = empty.revoke(P_BEAD, P_RULE, &[]);
+    assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_OK), line.clone()), "許可の無い置き場でも書く");
+    assert_eq!((empty.permits().len(), last(&empty)), (1, Some(detail.clone())), "効いている許可が無い周も 1 件");
+    let blind = Permit::new(true);
+    fs::remove_file(&blind.stamp).ok();
+    fs::create_dir_all(&blind.stamp).ok();
+    let out = blind.revoke(P_BEAD, P_RULE, &[]);
+    assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_OK), line), "壊れた bd と dir の打刻でも書く");
+    assert_eq!(blind.permits().len(), 1, "台帳と打刻を読まない");
+    let before = empty.fake.log();
+    let out = empty.revoke(P_BEAD, "review.same_kind_stop", &[]);
+    let want = refusal("rule-not-listed", &format!("bead={P_BEAD} rule=review.same_kind_stop listed={P_RULE}"));
+    assert_eq!((rc_of(&out), stdout_of(&out), stderr_of(&out)), (i32::from(RC_REFUSED), String::new(), format!("{want}\n")), "列に無い行");
+    assert_eq!(empty.fake.log(), before, "event 0 件");
+}
+
+/// 壊れた manifest の写し（`--rules` に渡す file）を置く。
+fn broken_rules(place: &Permit) -> String {
+    fixture(&place.fake.dir, "broken-rules.toml", "これは manifest でない\n")
+}
+
+/// event log を壊す（`not json` の行 1 本）。
+fn break_log(place: &Permit) {
+    fs::write(store::events_path(&place.fake.state), "not json\n").ok();
+}
+
+/// 撃って rc 2 の外形（`prefix` で始まる 1 行・stdout 0 byte・event log の byte が同じ）を測る。
+fn assert_broken(place: &Permit, cmd: Option<&Cmd>, extra: &[&str], prefix: &str) -> String {
+    let before = place.fake.log();
+    let out = cmd.map_or_else(|| place.revoke(P_BEAD, P_RULE, extra), |found| place.run(found, extra));
+    assert_unreadable(&out, &before, &place.fake.log(), prefix);
+    stderr_of(&out)
+}
+
+/// u1（読めない周）: 記帳の周の event log（`not json` の行）・manifest（壊れた `--rules`）・台帳（show が rc 1 の偽の bd）・打刻（state.jsonl が dir）が
+/// それぞれ rc 2 で source を名指し、取り消しの周の event log と manifest がそれぞれ rc 2。列に無い行と壊れた最後の打刻の行を同時に持つ周も rc 2 `source=stamp`
+/// （照合の順に関わらない）。2 つを同時に壊した 3 組（manifest と event log・event log と台帳・台帳と打刻）は先の source を名指す。show が rc 1 の偽の bd と
+/// event の無い裁定 id の周は rc 1 の no-ruling（読む問いが無い）。
+#[test]
+fn pipe_permit_mouth_u1_an_unreadable_place_is_rc_2_naming_the_first_source() {
+    let (place, cmd) = arrange(true, |_, _| {});
+    let rules = broken_rules(&place);
+    assert_broken(&place, Some(&cmd), &["--rules", &rules], "pipe: permit unreadable source=manifest ");
+    assert_broken(&place, None, &["--rules", &rules], "pipe: permit unreadable source=manifest ");
+    let (ledger, cmd) = arrange(true, |_, _| {});
+    fs::remove_file(ledger.fake.dir.join(format!("show-{P_QUESTION}.json"))).ok();
+    let line = format!("pipe: permit unreadable source=ledger question={P_QUESTION}\n");
+    assert_eq!(assert_broken(&ledger, Some(&cmd), &[], &line), line, "台帳の 1 行の完全一致");
+    let (stamp, cmd) = arrange(true, |_, _| {});
+    fs::remove_file(&stamp.stamp).ok();
+    fs::create_dir_all(&stamp.stamp).ok();
+    let line = format!("pipe: permit unreadable source=stamp path={} why=open\n", stamp.stamp.display());
+    assert_eq!(assert_broken(&stamp, Some(&cmd), &[], &line), line, "打刻の 1 行の完全一致");
+    let (log, cmd) = arrange(true, |_, _| {});
+    break_log(&log);
+    assert_broken(&log, Some(&cmd), &[], "pipe: permit unreadable source=event-log ");
+    assert_broken(&log, None, &[], "pipe: permit unreadable source=event-log ");
+}
+
+/// u1 の続き: 順に関わらない rc 2 と、2 つを同時に壊した 3 組の先の source と、読む問いが無い周の rc 1。
+#[test]
+fn pipe_permit_mouth_u1_reads_come_before_the_judgement_and_in_the_order_of_the_sources() {
+    let (place, mut cmd) = arrange(true, |scene, _| scene.body = Some(body_of(P_BEAD, "review.same_kind_stop", &permit_value())));
+    cmd.rule = "review.same_kind_stop".to_owned();
+    let good = format!("{}\n", stamp_line("idle", "SessionStart", unix_now(), SESSION));
+    fs::write(&place.stamp, format!("{good}not json\n")).ok();
+    let line = format!("pipe: permit unreadable source=stamp path={} why=last-line\n", place.stamp.display());
+    assert_eq!(assert_broken(&place, Some(&cmd), &[], &line), line, "列に無い行でも打刻が先に rc 2");
+    let (both, cmd) = arrange(true, |_, _| {});
+    break_log(&both);
+    let rules = broken_rules(&both);
+    assert_broken(&both, Some(&cmd), &["--rules", &rules], "pipe: permit unreadable source=manifest ");
+    let (both, cmd) = arrange(true, |_, _| {});
+    fs::remove_file(both.fake.dir.join(format!("show-{P_QUESTION}.json"))).ok();
+    break_log(&both);
+    assert_broken(&both, Some(&cmd), &[], "pipe: permit unreadable source=event-log ");
+    let (both, cmd) = arrange(true, |_, _| {});
+    fs::remove_file(both.fake.dir.join(format!("show-{P_QUESTION}.json"))).ok();
+    fs::remove_file(&both.stamp).ok();
+    fs::create_dir_all(&both.stamp).ok();
+    assert_broken(&both, Some(&cmd), &[], "pipe: permit unreadable source=ledger ");
+    let (none, cmd) = arrange(true, |scene, _| scene.ruling_event = false);
+    fs::remove_file(none.fake.dir.join(format!("show-{P_QUESTION}.json"))).ok();
+    none.refused(&cmd, &refusal("no-ruling", &format!("ruling={}", cmd.ruling)));
+}
+
+/// m1（対象の列の閉じ）: `pipe.permit_rows` の値を review.same_kind_stop・pipe.max_live・R-C4-2・role.orchestrator のどれか 1 つにした埋め込みの写しの manifest を
+/// それぞれ `--rules` で渡す記帳は rc 2 `source=manifest` で行 id と要素を名指して event 0 件（file の名は行 id を含まない）。
+#[test]
+fn pipe_permit_mouth_m1_a_closed_rows_list_naming_a_row_without_a_reader_is_unreadable() {
+    let embedded = include_str!("../../../../../rules/manifest.toml");
+    let head = "id = \"pipe.permit_rows\"\nkind = \"PipePermitRows\"\nvalue = [\"gate.token_cap\"]";
+    assert!(embedded.contains(head), "前提: 埋め込みの対象の列の行");
+    for row in ["review.same_kind_stop", "pipe.max_live", "R-C4-2", "role.orchestrator"] {
+        let (place, cmd) = arrange(true, |_, _| {});
+        let copy = embedded.replace(head, &format!("id = \"pipe.permit_rows\"\nkind = \"PipePermitRows\"\nvalue = [\"{row}\"]"));
+        let rules = fixture(&place.fake.dir, "copy.toml", &copy);
+        let line = assert_broken(&place, Some(&cmd), &["--rules", &rules], "pipe: permit unreadable source=manifest ");
+        assert!(line.contains("pipe.permit_rows") && line.contains(&format!("\"{row}\"")), "行 id と要素を名指す: {line}");
+    }
+}
+
+/// t1（本文の語の境目）: 本文が `s2-p.70`・値の後ろに 0 を足した字・`gate.token_capx` だけを持つ問いはそれぞれ not-stated（欠けた語だけを名指す）、
+/// `値 = <値>。` と `bead s2-p.7.` の書き方は通る。
+#[test]
+fn pipe_permit_mouth_t1_the_word_boundary_of_the_body() {
+    let value = permit_value();
+    let forms = [
+        (format!("s2-p.70 の {P_RULE} を {value} へ"), "bead"),
+        (format!("{P_BEAD} の {P_RULE} を {value}0 へ"), "value"),
+        (format!("{P_BEAD} の gate.token_capx を {value} へ"), "rule"),
+    ];
+    for (text, missing) in forms {
+        let (place, cmd) = arrange(true, |scene, _| scene.body = Some(text.clone()));
+        place.refused(&cmd, &refusal("not-stated", &format!("question={P_QUESTION} missing={missing}")));
+    }
+    let (place, cmd) = arrange(true, |scene, _| scene.body = Some(format!("bead {P_BEAD}. rule {P_RULE}, 値 = {value}。")));
+    place.passes(&cmd, "字のまま書いた形");
+}
+
+/// h1（使い方と help と形の誤り）: `pipe` の使い方が permit の 1 行を持ち、`help pipe` の SUBCOMMANDS に `permit` の行と SEE に limit-permit.md を持ち、
+/// `--revoke` と `--value` の併せ持ちと `--until` の欠けは rc 1 の形の 1 行で event 0 件。
+#[test]
+fn pipe_permit_mouth_h1_the_usage_the_help_page_and_the_form_errors() {
+    let usage = vessel::pipe::cli::usage();
+    let own: Vec<&str> = usage.lines().filter(|line| line.starts_with(&format!("usage: {NAME} pipe permit "))).collect();
+    assert_eq!(own.len(), 1, "使い方に permit の 1 行: {usage}");
+    assert!(own.iter().all(|line| line.contains("--revoke") && line.contains("--ruling ID")), "2 形を名乗る: {own:?}");
+    let help = Command::new(bin()).args(["help", "pipe"]).output().map(|out| stdout_of(&out)).unwrap_or_default();
+    assert!(help.lines().any(|line| line.trim_start().starts_with("permit ") && line.contains("Raise one cap for one bead")), "SUBCOMMANDS の permit の行: {help}");
+    assert!(help.contains("docs/design/limit-permit.md"), "SEE: {help}");
+    let (place, cmd) = arrange(true, |_, _| {});
+    let before = place.fake.log();
+    let (state, repo) = (place.fake.state.display().to_string(), place.fake.repo.display().to_string());
+    let base = ["--state-dir", &state, "--repo", &repo, "--bead", P_BEAD, "--rule", P_RULE];
+    let clash = [&base[..], &["--revoke", "--value", &cmd.value]].concat();
+    let missing = [&base[..], &["--value", &cmd.value, "--ruling", &cmd.ruling]].concat();
+    for (args, line) in [(clash, "pipe: --revoke は --value と併せて渡せない\n"), (missing, "pipe: --until が要る\n")] {
+        let out = pipe_permit(&args);
+        assert_eq!((rc_of(&out), stdout_of(&out), stderr_of(&out)), (i32::from(RC_REFUSED), String::new(), line.to_owned()), "{line}");
+        assert_eq!(place.fake.log(), before, "event 0 件");
+    }
+}

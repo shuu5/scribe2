@@ -273,6 +273,7 @@ pub const TABLE: &[Entry] = &[
             ("anchor-sync", "Bring the paths a landing left stale in the repo checkout up to main."),
             ("review", "Review the contract rows a design PR changed, before it merges."),
             ("index", "Build the code index of a commit with the declared tools (index build)."),
+            ("permit", "Raise one cap for one bead on a bound user ruling, or revoke it."),
         ],
         flags: &[
             ("--state-dir D", "Host state dir."),
@@ -289,7 +290,7 @@ pub const TABLE: &[Entry] = &[
             "{NAME} pipe dispatch ls --state-dir STATE --repo .",
             "{NAME} pipe stop --run RUN --state-dir STATE",
         ],
-        see: &["docs/design/pipeline.md", "docs/design/dispatcher.md", "docs/design/contract-source.md"],
+        see: &["docs/design/pipeline.md", "docs/design/dispatcher.md", "docs/design/contract-source.md", "docs/design/limit-permit.md"],
     },
     Entry {
         name: "runner",

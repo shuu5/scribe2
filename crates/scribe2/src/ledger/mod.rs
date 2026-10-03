@@ -153,6 +153,8 @@ pub struct Bead {
     pub asked: Option<String>,
     /// notes（無ければ空）。
     pub notes: String,
+    /// 本文（show の JSON の key `description` の字・無ければ空・上限の許可の口が問いの本文の字を照らす）。
+    pub description: String,
 }
 
 /// bead 1 本を読む（読みだけ・cwd は `repo`）。要素が 0 件の配列は `Ok(None)`（bead が無い）で、起動できない・rc ≠ 0・JSON を読めない・
@@ -191,6 +193,7 @@ fn bead_of(node: &Tree) -> Option<Bead> {
             .filter(|found| question::ASKED.contains(found))
             .map(str::to_owned),
         notes: text_of("notes").unwrap_or_default(),
+        description: text_of("description").unwrap_or_default(),
     })
 }
 

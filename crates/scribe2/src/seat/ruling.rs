@@ -383,9 +383,32 @@ fn ids_or_dash(ids: &[String]) -> String {
     }
 }
 
+/// 問いの起票と発話の前後（閉じた 3 値・[`asked_order`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Asked {
+    /// 問いの起票が発話より後。
+    After,
+    /// 問いの起票が発話より後でない（同じ秒を含む）。
+    NotAfter,
+    /// どちらかの時刻を読めない。
+    Unreadable,
+}
+
+/// 問いの起票と発話の前後（pure・**比べの 1 本**＝doctor の [`AskedAfter`] と許可の口の before-question が呼ぶ）。起票の時刻は [`epoch_of`]、
+/// 発話の ts は [`epoch_ms_of`] で読み、発話を秒へ切り捨てて比べる（字面で比べない・同じ秒は後でない）。
+pub(crate) fn asked_order(question_ts: &str, utterance: &str) -> Asked {
+    let (Some(asked_at), Some(said_ms)) = (epoch_of(question_ts), epoch_ms_of(utterance)) else {
+        return Asked::Unreadable;
+    };
+    if asked_at <= said_ms / 1_000 {
+        Asked::NotAfter
+    } else {
+        Asked::After
+    }
+}
+
 impl AskedAfter {
-    /// log から数える（pure）。問いの起票の時刻は [`epoch_of`]、発話の ts は [`epoch_ms_of`] で読み、発話を秒へ切り捨てて比べる
-    /// （字面で比べない・同じ秒は後に数えない）。
+    /// log から数える（pure）。前後は [`asked_order`] の 1 本で読む。
     pub fn of(events: &[Event]) -> Self {
         let mut found = Self::default();
         for event in events.iter().filter(|event| event.kind == EventKind::RulingReceived) {
@@ -396,12 +419,13 @@ impl AskedAfter {
             if asked.is_none() {
                 found.asked_none.push(ruling.clone());
             }
-            let (Some(asked_at), Some(said_ms)) = (epoch_of(question_ts), epoch_ms_of(utterance)) else {
-                found.unreadable = found.unreadable.saturating_add(1);
-                continue;
-            };
-            if asked_at <= said_ms / 1_000 {
-                continue;
+            match asked_order(question_ts, utterance) {
+                Asked::Unreadable => {
+                    found.unreadable = found.unreadable.saturating_add(1);
+                    continue;
+                }
+                Asked::NotAfter => continue,
+                Asked::After => {}
             }
             match asked.as_deref() {
                 Some("seat") => found.after_seat.push(ruling.clone()),

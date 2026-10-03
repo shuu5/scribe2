@@ -192,6 +192,12 @@ const ALLOWED_INDEX_SHOW: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2],
 /// `pipe follow`（設計 pipeline.md §52）。
 const ALLOWED_FOLLOW: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--run")];
 
+/// `pipe permit`（設計 limit-permit.md §19 約束 1・`--revoke` は取り消しの形の値なし flag）。
+const ALLOWED_PERMIT: &[cli_args::Allowed] = &[
+    PLACE[0], PLACE[1], PLACE[2],
+    value("--bead"), value("--rule"), value("--value"), value("--until"), value("--ruling"), TOOLS[0], Allowed::switch("--revoke"),
+];
+
 /// subcommand が受ける flag の集合（[`super::dispatch`] が subcommand を選んだ直後に [`crate::cli_args::parse`] へ渡す）。
 /// `shown` は subcommand の次の語が `show` か（`pipe index` だけが build と show で受ける flag を分ける）。
 pub(super) const fn allowed_of(command: PipeCommand, shown: bool) -> &'static [Allowed] {
@@ -218,6 +224,7 @@ pub(super) const fn allowed_of(command: PipeCommand, shown: bool) -> &'static [A
         PipeCommand::AnchorSync => ALLOWED_REPORT,
         PipeCommand::Review => ALLOWED_REVIEW,
         PipeCommand::Index => ALLOWED_INDEX,
+        PipeCommand::Permit => ALLOWED_PERMIT,
     }
 }
 
