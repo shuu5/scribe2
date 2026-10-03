@@ -428,6 +428,27 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
   - 頭が `<` で始まる prompt を全部外す（user が貼った本文の包み `<pasted_content` は user の操作で、発話として残す）。
   - `seat ruling bind` の側で包みの頭の発話を断る（記帳の側で外せば候補に入らない・口を 2 つに増やさない）。
 
+## 17. 着地の列の待ちの印は便の dir だけを材料にする — pipe の置き場の直下の file の項目が印を切り、待つ driver が 20 ms ごとに event log の全体を replay していた（契約表の行 k・§4 の続き・FR50・memo `s2-07l.743`）
+
+やさしく言うと: 着地の番を待つ driver は、前の周と材料が変わらなければ event log を読み直さない約束（§4）を持つ。材料の印を取る手は pipe の置き場の直下の項目を全部便の dir とみなすが、直下には便でない file（子の stderr の診断 file など）も在る。file の下の path は「無い」でなく「dir でない」と断られるので印が取れず、読み直さない約束が実の置き場では 1 度も効いていなかった。便の dir だけを材料にする。
+
+- 出所: memo `s2-07l.743`（待つ driver が子 process 無しで CPU を 30〜40% 使う）。便 `s2-07l.736.36` の審査（lens）が同じ読み手を名指した（[gate-cost.md](./gate-cost.md) §50 の起点を直下の file に置く設計への指摘・その設計は dir に直した）。
+- 何が起きているか（main b5d8b24e・verified）:
+  - 印を取る手は `crates/scribe2/src/fleet/wait.rs` の mark_of で、pipe の置き場の直下の項目ごとに `<項目>/verdict.json` の metadata を file_mark で取る。file_mark は NotFound だけを「無い」（Ok(None)）に読み、ほかの error は Err にする。mark_of は Err の項目が 1 つでも在れば印を None にする（読み直す側）。
+  - 本 repo の置き場の直下には file の項目が 2 つ常に在る（子の stderr の診断 file launch.log と未反映の判定の file unreflected）。掃除の lock（sweep.lock）も掃除の間だけ置かれる。file の下の path の stat は ENOTDIR（Not a directory）なので、印は毎周 None になる。
+  - None の周は前回の観測を使わずに replay する。待つ driver は周期 POLL（20 ms）ごとに event log の全体を読み直す。memo の CPU の観測の根はこれである（memo は印が変わる周の replay と推していた）。
+  - in-file の歯（REPLAYS の数え）の fixture の置き場は直下に file の項目を持たないので、歯は緑のまま穴を測れていない。
+- 約束（番号は done と 1:1）:
+  1. 印の材料は pipe の置き場の直下の項目のうち dir の項目だけにする。項目の種類は列挙の entry の種類で判じ、dir でない項目（file・symlink など）は材料に入れず、その項目で印を None にしない。種類を読めない項目は今どおり印を None にする（読み直す側・fail-closed）。
+  2. dir の項目の扱いは今のまま: verdict.json の無い dir は材料に入れず、在る dir は（長さ・mtime・inode）を材料にする。event log の印・印を取る順（replay の前）・reuse の判定・周期・Completion の値と wait の 1 実装は変えない。
+- 歯（in-file・既存の `crates/scribe2/src/fleet/wait.rs` の mod tests・接頭辞 fleet_wait_land_turn_mark_）:
+  - (a) fleet_wait_land_turn_mark_skips_plain_files_under_the_pipe_dir: queue_fixture の置き場の pipe の直下に file launch.log と unreflected を置き（置いた後に両方が file であることを assert）、mark_of が Some を返し、その verdicts の key が fixture の便の 2 つ（a-front と b-me）だけであることを測る。続けて `wait(land_turn(&state), 200 ms)` が Err(Timeout) で、REPLAYS がちょうど 1（1 周目だけ replay）。base は印が None で毎周 replay するので RED（機能不在）。
+  - 変わらない既存の歯: 接頭辞 fleet_wait_land_turn_ の 8 本（印の読み・reuse・読み直し）。
+  - 変異の A/B: dir でない項目を飛ばさないと (a) の Some が落ちる。印を取れた周にも replay すると (a) の REPLAYS が落ちる。
+- 触らない: AccountFree の待ち（印の省略を持たない・[account-lifecycle.md](./account-lifecycle.md) §39 の側）・CiResult の周期・pipe の置き場の直下の file の項目の置き場（診断 file・未反映の判定の file・掃除の lock は動かさない）。
+- 限界: 待つ driver は、event log が伸びる周（別の便の段の event・席の打刻）にはなお全体を replay する。費用は log の大きさに比例する（memo の候補 (b) の差分 replay は本行の外）。
+- 却下: 直下の file の項目を別の dir へ移す（読み手の置き場の約束を 3 つ動かし、次に足される file の項目でまた切れる）。file_mark が ENOTDIR を NotFound と同じに読む（event log の印にも効き、log の親が file の周を「log が無い」に読み替える）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -533,4 +554,15 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook
 size = "S"
 growth = ["crates/scribe2/src/hook/utterance.rs:2"]
 done = "(1) 包みの頭の一覧が閉じた 6 つになり <agent-message を持ち、頭（先頭の空白を除く）が <agent-message の prompt は記帳も出力もしない〔hook_utterance_record_skips_agent_message_ の (a): <agent-message from=\"x\"> の頭と本文の行を持つ prompt と先頭に空白を置いた同じ prompt で記帳 0・stdout と stderr 0 byte〕 (2) ほかの除外と除きすぎない形は今のまま〔(a) の同じ歯の中で本文の 2 行目に <agent-message を置いた prompt が 1 件記帳される・既存の hook_utterance_record_skips_injected_lines_wrappers_and_runners と hook_utterance_record_does_not_skip_lookalikes は本文を変えずに緑〕 歯: hook_utterance_record_skips_agent_message_（e2e・1 本）が base で RED（機能不在: base は頭が <agent-message の prompt を記帳する）"
+[[contract]]
+id = "k"
+title = "着地の列の待ちの印は pipe の置き場の直下の dir の項目だけを材料にし、直下の file の項目で印を切らない — 待つ driver が 20 ms ごとに event log の全体を replay していた（§17・memo s2-07l.743）"
+req = ["FR50"]
+section = "17"
+write-set = ["crates/scribe2/src/fleet/wait.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet_wait_land_turn_mark_", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_wait_land_turn_"]
+size = "S"
+growth = ["crates/scribe2/src/fleet/wait.rs:30"]
+done = "(1) 印を取る手は pipe の置き場の直下の項目のうち列挙の entry の種類が dir の項目だけを材料にし、dir でない項目（file など）は材料に入れずその項目で印を None にせず、種類を読めない項目は印を None にする〔fleet_wait_land_turn_mark_skips_plain_files_under_the_pipe_dir: 直下に file の launch.log と unreflected を置いた置き場で mark_of が Some で verdicts の key が a-front と b-me だけ・wait が 200 ms で Err(Timeout) で REPLAYS がちょうど 1〕 (2) verdict.json の無い dir は材料に入れず、event log の印・印を取る順・reuse の判定・周期・Completion の値と wait の 1 実装は変わらない〔変わらない fleet_wait_land_turn_ の 8 本〕 歯: fleet_wait_land_turn_mark_skips_plain_files_under_the_pipe_dir（lib・既存の mod tests・1 本）が base で RED（機能不在: base は直下の file の項目で印が None になり毎周 replay する）"
+done-teeth = ["1:fleet_wait_land_turn_mark_skips_plain_files_under_the_pipe_dir", "2:@2"]
 <!-- contracts:end -->

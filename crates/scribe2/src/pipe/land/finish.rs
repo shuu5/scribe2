@@ -21,7 +21,7 @@ use super::super::gate::{LandedMark, Unfired, Verdict};
 use super::super::queue::{Order, Turned};
 use super::super::{emit, git_bytes, git_line, git_ok, size, verdict_path, vessel_path, Emit};
 use super::anchor::Anchored;
-use super::detection::{unfired, Detect, DETAIL_HEAD, SPAWNED, UNSPAWNED};
+use super::detection::{daily_floor, deferred, unfired, wake, Detect, Wake, DEFERRED, DETAIL_HEAD, SPAWNED, UNSPAWNED};
 use super::verify::{main_red, main_unmeasured, measure_main, verify_train_main, MAIN_UNKNOWN};
 use super::{broken, refused, retire_worktree, verdicts_path, Land, Landing, MainCheck, Terminal, MAIN_REF, RUN_TRAILER};
 use crate::cli_outcome::{Outcome, RC_OK};
@@ -446,6 +446,23 @@ fn spawn_detection(entry: &Land<'_>, sha: &str) -> Vec<String> {
     if !declared {
         return Vec::new();
     }
+    let tree = git_line(entry.repo, &["rev-parse", &format!("{sha}^{{tree}}")]);
+    let mark = LandedMark { sha, tree: tree.as_deref().unwrap_or(MAIN_UNKNOWN), since: None, runs: 0 };
+    let detect = Detect {
+        run: entry.run,
+        bead: entry.bead,
+        repo: entry.repo,
+        state_dir: entry.state_dir,
+        contract: entry.contract,
+        limits: entry.limits,
+        policy: entry.policy,
+        daily: crate::rules::read(entry.rules, Some(entry.state_dir)).ok().as_ref().and_then(daily_floor),
+    };
+    // 日次の検出（設計 gate-cost.md §50）: 下限の内の周は口を起こさず deferred を記す。行を読めない周は着地ごとに起こす。
+    let mut err = match wake(&detect) {
+        Wake::Fire(notes) => notes,
+        Wake::Defer => return defer_detection(entry, &detect),
+    };
     let mut argv: Vec<String> = ["land", "--run", entry.run, "--detection-only", "--state-dir"]
         .into_iter()
         .map(str::to_owned)
@@ -456,24 +473,29 @@ fn spawn_detection(entry: &Land<'_>, sha: &str) -> Vec<String> {
     }
     let spawned = spawn_self(entry.state_dir, &argv);
     let word = if spawned { SPAWNED } else { UNSPAWNED };
-    let mut err = Vec::new();
     if !spawned {
         err.push(format!("pipe: run {} の着地後の検出を起こせなかった（unmeasured={UNSPAWNED}）", entry.run));
-        let tree = git_line(entry.repo, &["rev-parse", &format!("{sha}^{{tree}}")]);
-        let mark = LandedMark { sha, tree: tree.as_deref().unwrap_or(MAIN_UNKNOWN) };
-        let detect = Detect {
-            run: entry.run,
-            bead: entry.bead,
-            repo: entry.repo,
-            state_dir: entry.state_dir,
-            contract: entry.contract,
-            limits: entry.limits,
-            policy: entry.policy,
-        };
         if let Err(reason) = unfired(&detect, mark, Unfired::Unmeasured(UNSPAWNED)) {
             err.push(format!("pipe: {reason}"));
         }
     }
+    err.extend(note_detection(entry, word));
+    err
+}
+
+/// 下限の内で口を起こさなかった周: 理由の file（`skipped=deferred`・書き手は口の書き手の file の 1 本）と detail
+/// `detection:deferred` を 1 件残す。record は足さない・起点は書かない。書けない周は stderr の 1 行（rc と着地は変えない）。
+fn defer_detection(entry: &Land<'_>, detect: &Detect<'_>) -> Vec<String> {
+    let mut err = Vec::new();
+    if let Err(reason) = deferred(detect) {
+        err.push(format!("pipe: {reason}"));
+    }
+    err.extend(note_detection(entry, DEFERRED));
+    err
+}
+
+/// `RunDone stage=Landed` の detail に `detection:<語>` を 1 件記す（記帳できない周は stderr の 1 行）。
+fn note_detection(entry: &Land<'_>, word: &str) -> Option<String> {
     let emitted = emit(
         entry.state_dir,
         &Emit {
@@ -487,10 +509,7 @@ fn spawn_detection(entry: &Land<'_>, sha: &str) -> Vec<String> {
         },
         entry.policy,
     );
-    if let Err(reason) = emitted {
-        err.push(format!("pipe: {reason}"));
-    }
-    err
+    emitted.err().map(|reason| format!("pipe: {reason}"))
 }
 
 /// 候補の木に積んだ便 1 本（[`land_train`] の材料・設計 pipeline.md §40・行 ah）。

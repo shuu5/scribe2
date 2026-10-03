@@ -66,7 +66,7 @@ ruled_at = "2026-09-07"
 
 | id | kind | value | enabled | 裁定（ruling / ruled_at）・design-intent 側の出所 |
 |---|---|---|---|---|
-| `R-C4-1` | CoreLines | 82000 | true | user 裁定 2026-10-01T04:49Z（A2・契約 27 本と上限の許可の見込みの余地・§21 行 r）・前値 74000 = user 裁定 2026-09-30T05:26Z（A2・束 E の見込みの余地・§20 行 q）・前々値 66000 = user 裁定 2026-09-29T00:59Z（A2・束 A・D・E の実装の余地・§19 行 p）・3 つ前の値 60000 = user 裁定 2026-09-15T11:2xZ（A2・**一時的**な緩和・s2-07l notes）・定期 refactor は .198（その前 40000 = user 裁定 2026-09-14〔A2・s2-07l notes〕・初期値 20000 = 論点 2 / 2026-09-07・憲法 §3）・**母集団は core crate の src の本体だけ**（in-file の歯〔`#[cfg(test)]` 区間〕は数えない＝R-C4-3 が数える側・user 裁定 2026-09-15・ADR-0033・[core-boundary.md](./core-boundary.md) §2） |
+| `R-C4-1` | CoreLines | 90000 | true | user 裁定 2026-10-03T05:09Z（A2・行の審査の cap-headroom と日次の検出と書き込みの検出線の見込みの余地・§23 行 t）・前値 82000 = user 裁定 2026-10-01T04:49Z（A2・契約 27 本と上限の許可の見込みの余地・§21 行 r）・前々値 74000 = user 裁定 2026-09-30T05:26Z（A2・束 E の見込みの余地・§20 行 q）・3 つ前の値 66000 = user 裁定 2026-09-29T00:59Z（A2・束 A・D・E の実装の余地・§19 行 p）・4 つ前の値 60000 = user 裁定 2026-09-15T11:2xZ（A2・**一時的**な緩和・s2-07l notes）・定期 refactor は .198（その前 40000 = user 裁定 2026-09-14〔A2・s2-07l notes〕・初期値 20000 = 論点 2 / 2026-09-07・憲法 §3）・**母集団は core crate の src の本体だけ**（in-file の歯〔`#[cfg(test)]` 区間〕は数えない＝R-C4-3 が数える側・user 裁定 2026-09-15・ADR-0033・[core-boundary.md](./core-boundary.md) §2） |
 | `R-C4-2` | ModuleLines | 1500 | true | 同上 |
 | `R-C4-3` | TestSrcRatioPct | 100 | true | 同上（比 1.0 = 100%） |
 | `R-C4-4.fn-lines` | FnLines | 60 | true | 同上 |
@@ -79,6 +79,7 @@ ruled_at = "2026-09-07"
 | `pipe.max_live` | PipeMaxLive | 16 | true | user 2026-09-16T11:14Z / 2026-09-16（[gate-cost.md §24](./gate-cost.md)・ADR-0035・契約 = 台帳 `s2-07l.398`）。host で同時に走る便（live な便）の本数の最大値（本）: 受付（`pipe intake` / `pipe preflight`）は便を作る前に交差と同じ live の判定で置き場の live な便を数え、本数 ≥ 値の周を `max-live`（`live=` と `cap=` の 1 行・rc 1）で断る。live を読めない便が在る周は `write-set-unreadable`（rc 2）。走行中の便には効かず、`pipe resume` と追随の起こし直しは数えない。読み手は受付の 1 か所（`pipe/cli/intake.rs`）で、行の無い manifest は受付を動かさない（rc 2・`review.same_kind_stop` と同じ極性）。一時的な引き下げは値の改訂（裁定 id 付きの PR）でだけ行う |
 | `flip.docs_only_faces` / `flip.marks_per_pr` | FlipDocsOnlyFaces / FlipMarksPerPr | `["docs/", "design-intent/", ".beads/", "README.md", "CLAUDE.md"]` / 16 | true | user 2026-09-22T06:48Z / 2026-09-22（[pipeline.md §7](./pipeline.md)・契約 = 台帳 `s2-07l.170`）。入口の flip check（`cargo xtask flip-check`）の免除経路の上限（List 1 本・Int 1 本）: `.rs` の差が無い便は動いた path が全部この面（`/` で終わる要素は接頭辞・他は完全一致）の中のときだけ `docs-only=N` で通り、面の外を含めば `no-test-diff`。便が足した札（`retroactive` / `moved`）の本数がこの値を超えれば `too-many-marks`。読み手は xtask の `limits.rs` の `FlipLimits` 1 本（`Limits` の 12 本とは別の型＝check / deps-delta の読み手と歯の fixture は動かない）で、行を読めない manifest は flip-check を `infra-error` で止める。宣言順の末尾 |
 | `host.runnable_per_core` / `host.blocked_per_core` | HostRunnablePerCore / HostBlockedPerCore | 4 / 1 | true | user 2026-09-20T15:23Z / 2026-09-20（[gate-cost.md §32](./gate-cost.md)・契約 = 台帳 `s2-07l.504` の行 x）。器の健康の遮断器の **core あたりの倍率**（Int 2 本）: 閾値 = 値 × 実測の core 数で、走行可能（`/proc/loadavg` の 4 番目の欄の分子）か待ち（`/proc/stat` の `procs_blocked`）がこれを超えた周は verify の行を撃つ前に空くまで待つ（上限は `gate.slot_wait_s`・超えた周は撃たずに INCONCLUSIVE）。絶対値でなく倍率なのは core 数の違う host で同じ意味にするため。読み手は `pipe/cli/step.rs` の `limits_of` 1 つ（`gate.slot_wait_s` と同じ形・行の無い manifest は gate / land が rc 2 で止まる） |
+| `detection.daily_min_s` | DetectionDailyMinS | 86400 | true | user 2026-10-03T01:49Z / 2026-10-03（[gate-cost.md §50](./gate-cost.md)・[ADR-0111](../../design-intent/decisions/ADR-0111-the-detection-line-runs-once-a-day-from-the-detection-origin.html)・契約 = 台帳 `s2-07l.736.34`）。検出線を起こす間隔の下限（秒・Int）: land の終端は検出の起点の fired からこの秒が過ぎた周だけ着地後の検出の口を起こし、内の周は起こさず `detection:deferred` を記す。口は前に測り終えた着地から今の着地までの便をまとめて 1 回撃つ。読み手は land の終端と口の 1 本（`pipe/land/detection/origin.rs`・`int_row` を通す）で、行を読めない manifest（無い・不発効・整数でない）は着地ごとに起こす今の形のまま。`pipe.land_wait_s` の直後 |
 | `R-C7-1` | DialogueSurface | `"user-direct"` | true | ADR-0003 / 2026-09-09・憲法 §3 |
 | `R-C8-1` | MaturityCondition | Policy（§3 の文） | **false** | 論点 9・ADR-0003 / 2026-09-09（停止・履歴） |
 | `R-C9-1` | AccountSelection | Policy（§3 の文） | **false** | 論点 8・U5 / 2026-09-07（口座は v3） |
@@ -325,6 +326,18 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
   - 60（実測の p50 に近い値）: 31 以上の 11 本のうち 4 本（64・77・81 ほか）が残る。
 - flip-check の入口: 変える test file は rules の歯の file・headless の歯の file・headless/lens.rs の 3 本である。前の 2 本は直した歯が base（値 30）で RED になり、headless/lens.rs は retroactive の札で通す。
 
+## 23. R-C4-1 を 90000 に上げる（契約表の行 t）
+
+- 何が起きているか（main dc5d3bd0・verified）: 行の審査の確定の機械の検査 cap-headroom は、core の余地を 475 行と測った（上限 R-C4-1 = 82000）。[write-budget.md](./write-budget.md) の行 a の見込み 497 行が入らず、行の審査が FAIL になった。走行中の日次の検出（[gate-cost.md](./gate-cost.md) の行 au・見込み 469 行）が着地すると、余地はほぼ 0 になる。書き込みの検出線の 3 行の見込みは計約 850 行で、待ちの行（[contract-source.md](./contract-source.md) の行 bx の 46 行など）も core の余地を使う。user 裁定 2026-10-03T05:09Z（A2・閾値の変更・逐語は器の裁定の event に残る・台帳の問い s2-07l.752・裁定 id s2-07l.752:20261003T0509Z-1）で上限を 90000 に上げる（前回の §21 と同じ +8000）。
+- 約束（番号は done と 1:1）:
+  1. `rules/manifest.toml` の行 `R-C4-1` の `value` を 90000 に・`ruling` を `user 2026-10-03T05:09Z` に・`ruled_at` を `2026-10-03` に書き換える。行の id・kind・`enabled` は不変で、行は増やさない（C5）。上げた行を名指す歯 `rules_core_lines_82000_raised_by_ruling`（§21 の行 r が足した歯・名が前の値を持つ）を、同じ形の `rules_core_lines_90000_raised_by_ruling` に置き換える（値 90000・kind `CoreLines`・発効・`ruling` が `user 2026-10-03T05:09Z` で始まり・`ruled_at` が `2026-10-03`・整数の読み手が 90000 を返す）。
+  2. `rules get R-C4-1` の出力を pin する既存の歯 `rules_cli_get_returns_value` の値と、assert の文言の裁定 id を新しい値と id に直す。実測: repo 全体で値 82000 を持つのは、`crates/scribe2-boundary/tests/e2e/rules.rs` のこの 2 本と manifest と本 doc だけである。
+- 設計の線（歯を持たない・審査が読む）: §4.1 の表の `R-C4-1` の行の値と裁定を約束 1 と同じ内容に写し、前の値 82000 の裁定（user 2026-10-01T04:49Z・§21 行 r）を履歴として残す。xtask の閾値の読み手と歯は現物の manifest から値を読むので 1 字も変えない（§19〜§21 と同じ・write-set には `=` で置く）。
+- 触らない: `src` の全部・憲法 §3 の閾値セル（初期値を持つ・§19 と同じ）・他の行・§4 の切り方・過去の § が書いたその時点の実測値・§21 の行 r（着地済み。verify の `rules_core_lines_82000_` は置き換えの後に該当 0 本になるが、着地済みの行は撃ち直さない）。
+- 着地の後: 受付と席は埋め込み manifest を読むので、PATH の binary を入れ替えるまで受付の core の余地は 82000 で測る（運用の手順・本行の done の外）。隣の project の規則がこの行を値の正本に名指すので、着地を知らせる。
+- 却下: 83500（書き込みの検出線の 3 行と走行中の行だけを覆い、待ちの行と次の設計の分が入らない）／上げずに先に削る（削れる量が読めず、書き込みの検出線と待ちの行が受付で止まる）。
+- flip-check の入口: 変える test file は `tests/e2e/rules.rs` の 1 本で、直す歯と置き換えた歯のどちらも base（値 82000）で RED になる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -521,4 +534,14 @@ write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules/emb
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_turns_embedded_manifest_declares_the_row_with_its_ruling", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_turns_passes_the_row_value_in_every_stage", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail headless_lens_version_prints_one_line_without_contract_or_worktree_and_never_calls_claude"]
 size = "S"
 done = "(1) 埋め込み manifest の lens.max_turns は値 100・裁定 id user 2026-10-01T08:09Z・裁定日 2026-10-01 で、kind LensMaxTurns・発効・位置と行の数は変わらない〔直す既存の歯 lens_turns_embedded_manifest_declares_the_row_with_its_ruling の値・整数の読み手の値・裁定 id・裁定日の pin〕 (2) --rules を渡さない lens は、段に依らず argv に --max-turns 100 の対をちょうど 1 つ持つ〔直す既存の歯 lens_turns_passes_the_row_value_in_every_stage の埋め込みの値の定数〕 (3) --print-version の版の行は turns=100 を持ち、歯 headless_lens_version_prints_one_line_without_contract_or_worktree_and_never_calls_claude は turns の字面を 30 と書かず headless の歯の file の定数 LENS_MAX_TURNS から組んで比べる〔直す既存の歯・headless/lens.rs の歯の区間に札 // flip-check: retroactive s2-07l.751〕 base は値 30 なので (1)(2) の値の比べが RED で、(3) は base でも緑なので札で通す（変異の証明: 版の行が turn の値を固定の 30 で出すと (3) が RED）"
+[[contract]]
+id = "t"
+title = "R-C4-1（core の本体の上限）を 82000 → 90000 に上げる — 値と裁定 id と ruled_at だけを書き換え、値を pin する歯を直し、上げた行を名指す歯を新しい値の名に置き換える（裁定 user 2026-10-03T05:09Z・A2）"
+req = ["FR17"]
+section = "23"
+write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "=crates/xtask/src/limits.rs", "=crates/xtask/src/check_tests.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_cli_get_returns_value", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_core_lines_90000_"]
+size = "S"
+done = "(1) 埋め込み manifest の R-C4-1 が値 90000 と kind CoreLines と発効と裁定 id user 2026-10-03T05:09Z と ruled_at 2026-10-03 を持ち、整数の読み手が 90000 を返し、上げた行を名指す歯は rules_core_lines_90000_ で始まる名に置き換わって前の値の名の歯は残らない〔rules_core_lines_90000_raised_by_ruling〕 (2) rules get R-C4-1 が 90000 の 1 行を出し、assert の文言の裁定 id が user 2026-10-03T05:09Z〔直す既存の歯 rules_cli_get_returns_value〕 歯は base（値 82000）でどちらも RED（機能不在: base の manifest は 82000 と前の裁定を持つ）"
+done-teeth = ["1:rules_core_lines_90000_raised_by_ruling", "2:rules_cli_get_returns_value"]
 <!-- contracts:end -->

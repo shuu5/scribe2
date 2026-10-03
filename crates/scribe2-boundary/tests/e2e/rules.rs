@@ -1086,6 +1086,36 @@ fn rules_ci_poll_row_follows_the_ci_wait() {
     assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
 }
 
+/// 検出線を起こす間隔の下限の行（設計 gate-cost.md §50 形 1・`s2-07l.736.36`）が埋め込み manifest に id / kind / 形 Int /
+/// 値 86400 / enabled / 裁定 id / 裁定日で 1 本在り、行は `pipe.land_wait_s` の直後（`land.train_max` の前）・kind は `ALL` の
+/// `PipeLandWaitS` の直後（`PipeCiWaitS` の前）で字面から引け、上限の許可の読み手を持たず、形は Int だけ（裁定の字は
+/// `pipe.land_wait_s` の行と違う・base では行も kind も無い ＝ RED）。
+#[test]
+fn rules_detection_daily_min_s_row_follows_the_land_wait_row() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let id = "detection.daily_min_s";
+    let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+    assert_eq!((row.kind, row.kind.shape()), (RuleKind::DetectionDailyMinS, ValueShape::Int), "{id} の kind と形");
+    assert!(!row.kind.has_permit_reader(), "{id} は上限の許可の読み手を持たない");
+    assert_eq!(row.value, RuleValue::Int(86_400), "{id} の値（1 日）");
+    assert!(row.enabled, "{id} は既定で効く");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-10-03T01:49Z", "2026-10-03"), "{id} の裁定 id と裁定日");
+    let land_wait = manifest.get("pipe.land_wait_s").unwrap_or_else(|| panic!("pipe.land_wait_s の行が在る"));
+    assert_ne!(row.ruling, land_wait.ruling, "裁定の字は pipe.land_wait_s の行と相乗りしない");
+    assert_eq!(int_row(&manifest, id), Ok(86_400), "{id} を整数の読み手で引ける");
+    assert_eq!(manifest.rows().iter().filter(|found| found.kind == RuleKind::DetectionDailyMinS).count(), 1, "kind の行は 1 本");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::PipeLandWaitS).expect("PipeLandWaitS は ALL に在る");
+    let after: Vec<RuleKind> = ALL.iter().skip(at + 1).take(2).copied().collect();
+    assert_eq!(after, [RuleKind::DetectionDailyMinS, RuleKind::PipeCiWaitS], "kind は PipeLandWaitS の直後で PipeCiWaitS の前");
+    let rows: Vec<&str> = manifest.rows().iter().map(|found| found.id.as_str()).collect();
+    let wait = rows.iter().position(|found| *found == "pipe.land_wait_s").expect("pipe.land_wait_s の行が在る");
+    assert_eq!(rows.get(wait + 1).copied(), Some(id), "行も pipe.land_wait_s の直後（母集団 {} 行）", rows.len());
+    assert_eq!(rows.get(wait + 2).copied(), Some("land.train_max"), "次の行は land.train_max");
+    assert_eq!(RuleKind::parse("DetectionDailyMinS"), Some(RuleKind::DetectionDailyMinS), "字面から引ける");
+    let errors = rejected(&one_row(RuleKind::DetectionDailyMinS, "\"86400\"")).expect("文字列の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+}
+
 /// 席の起草の置き場の書きの線の行（設計 dispatcher.md §33 形 5・`s2-07l.736.25`）が埋め込み manifest に id / kind / 形 Int /
 /// 値 6 / enabled / 裁定 id / 裁定日で 1 本在り、行は `pipe.ci_poll_s` の直後・kind は `ALL` の `PipeCiPollS` の直後で字面から
 /// 引け、形は Int だけ（base では行も kind も無い ＝ RED）。
@@ -1136,22 +1166,22 @@ fn rules_cli_get_returns_value() {
     let args = ["get".to_owned(), "R-C4-1".to_owned()];
     let outcome = vessel::rules::cli::dispatch(&args);
     assert_eq!(outcome.rc, RC_OK, "rc: {outcome:?}");
-    assert_eq!(outcome.out, vec!["82000".to_owned()], "値の行（裁定 id user 2026-10-01T04:49Z）");
+    assert_eq!(outcome.out, vec!["90000".to_owned()], "値の行（裁定 id user 2026-10-03T05:09Z）");
 }
 
-/// core の本体の上限の行 `R-C4-1`（設計 rules-manifest.md §21 行 r・user 裁定 2026-10-01T04:49Z・A2）が埋め込み manifest に
-/// 値 82000 / kind `CoreLines` / enabled / 裁定 id / 裁定日で在り、整数の読み手が 82000 を返す（base は値 74000 と前の裁定 ＝ RED）。
+/// core の本体の上限の行 `R-C4-1`（設計 rules-manifest.md §23 行 t・user 裁定 2026-10-03T05:09Z・A2）が埋め込み manifest に
+/// 値 90000 / kind `CoreLines` / enabled / 裁定 id / 裁定日で在り、整数の読み手が 90000 を返す（base は値 82000 と前の裁定 ＝ RED）。
 #[test]
-fn rules_core_lines_82000_raised_by_ruling() {
+fn rules_core_lines_90000_raised_by_ruling() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
     let id = "R-C4-1";
     let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
     assert_eq!(row.kind, RuleKind::CoreLines, "{id} の kind");
-    assert_eq!(row.value, RuleValue::Int(82_000), "{id} の値（行）");
+    assert_eq!(row.value, RuleValue::Int(90_000), "{id} の値（行）");
     assert!(row.enabled, "{id} は発効している");
-    assert!(row.ruling.starts_with("user 2026-10-01T04:49Z"), "{id} の裁定 id: {}", row.ruling);
-    assert_eq!(row.ruled_at, "2026-10-01", "{id} の裁定日");
-    assert_eq!(int_row(&manifest, id), Ok(82_000), "{id} を整数の読み手で引ける");
+    assert!(row.ruling.starts_with("user 2026-10-03T05:09Z"), "{id} の裁定 id: {}", row.ruling);
+    assert_eq!(row.ruled_at, "2026-10-03", "{id} の裁定日");
+    assert_eq!(int_row(&manifest, id), Ok(90_000), "{id} を整数の読み手で引ける");
 }
 
 #[test]

@@ -159,6 +159,7 @@ fn detection_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPo
             contract: &resolved.contract,
             limits,
             policy,
+            daily: super::land::detection::daily_floor(manifest),
         },
         &sha,
     )

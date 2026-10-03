@@ -7,6 +7,15 @@ severity: hint
 message: struct の literal の名（`Self` を含む）
 rule:
   pattern: $NAME
+  any:
+    - kind: identifier
+    - kind: type_identifier
+    - kind: scoped_identifier
+    - kind: scoped_type_identifier
+    - kind: generic_type
+    - kind: generic_type_with_turbofish
+    - kind: field_identifier
+    - kind: self
   inside:
     kind: struct_expression
     field: name
@@ -19,11 +28,31 @@ message: match の pattern の位置の path
 rule:
   any:
     - pattern: $NAME
+      any:
+        - kind: identifier
+        - kind: type_identifier
+        - kind: scoped_identifier
+        - kind: scoped_type_identifier
+        - kind: generic_type
+        - kind: generic_type_with_turbofish
+        - kind: field_identifier
+        - kind: self
+        - kind: generic_function
       inside:
         kind: tuple_struct_pattern
         field: type
         stopBy: neighbor
     - pattern: $NAME
+      any:
+        - kind: identifier
+        - kind: type_identifier
+        - kind: scoped_identifier
+        - kind: scoped_type_identifier
+        - kind: generic_type
+        - kind: generic_type_with_turbofish
+        - kind: field_identifier
+        - kind: self
+        - kind: generic_function
       inside:
         kind: struct_pattern
         field: type
@@ -32,7 +61,6 @@ rule:
       kind: scoped_identifier
       inside:
         kind: match_pattern
-        field: pattern
         stopBy: neighbor
 ---
 id: call
@@ -42,11 +70,31 @@ message: 呼び出しの callee（関数の path と method の名）
 rule:
   any:
     - pattern: $NAME
+      any:
+        - kind: identifier
+        - kind: type_identifier
+        - kind: scoped_identifier
+        - kind: scoped_type_identifier
+        - kind: generic_type
+        - kind: generic_type_with_turbofish
+        - kind: field_identifier
+        - kind: self
+        - kind: generic_function
       inside:
         kind: call_expression
         field: function
         stopBy: neighbor
     - pattern: $NAME
+      any:
+        - kind: identifier
+        - kind: type_identifier
+        - kind: scoped_identifier
+        - kind: scoped_type_identifier
+        - kind: generic_type
+        - kind: generic_type_with_turbofish
+        - kind: field_identifier
+        - kind: self
+        - kind: generic_function
       inside:
         kind: field_expression
         field: field

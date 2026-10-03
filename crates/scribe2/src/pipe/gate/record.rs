@@ -301,6 +301,13 @@ const COPY_LINE_FILE: &str = "line";
 /// 周の置き場の中の段の秒（無い周は file を置かない＝読み手は `secs=` を出さない・C10）。
 const COPY_SECS_FILE: &str = "secs";
 
+/// 周の置き場の中の日次の検出が測った範囲の起点の sha（1 行・[`COPY_RUNS_FILE`] と対・無い周は file を置かない・設計
+/// gate-cost.md §50 形 (9)）。
+const COPY_SINCE_FILE: &str = "since";
+
+/// 周の置き場の中の日次の検出が測った便の id の列（古い順に 1 行 1 本・[`COPY_SINCE_FILE`] と対）。
+const COPY_RUNS_FILE: &str = "runs";
+
 /// 出力が 1 つも無かった周に置く marker（設計 gate-cost.md §15 (2)）。
 ///
 /// **空の写しを「0 件だった」に倒さない**（C10 / NFR4）——出力の在る 0 件の周は `outcomes.json` が在り、
@@ -329,12 +336,22 @@ const DETECTION_OUTPUTS: [&str; 2] = ["outcomes.json", "missed.txt"];
 ///
 /// 材料は置き場と便 id の対（gate と着地後の検出の口が同じ 1 本で写す・設計 gate-cost.md §44 形 (2)）。写した周は
 /// その周の置き場を返す（着地後の検出が同じ置き場に理由の file を足す・[`keep_reason`]）。
-pub fn keep_detection(state_dir: &Path, run: &str, worktree: &Path, steps: &[Step]) -> Result<Option<PathBuf>, String> {
+pub fn keep_detection(
+    state_dir: &Path,
+    run: &str,
+    worktree: &Path,
+    steps: &[Step],
+    span: Option<(&str, &[String])>,
+) -> Result<Option<PathBuf>, String> {
     let Some(step) = steps.iter().find(|step| step.stage == Check::Detection) else {
         return Ok(None);
     };
     let dir = next_copy_dir(state_dir, run);
     std::fs::create_dir_all(&dir).map_err(|err| format!("{} を作れない: {err}", dir.display()))?;
+    if let Some((since, runs)) = span {
+        write_copy(&dir.join(COPY_SINCE_FILE), &format!("{since}\n"))?;
+        write_copy(&dir.join(COPY_RUNS_FILE), &runs.iter().map(|id| format!("{id}\n")).collect::<String>())?;
+    }
     let line = step.line.as_deref().unwrap_or(COPY_ABSENT_LINE);
     write_copy(&dir.join(COPY_LINE_FILE), &format!("{line}\n"))?;
     if let Some(secs) = step.secs {
@@ -440,14 +457,27 @@ fn copy_of(dir: &Path) -> DetectionCopy {
     let secs = std::fs::read_to_string(dir.join(COPY_SECS_FILE))
         .ok()
         .and_then(|text| text.trim().parse().ok());
-    let Some(reason) = first_line(&dir.join(COPY_REASON_FILE)) else {
+    let (span, reason) = (span_word(dir), first_line(&dir.join(COPY_REASON_FILE)));
+    if span.is_none() && reason.is_none() {
         return DetectionCopy { line, secs };
-    };
-    let line = match secs {
-        Some(found) => format!("{line} secs={found} {reason}"),
-        None => format!("{line} {reason}"),
-    };
+    }
+    let mut line = line;
+    if let Some(found) = secs {
+        line = format!("{line} secs={found}");
+    }
+    for word in span.iter().chain(reason.iter()) {
+        line = format!("{line} {word}");
+    }
     DetectionCopy { line, secs: None }
+}
+
+/// 日次の検出の測った範囲の 1 語 `since=<base の先頭 7 字> runs=<便の列の本数>`（[`COPY_SINCE_FILE`] と [`COPY_RUNS_FILE`] の
+/// 両方が読める周だけ・設計 gate-cost.md §50 形 (10)）。
+fn span_word(dir: &Path) -> Option<String> {
+    let since = first_line(&dir.join(COPY_SINCE_FILE))?;
+    let runs = std::fs::read_to_string(dir.join(COPY_RUNS_FILE)).ok()?;
+    let count = runs.lines().filter(|line| !line.trim().is_empty()).count();
+    Some(format!("since={} runs={count}", since.chars().take(7).collect::<String>()))
 }
 
 /// file の先頭の非空 1 行（無い・読めない・空の file は `None`）。
@@ -669,6 +699,11 @@ pub struct LandedMark<'a> {
     pub sha: &'a str,
     /// 着地した木（`tree=`）。
     pub tree: &'a str,
+    /// 日次の検出が測った範囲の起点の sha（`since=`・設計 gate-cost.md §50 形 (9)・行を読めた周の撃った周だけ・撃った
+    /// record だけが持つ）。
+    pub since: Option<&'a str>,
+    /// 日次の検出が測った便の列の本数（`runs=`・`since` と対）。
+    pub runs: usize,
 }
 
 /// 着地後の検出が撃たなかった / 撃てなかった周の理由（record 1 本と理由の file の 1 語・設計 gate-cost.md §44 形 (4)）。
@@ -701,8 +736,18 @@ pub fn landed_step_record(number: u64, step: &Step, mark: LandedMark<'_>, pure_m
     }
     fields.push(("tree", Value::Str(mark.tree.to_owned())));
     fields.push((LANDED_FIELD, Value::Str(mark.sha.to_owned())));
+    if let Some(since) = mark.since {
+        fields.push((SINCE_FIELD, Value::Str(since.to_owned())));
+        fields.push((RUNS_FIELD, Value::Num(u64::try_from(mark.runs).unwrap_or(u64::MAX))));
+    }
     json_lite::write_object(&fields)
 }
+
+/// 日次の検出の record が持つ測った範囲の起点の field と便の列の本数の field（設計 gate-cost.md §50 形 (9)・任意 field）。
+const SINCE_FIELD: &str = "since";
+
+/// [`SINCE_FIELD`] と対の便の列の本数の field。
+const RUNS_FIELD: &str = "runs";
 
 /// 着地後の検出が撃たなかった / 撃てなかった周の理由を持つ record 1 本（`kind=detection`・`tree` と `landed` を持つ）。
 ///
