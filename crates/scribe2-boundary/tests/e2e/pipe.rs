@@ -2923,3 +2923,64 @@ fn pipe_index_declared_roles_file_has_one_rust_rule_per_role() {
         }
     }
 }
+
+/// 字下げの幅（先頭の空白の数）。
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// `lines[at]` を含む mapping の key（その行と同じ字下げで並ぶ key の字）。`- ` で始まる項はその項の中だけを見る。
+fn declared_mapping_keys<'a>(lines: &[&'a str], at: usize) -> Vec<&'a str> {
+    let Some(&here) = lines.get(at) else { return Vec::new() };
+    let item = here.trim_start().starts_with("- ");
+    let col = indent_of(here) + if item { 2 } else { 0 };
+    let mut members = vec![here];
+    if !item {
+        for prev in lines.get(..at).unwrap_or_default().iter().rev() {
+            let opens = indent_of(prev) + 2 == col && prev.trim_start().starts_with("- ");
+            if indent_of(prev) >= col || opens {
+                members.push(prev);
+            }
+            if indent_of(prev) < col {
+                break;
+            }
+        }
+    }
+    members.extend(lines.get(at + 1..).unwrap_or_default().iter().take_while(|next| !next.trim().is_empty() && indent_of(next) >= col));
+    members
+        .into_iter()
+        .filter(|line| indent_of(line) == col || line.trim_start().starts_with("- ") && indent_of(line) + 2 == col)
+        .filter_map(|line| line.trim_start().trim_start_matches("- ").split_once(':').map(|(key, _)| key.trim()))
+        .collect()
+}
+
+/// (a) 役の規則の file の `pattern: $NAME` の行ごとに、同じ mapping が `kind:` か `any:` の key を持つ（外の道具は種類を名指さない pattern を断る）。
+#[test]
+fn pipe_index_declared_roles_name_captures_carry_a_kind_set() {
+    let text = declared_text(".config/index-roles.yml");
+    let lines: Vec<&str> = text.lines().collect();
+    let mut seen = 0;
+    for (at, line) in lines.iter().enumerate() {
+        if line.trim_start().trim_start_matches("- ") != "pattern: $NAME" {
+            continue;
+        }
+        seen += 1;
+        let keys = declared_mapping_keys(&lines, at);
+        assert!(keys.iter().any(|key| ["kind", "any"].contains(key)), "{} 行目の pattern: $NAME は kind か any を持つ: {keys:?}", at + 1);
+    }
+    assert!(seen >= 8, "pattern: $NAME の行を測れている: {seen}");
+}
+
+/// (b) `kind: match_pattern` の行を持つ mapping は `field:` の key を持たない（match_pattern は pattern を field で持たない）。
+#[test]
+fn pipe_index_declared_roles_match_arm_paths_are_not_held_to_a_field() {
+    let text = declared_text(".config/index-roles.yml");
+    let lines: Vec<&str> = text.lines().collect();
+    let held: Vec<usize> = (0..lines.len()).filter(|&at| lines[at].trim_start().trim_start_matches("- ") == "kind: match_pattern").collect();
+    assert!(!held.is_empty(), "kind: match_pattern の行が在る");
+    for at in held {
+        let keys = declared_mapping_keys(&lines, at);
+        assert!(!keys.contains(&"field"), "{} 行目の match_pattern の mapping は field を持たない: {keys:?}", at + 1);
+        assert!(keys.contains(&"stopBy"), "{} 行目の match_pattern の mapping は stopBy を残す: {keys:?}", at + 1);
+    }
+}
