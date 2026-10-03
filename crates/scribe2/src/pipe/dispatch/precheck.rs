@@ -93,7 +93,7 @@ fn live_of(state_dir: &Path, state: &State, bead: &str) -> Option<(String, Stage
     Some((id.clone(), run.stage, write_set))
 }
 
-/// 祖先 1 つの重ね方（形 1・先撃ちの実体化も同じ層を当てる・行 aa）。
+/// 祖先 1 つの重ね方（形 1・行の審査の木の実体化も同じ層を当てる）。
 #[derive(Clone)]
 pub(in crate::pipe) enum Layer {
     /// 宣言の予想: write-set の `+` を tracked に足し `~` を除く（本文は持たない）。項目は動く file に入る。
@@ -106,7 +106,7 @@ pub(in crate::pipe) enum Layer {
         remove: Vec<String>,
         /// 本文の読み手が読む拡張子の file の本文（A の木の HEAD から）。
         bodies: Vec<Source>,
-        /// A の木の HEAD の sha（先撃ちが `add` の file を写す元）。
+        /// A の木の HEAD の sha（実体化が `add` の file を写す元）。
         head: String,
     },
 }
@@ -117,8 +117,6 @@ struct Ctx<'a, 'b> {
     input: &'a Input<'b>,
     /// 同じ周に読んだ台帳の全件。
     issues: &'a [Issue],
-    /// 母集団と到達。
-    population: &'a Population,
     /// 同じ周に `turn` が読んだ base の材料。
     base: &'a Materials,
 }
@@ -397,13 +395,13 @@ fn overlay(base: &Materials, layers: &[&Layer]) -> (Materials, Vec<String>) {
     (base.forecast(&add, &remove, &bodies), moving)
 }
 
-/// finding 1 つ（確からしさ・断りの名・在り処の字面・理由の 1 行・先撃ちの確定も同じ形・行 aa）。
+/// finding 1 つ（確からしさ・断りの名・在り処の字面・理由の 1 行）。
 pub(in crate::pipe) struct Finding {
     /// 確定 / 暫定 / 測れない。
     pub(in crate::pipe) certainty: Certainty,
-    /// 断りの名（型の断りは `Refuse::label`・型を持たない断りは材料の名・先撃ちは lens の理由の型）。
+    /// 断りの名（型の断りは `Refuse::label`・型を持たない断りは材料の名）。
     pub(in crate::pipe) name: String,
-    /// 在り処の字面（型を持たない断りは `-`・先撃ちは [`super::prelens::AT`]）。
+    /// 在り処の字面（型を持たない断りは `-`）。
     pub(in crate::pipe) at: String,
     /// 理由の 1 行。
     pub(in crate::pipe) reason: String,
@@ -414,16 +412,6 @@ fn layers_of(ctx: &Ctx<'_, '_>, row: &Row) -> Option<Vec<Ancestor>> {
     let key = row_key(&row.pointer);
     let repo = ctx.input.repo;
     ancestry((repo, repo), ctx.input.state_dir, ctx.issues, ctx.base, &key).ok().map(|(found, _)| found)
-}
-
-/// 先撃ちの予想の口（行 aa・設計 §27 形 aa 1・層の読み手を 2 本にしない・C2）: 待ち行の祖先の層（依存の順）と、予想の base で
-/// [`generated`] を撃った契約。祖先の層か生成が決まらない周は `None`。
-fn forecast(ctx: &Ctx<'_, '_>, bead: &str) -> Option<super::prelens::Forecast> {
-    let row = ctx.population.rows.get(bead)?;
-    let found = layers_of(ctx, row)?;
-    let found = applied(&found);
-    let (contract, body) = generated(ctx.input.repo, &row.pointer, &overlay(ctx.base, &found).0).ok()?;
-    Some(super::prelens::Forecast { layers: found.into_iter().cloned().collect(), contract, body })
 }
 
 /// 待ち行 1 つを予想の base で撃つ（形 2）: 祖先の重ね方が 1 つでも決まらなければ `None`（`unmeasured:forecast`）。
@@ -492,8 +480,6 @@ pub(super) struct Kept {
     result: String,
     /// 確定の finding（(名, 在り処) → 理由の 1 行・new の印の突き合わせと直しの束の根・行 y）。
     pub(super) firm: BTreeMap<(String, String), String>,
-    /// 事前審査の判定が clean か（finding が先撃ちの在り処の行だけ・測れない結果でない・先撃ちを撃つ行・行 aa）。
-    pub(super) clean: bool,
 }
 
 /// 結果の file を読む（1 行目 `key=`・2 行目 `result=` の無い file は読めない＝無いと同じ・跨版の約束を持たない cache）。
@@ -502,11 +488,7 @@ pub(super) fn read(path: &Path) -> Option<Kept> {
     let mut lines = text.lines();
     let key = lines.next()?.strip_prefix("key=")?.to_owned();
     let result = lines.next()?.strip_prefix("result=")?.to_owned();
-    let rest: Vec<&str> = lines.collect();
-    let prelens = format!(" at={} ", super::prelens::AT);
-    let clean = !result.starts_with("unmeasured") && rest.iter().all(|line| line.contains(&prelens));
-    let firm = rest
-        .into_iter()
+    let firm = lines
         .filter_map(|line| {
             let (name, rest) = line.strip_prefix("finding=firm name=")?.split_once(" at=")?;
             let (at, rest) = rest.split_once(" new=")?;
@@ -514,7 +496,7 @@ pub(super) fn read(path: &Path) -> Option<Kept> {
             Some(((name.to_owned(), at.to_owned()), reason.to_owned()))
         })
         .collect();
-    Some(Kept { key, result, firm, clean })
+    Some(Kept { key, result, firm })
 }
 
 /// 結果を書く（一時 file → rename・前の結果に無かった確定に `new=true`・書けない周は黙る＝次の周に撃ち直す）。
@@ -572,8 +554,7 @@ pub(super) fn round(input: &Input<'_>, turn: &Turn, issues: &[Issue], base: Opti
             }
         }
     }
-    let (rules, ctx) = (rules_word(input), Ctx { input, issues, population, base });
-    let mut before = BTreeMap::new();
+    let (rules, ctx) = (rules_word(input), Ctx { input, issues, base });
     for &bead in &waiting {
         let Some(row) = population.rows.get(bead) else {
             continue;
@@ -586,18 +567,13 @@ pub(super) fn round(input: &Input<'_>, turn: &Turn, issues: &[Issue], base: Opti
         }
         let findings = judged(&ctx, row);
         write(&dir, bead, &key, findings.as_deref(), previous.as_ref());
-        before.insert(bead, previous);
     }
-    // 先撃ち（行 aa・設計 §27 形 aa）は書き直した後・束ねる前（書き直す前の結果を前の結果として判定を同じ周に写し直す・形 aa 4）。
-    let sweep = super::prelens::Sweep { input, dir: &dir, population, waiting: &waiting, before };
-    super::prelens::round(&sweep, &mut |bead| forecast(&ctx, bead));
     // 周の終わりに確定の finding を根で束ねる（行 y・設計 §27 形 1）。
     super::bundle::round(input, &dir, population, &waiting);
 }
 
 /// `dispatch ls` の事前審査の行（依存待ちの候補ごとに 1 行・結果の file を読むだけ・形 7）:
-/// `[DISPATCH-PRECHECK] bead=<id> result=<結果の語か -> base=<current|moved>`（鍵の HEAD が今の base と同じ周だけ `current`）と、
-/// 先撃ちの状態の末尾の語（[`super::prelens::word`]・行 aa）。
+/// `[DISPATCH-PRECHECK] bead=<id> result=<結果の語か -> base=<current|moved>`（鍵の HEAD が今の base と同じ周だけ `current`）。
 pub(super) fn lines(input: &Input<'_>, turn: &Turn) -> Vec<String> {
     let (dir, head) = (dir_of(input.state_dir), head_of(input.repo));
     waiting_of(turn)
@@ -607,7 +583,7 @@ pub(super) fn lines(input: &Input<'_>, turn: &Turn) -> Vec<String> {
             let result = kept.as_ref().map_or(DASH, |found| found.result.as_str());
             let at = kept.as_ref().and_then(|found| found.key.strip_prefix("head:")?.split_whitespace().next());
             let base = if head.is_some() && at == head.as_deref() { "current" } else { "moved" };
-            format!("{LINE} bead={bead} result={result} base={base}{}", super::prelens::word(input, bead))
+            format!("{LINE} bead={bead} result={result} base={base}")
         })
         .collect()
 }

@@ -209,9 +209,6 @@ pub enum RuleKind {
     CompileSeconds,
     /// 1 周の review で回す lens の本数（本）。
     GateLensCount,
-    /// 事前審査の先撃ちの lens を 1 周に起こす本数の上限（本・設計 dispatcher.md §27 形 1）。撃ち中の行を含めて数え、0 は撃たない。
-    /// 任意の行で、読めない周は撃たず `[DISPATCH-PRECHECK]` の行の末尾に `prelens=unset` を足す。
-    PipePrecheckLensPerRound,
     /// 1 周の gate の token 上限（token）。
     GateTokenCap,
     /// 便ごとの token 消費の検出線（token・憲法 C6.2 の R-C6-1・設計 gate-cost.md §43）。便の消費の event の 4 値の和が
@@ -326,12 +323,9 @@ pub enum RuleKind {
     /// runner / lens が claude に**毎回**渡す effort（設計 pipeline.md §6・`s2-07l.322`）。値は claude CLI の字面
     /// （閉じた表は [`crate::headless::Effort`]）。省くと口座の設定 dir の `settings.json` の値で決まる。
     RunnerEffort,
-    /// `--stage` を持たない lens（契約の審査と gate の審査）が claude に**毎回**渡す model（設計 pipeline.md §61）。
+    /// lens（契約の審査・gate の審査・memo の審査）が claude に**毎回**渡す model（設計 pipeline.md §61）。
     /// 値は [`Self::RunnerModel`] と同じ語彙。
     LensModel,
-    /// `--stage prelens` の lens（事前審査の先撃ち）が claude に**毎回**渡す model（設計 pipeline.md §61）。
-    /// [`Self::LensModel`] と同じ model に解ける周だけ、先撃ちの判定を契約の審査に使い回す（dispatcher.md §27 形 ac 1）。
-    PipePrecheckLensModel,
     /// 役割ごとの既定の model（設計 seat-roles.md §19・`s2-07l.433`）。値は claude CLI の別名か表示名
     /// （閉じた表は [`crate::fleet::select::Model`]・表に無い字面は読み込みで拒む）。**1 kind で行は役割ごとに
     /// 1 つ**（id は `seat.model.<役割名>`）で、[`Self::RoleEffort`] と対で読む。
@@ -452,7 +446,6 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::CompileShape,
     RuleKind::CompileSeconds,
     RuleKind::GateLensCount,
-    RuleKind::PipePrecheckLensPerRound,
     RuleKind::GateTokenCap,
     RuleKind::RunTokenCeiling,
     RuleKind::LensMaxTurns,
@@ -498,7 +491,6 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::RunnerModel,
     RuleKind::RunnerEffort,
     RuleKind::LensModel,
-    RuleKind::PipePrecheckLensModel,
     RuleKind::RoleModel,
     RuleKind::RoleEffort,
     RuleKind::ReviewSameKindStop,
@@ -550,7 +542,7 @@ impl RuleKind {
             Self::CheckDeltaMs => "CheckDeltaMs",
             Self::CompileShape => "CompileShape",
             Self::CompileSeconds => "CompileSeconds",
-            Self::GateLensCount => "GateLensCount", Self::PipePrecheckLensPerRound => "PipePrecheckLensPerRound",
+            Self::GateLensCount => "GateLensCount",
             Self::GateTokenCap => "GateTokenCap", Self::RunTokenCeiling => "RunTokenCeiling", Self::LensMaxTurns => "LensMaxTurns",
             Self::PipePermitRows => "PipePermitRows", Self::PipePermitMaxH => "PipePermitMaxH",
             Self::HookBudgetMs => "HookBudgetMs", Self::HostGuardPublishDeadlineMs => "HostGuardPublishDeadlineMs", Self::HostGuardPublishReadBytes => "HostGuardPublishReadBytes",
@@ -584,7 +576,6 @@ impl RuleKind {
             Self::PipeSizeSLines => "PipeSizeSLines", Self::PipeSizeMLines => "PipeSizeMLines",
             Self::PipeSizeLLines => "PipeSizeLLines",
             Self::RunnerModel => "RunnerModel", Self::RunnerEffort => "RunnerEffort", Self::LensModel => "LensModel",
-            Self::PipePrecheckLensModel => "PipePrecheckLensModel",
             Self::RoleModel => "RoleModel", Self::RoleEffort => "RoleEffort",
             Self::ReviewSameKindStop => "ReviewSameKindStop",
             Self::LandTrainMax => "LandTrainMax",
@@ -614,7 +605,7 @@ impl RuleKind {
             | Self::DepBudget
             | Self::DepPerPr
             | Self::CheckDeltaMs
-            | Self::GateLensCount | Self::PipePrecheckLensPerRound
+            | Self::GateLensCount
             | Self::GateTokenCap | Self::RunTokenCeiling | Self::LensMaxTurns | Self::PipePermitMaxH
             | Self::HookBudgetMs | Self::HostGuardPublishDeadlineMs | Self::HostGuardPublishReadBytes
             | Self::StopGraceMs | Self::LockRetryMs
@@ -649,7 +640,7 @@ impl RuleKind {
             | Self::LifecycleClosedWindowH | Self::LifecycleAgeH | Self::LifecycleFullMinS | Self::MemoNotesMaxBytes | Self::MemoTriageIntervalH | Self::MemoTriagePerRound | Self::IndexCapMb | Self::IndexTimeoutS => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
-            | Self::RunnerEffort | Self::LensModel | Self::PipePrecheckLensModel
+            | Self::RunnerEffort | Self::LensModel
             | Self::RoleModel
             | Self::RoleEffort => ValueShape::Str,
             Self::MaturityCondition
@@ -674,7 +665,7 @@ impl RuleKind {
             Self::CoreLines | Self::ModuleLines | Self::TestSrcRatioPct | Self::FnLines | Self::FnComplexity | Self::FnArgs
             | Self::LineWidth | Self::BoundaryLines | Self::DialogueSurface | Self::MaturityCondition | Self::AccountSelection
             | Self::MutationSurvivalLine | Self::DepBudget | Self::DepPerPr | Self::CheckDeltaMs | Self::CompileShape
-            | Self::CompileSeconds | Self::GateLensCount | Self::PipePrecheckLensPerRound | Self::RunTokenCeiling
+            | Self::CompileSeconds | Self::GateLensCount | Self::RunTokenCeiling
             | Self::LensMaxTurns | Self::PipePermitRows | Self::PipePermitMaxH | Self::HookBudgetMs
             | Self::HostGuardPublishDeadlineMs | Self::HostGuardPublishReadBytes | Self::StopGraceMs | Self::LockRetryMs
             | Self::LockStaleMs | Self::HookTimeoutS | Self::RunnerAllowedCommands | Self::RunnerDeniedCommands
@@ -685,7 +676,7 @@ impl RuleKind {
             | Self::HostRunnablePerCore | Self::HostBlockedPerCore | Self::PipeLandWaitS | Self::DetectionDailyMinS
             | Self::PipeCiWaitS | Self::PipeCiPollS | Self::SeatDraftsStaleH | Self::LedgerTimeoutS | Self::RoleCapabilities
             | Self::PipeSizeSLines | Self::PipeSizeMLines | Self::PipeSizeLLines | Self::RunnerModel | Self::RunnerEffort
-            | Self::LensModel | Self::PipePrecheckLensModel | Self::RoleModel | Self::RoleEffort | Self::ReviewSameKindStop
+            | Self::LensModel | Self::RoleModel | Self::RoleEffort | Self::ReviewSameKindStop
             | Self::LandTrainMax | Self::PipeMaxLive | Self::FlipDocsOnlyFaces | Self::FlipMarksPerPr
             | Self::LedgerDeniedWrites | Self::LedgerOpenChildrenMax | Self::HostGuardDeniedCommands
             | Self::HostGuardRmProtected | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatPointerLadderS

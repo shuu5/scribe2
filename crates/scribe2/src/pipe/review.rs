@@ -235,10 +235,7 @@ const KIND_HEAD: &str = "kind:";
 /// event の detail の `verdict:` の頭。
 const VERDICT_HEAD: &str = "verdict:";
 
-/// 先撃ちの判定を使い回した周の detail の末尾の語（[`read_detail`] は語で読むので `pipe report` は変わらない・形 ac 1）。
-const REUSED: &str = " prelens:reused";
-
-/// 行の審査の記録を使い回した周の detail の末尾の語（先撃ちの [`REUSED`] とは別の語・設計 row-review.md §5）。
+/// 行の審査の記録を使い回した周の detail の末尾の語（[`read_detail`] は語で読むので `pipe report` は変わらない・設計 row-review.md §5）。
 const ROW_REUSED: &str = " row-review:reused";
 
 /// `RunStage stage=Reviewed` の detail の字面: `verdict:<V>`（PASS）か `verdict:<V> kind:<k>`（PASS でない）。
@@ -276,9 +273,6 @@ pub struct Review<'a> {
     pub requirements: &'a str,
     /// lens のコマンドの出所（`--lens`・無い / 読めないは別の値＝どちらも INCONCLUSIVE・[`super::lens_record`]）。
     pub lens: &'a LensSource,
-    /// 先撃ちの lens と審査の lens が同じ model か（manifest の `lens.model` と `pipe.precheck_lens_model` が両方読めて同じ
-    /// `Model` に解ける周だけ真・設計 pipeline.md §61 形 5）。偽の周は先撃ちの判定を使い回さず lens を撃つ。
-    pub same_model: bool,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }
@@ -328,24 +322,16 @@ pub fn review(entry: &Review<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    // 逆引きの表は既存の材料を置いた後に置く（先撃ちは置かない・undeclared の repo は file を置かない・§7 (a)）。
+    // 逆引きの表は既存の材料を置いた後に置く（undeclared の repo は file を置かない・§7 (a)）。
     if let Err(reason) = index::keep(&dir, (entry.state_dir, entry.repo), head.as_deref(), &entry.contract.design) {
         return broken(reason);
     }
-    // 行の審査の記録を写せる周（行の digest・材料の鍵・code の木の鍵・lens の版が同じ actual の PASS・設計 row-review.md §5）と、先撃ちの
-    // 判定を使い回せる周（材料の鍵・判定・lens の字・model の行が同じ・置き場の木が審査の木・設計 dispatcher.md §27 形 ac 1・pipeline.md
-    // §61 形 5・§64 形 5）は lens を撃たない（木も作らない）。行の審査の読み口が先で、先撃ちの読み口は行 e まで残す。
-    let rowed = match (entry.lens, head.as_deref()) {
+    // 行の審査の記録を写せる周（行の digest・材料の鍵・code の木の鍵・lens の版が同じ actual の PASS・設計 row-review.md §5）は
+    // lens を撃たない（木も作らない）。
+    let reused = match (entry.lens, head.as_deref()) {
         (LensSource::Cmd(cmd), Some(sha)) => row_reused(entry, (&source, &dir), cmd, sha),
         _ => None,
     };
-    let word = if rowed.is_some() { ROW_REUSED } else { REUSED };
-    let reused = rowed.or_else(|| match (entry.lens, head.as_deref()) {
-        (LensSource::Cmd(cmd), Some(sha)) if entry.same_model => {
-            super::dispatch::prelens::reusable(entry.state_dir, entry.bead, (&dir, sha), cmd)
-        }
-        _ => None,
-    });
     // done の項目の数（Promised の行は 0・材料の書き手 `materials` と同じ読み手 `done_items`・§64 形 5）。
     let items = if promised { 0 } else { items::done_items(&entry.contract.done).len() };
     let (finding, scope, usage, tree) = match &reused {
@@ -358,7 +344,7 @@ pub fn review(entry: &Review<'_>) -> Outcome {
     // 書けない周も判定と rc は変えない。使い回した周は lens を撃っていないので書かない（形 ac 2）。
     let cost = usage.map(|found| Cost { source: CostSource::Review, usage: found });
     let noted = record_cost(entry.state_dir, (entry.run, entry.bead), cost, entry.policy);
-    match settle(entry, &finding, scope, reused.as_ref().map(|_| word), tree.as_deref()) {
+    match settle(entry, &finding, scope, reused.as_ref().map(|_| ROW_REUSED), tree.as_deref()) {
         Err(reason) => broken(reason),
         Ok(()) => Outcome {
             out: vec![format!("run={} stage={} verdict={}", entry.run, Stage::Reviewed.as_str(), verdict.as_str())],
@@ -368,9 +354,9 @@ pub fn review(entry: &Review<'_>) -> Outcome {
     }
 }
 
-/// 審査の材料を `dir` に組む口（**Reviewed の段と先撃ちの 1 つ**・設計 dispatcher.md §27 形 aa 1・組み手を 2 本にしない・C2）:
+/// 審査の材料を `dir` に組む口（**Reviewed の段と行の審査の 1 つ**・組み手を 2 本にしない・C2）:
 /// [`materials`] を `repo` から読み、[`keep`] で `dir` に置き、lens に渡す契約の写しの path と約束の行を持つかを返す。`contract` は
-/// 読み込んだ契約とその file（写しの元）の対。`note` が空でない周は設計の材料の末尾に足す（先撃ちの予想の印）。
+/// 読み込んだ契約とその file（写しの元）の対。`note` が空でない周は設計の材料の末尾に足す（予想の印）。
 pub(in crate::pipe) fn stage(
     repo: &Path,
     contract: (&Contract, &Path),
@@ -524,7 +510,7 @@ fn section_number(title: &str) -> Option<String> {
     (!head.is_empty() && head.chars().all(|found| found.is_ascii_digit())).then(|| head.to_owned())
 }
 
-/// 材料を `dir`（run dir の [`REVIEW_DIR`] か先撃ちの置き場）へ置き、lens に渡す契約の写しの path を返す。`source` は契約 file。
+/// 材料を `dir`（run dir の [`REVIEW_DIR`] か行の審査の置き場）へ置き、lens に渡す契約の写しの path を返す。`source` は契約 file。
 /// 書けない周は `Err`（判定に届かない）。
 fn keep(dir: &Path, source: &Path, material: &Material) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|err| format!("{} を作れない: {err}", dir.display()))?;
@@ -637,7 +623,7 @@ fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &con
 }
 
 /// 終わった lens の rc と stdout から判定を読む（rc → 最後の JSON 行 → done の対応の表の順・[`lens_outcome`] の後段の 1 本）。
-/// `items` は done の項目の数（0 は表を読まない・§64 形 5・lens を撃った周と先撃ちを使い回した周が同じこの 1 本を通る）。
+/// `items` は done の項目の数（0 は表を読まない・§64 形 5・lens を撃った周と行の審査の記録を使い回した周が同じこの 1 本を通る）。
 fn read_outcome(rc: Option<i32>, text: &str, items: usize) -> Finding {
     if rc != Some(0) {
         return Finding::inconclusive(format!("lens が rc {} で終わった", rc.unwrap_or(-1)));
@@ -723,13 +709,6 @@ pub(in crate::pipe) fn lens_version(line: &str) -> Result<String, String> {
     }
 }
 
-/// 先撃ちの lens の判定（設計 dispatcher.md §27 形 aa 2・Reviewed の段と同じ読み手 [`read_outcome`]）: verdict・理由の型
-/// （PASS は `None`）・根拠の 1 行。項目の数は持たない（0 を渡す・§64 の限界）。
-pub(in crate::pipe) fn outcome_of(rc: Option<i32>, text: &str) -> (Verdict, Option<FindingKind>, String) {
-    let found = read_outcome(rc, text, 0);
-    (found.verdict, found.kind, found.evidence)
-}
-
 /// lens の stdout の最後の JSON 行から 3 値と理由の型を読む。読めない周・3 値の外は INCONCLUSIVE（FR9）。
 ///
 /// PASS でない周の `kind` は閉じた語彙で読み、無い・語でない周は [`FindingKind::Unparsed`] に倒して **verdict は
@@ -785,7 +764,7 @@ fn row_reused(entry: &Review<'_>, at: (&Path, &Path), cmd: &str, sha: &str) -> O
 }
 
 /// 判定を `review.json` へ atomic に書き、`Reviewed` を 1 件追記する。`kind` と `at` は任意 field（schema 1 のまま・
-/// 古い読み手は無視・PASS の周は無い）。使い回した周は detail の末尾に [`ROW_REUSED`] か [`REUSED`] を足す。
+/// 古い読み手は無視・PASS の周は無い）。使い回した周は detail の末尾に [`ROW_REUSED`] を足す。
 fn settle(
     entry: &Review<'_>,
     finding: &Finding,

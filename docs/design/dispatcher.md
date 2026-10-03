@@ -385,6 +385,8 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 
 ## 27. 依存を待つ行に受付の機械の審査を先に撃つ — 未着地の依存の宣言か実物で base を予想し、確定と暫定を分けて置き場に残し、確定の誤りを根で束ねて直しへ導く（契約表の行 x / y / aa・裁定 user 2026-09-27T13:32Z / 14:02Z）
 
+退役（row-review.md §6 段 2・契約表の行 e）: 形 aa の先撃ち（lens を裏で起こす機械・子 module `prelens`・rules 行 `pipe.precheck_lens_per_round`・`[DISPATCH-PRECHECK]` の ` prelens=` の字）と形 ac の Reviewed の段の使い回し（detail の ` prelens:reused`）は外した。機械の予想（形 x）と束（形 y）と、行の審査の記録の使い回し（row-review.md §5）は残る。以下の先撃ちに触れる記述は退役前の設計の記録である。
+
 やさしく言うと: 依存の着地を待つ契約は、待っている間に受付の審査を 1 度も受けない。器が「依存が着地したらこうなる」木を予想してその上で受付と同じ審査を撃ち、依存が着地しても消えない誤り（確定）だけを束にして直させる。予想の結果で便を起こしも止めもしない（起こす時の受付は今どおり実物の main で撃つ）。
 
 - 退役（[row-review.md](./row-review.md) §6・[ADR-0103](../../design-intent/decisions/ADR-0103-contract-rows-pass-row-review-before-merge-and-failed-rows-keep-their-place.html)）: 形 aa（先撃ち）と形 ac（先撃ちの判定の使い回し）は、設計の PR の段の行の審査に置き換えて退役する（段 1 は rules 行 pipe.precheck_lens_per_round の値 0、段 2 は code の退役・どちらも SRS の追加 round の後の行）。形 x（事前審査の機械の予想）と形 y（束と知らせ）は残す。
@@ -1804,10 +1806,10 @@ id = "ac"
 title = "Reviewed の段は、実物の base で組んだ材料の鍵が先撃ちの fired と同じで、判定が unparsed でなく、lens の cmd の字が同じ時だけ先撃ちの判定を使い回す — detail の末尾に語 prelens:reused、写した周は審査の消費を記帳しない（裁定 user 2026-09-27T14:02Z の後半）"
 req = ["FR49", "NFR1"]
 section = "27"
-write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/pipe/dispatch/prelens.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/pipe/review.rs"]
+write-set = ["crates/scribe2/src/pipe/review.rs", "~crates/scribe2/src/pipe/dispatch/prelens.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/pipe/review.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_review_reuse_"]
 size = "S"
-growth = ["crates/scribe2/src/pipe/review.rs:30", "crates/scribe2/src/pipe/dispatch/prelens.rs:20", "crates/scribe2/src/pipe/dispatch.rs:2"]
+growth = ["crates/scribe2/src/pipe/review.rs:30", "crates/scribe2/src/pipe/dispatch.rs:2"]
 depends = ["aa"]
 done = "(1) pipe run の Reviewed の段は、実物の base で組んだ材料の鍵（行 aa と同じ 1 関数）が置き場の fired と同じで、out の判定が unparsed でなく、置き場の lens の字が便の lens の cmd と同じ周だけ先撃ちの判定を写して段の detail の末尾に語 prelens:reused を足し、違う周は今どおり lens を撃つ (2) 写した周は審査の消費の 1 件を書かない 歯: pipe_review_reuse_ が (a) Gated PASS の祖先の木のまま着地した後に起こす側の周を 1 回撃ってから撃った Reviewed の偽 lens 0 回と detail の末尾の prelens:reused と消費の event の不変、(b) 着地の本文が Gated の木と違う周の偽 lens 1 回と語の無さ、(c) 予想の印を持つ行の着地後の偽 lens 1 回、(d) 先撃ちが rc 1 の行の偽 lens 1 回、(e) lens の cmd の字が違う周の偽 lens 1 回を測り、base で RED"
 [[contract]]

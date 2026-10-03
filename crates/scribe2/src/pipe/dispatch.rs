@@ -44,9 +44,6 @@ pub(in crate::pipe) mod precheck;
 /// 事前審査の確定を根で束ねる直しの束（設計 §27・契約表の行 y・終端の周の知らせが集合の変化を読む）。
 pub(crate) mod bundle;
 
-/// 事前審査が clean の待ち行に lens を裏で先に撃つ先撃ち（設計 §27・契約表の行 aa・Reviewed の段の使い回しの読み口は行 ac）。
-pub(in crate::pipe) mod prelens;
-
 /// 起こす側の周が受付の断りを契約ごとに `IntakeRefused` へ記帳する書き手（設計 §32・契約表の行 ag）。
 mod refused;
 

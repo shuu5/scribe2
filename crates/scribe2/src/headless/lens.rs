@@ -29,8 +29,8 @@
 //! 手書きの数が残った launcher が「効いている」ように見える）。
 //!
 //! **model も同じ manifest の rules 行から読み、claude に毎回渡す**（`s2-07l.297`・設計 pipeline.md §6 / §61）。
-//! `--stage` の無い lens（契約の審査と gate の審査）は `lens.model`、`--stage prelens` の lens（事前審査の先撃ち）は
-//! `pipe.precheck_lens_model` を読む（[`STAGE_PRELENS`]・他の値と値の欠けは未知の引数と同じ断り）。読み口は
+//! `--stage` の無い lens（契約の審査と gate の審査）も `--stage memo` の lens も `lens.model` を読む（他の値と値の欠けは
+//! 未知の引数と同じ断り）。読み口は
 //! [`super::rules_of`] / [`super::model_row`]（runner と共通）で、行が解けない周は cap と同じ極性＝claude を呼ばず rc 2。
 //! **effort も同じ manifest の rules 行 `runner.effort` から読み、毎回渡す**（`s2-07l.322`・読む順は cap → model → effort）。
 //! **turn の上限も rules 行 `lens.max_turns` から読み、`--stage` に依らず `--max-turns` で毎回渡す**（設計 pipeline.md §67・
@@ -77,7 +77,7 @@ use super::runner::{
 };
 use super::{
     build, feed, fill, flag, model_row, need, read_stdin_bytes, rules_of, runner_effort, Call, Effort, Format,
-    DEFAULT_CLAUDE, ROW_LENS_MODEL, ROW_PRELENS_MODEL,
+    DEFAULT_CLAUDE, ROW_LENS_MODEL,
 };
 use crate::cli_args::{refusal, ArgsError};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
@@ -137,7 +137,7 @@ const PRINT_VERSION: &str = "--print-version";
 /// 版の 1 行の見出しの語。
 const VERSION_HEAD: &str = "lens-version";
 
-/// 段の flag（値は [`STAGE_PRELENS`] だけ・設計 pipeline.md §61）。
+/// 段の flag（値は [`STAGE_MEMO`] だけ・設計 pipeline.md §61）。
 const STAGE_FLAG: &str = "--stage";
 
 /// lens が claude に**毎回**渡す permission mode（許可の問いを誰にも出さない mode・渡された値は使わない・設計 pipeline.md §64 形 1）。
@@ -149,10 +149,7 @@ const READ_TOOLS: &str = "Read,Grep,Glob";
 /// 渡された permission mode が [`PERMISSION_MODE`] でなかった周に、契約の file の dir へ置く 1 語の記録の file 名。
 const IGNORED_FILE: &str = "lens.ignored";
 
-/// `--stage` が取る値の 1 つ目（事前審査の先撃ちの lens・`pipe::dispatch::prelens` が lens の行の末尾に足す）。
-pub const STAGE_PRELENS: &str = "prelens";
-
-/// `--stage` が取る値の 2 つ目（memo の審査の lens・`pipe::dispatch::memo_lens` が lens の行の末尾に足す・設計 dispatcher.md §41）。
+/// `--stage` が取る値（memo の審査の lens・`pipe::dispatch::memo_lens` が lens の行の末尾に足す・設計 dispatcher.md §41）。
 /// `--contract` は契約でなく memo の材料の file を指し、diff も契約の隣の材料も読まない。
 pub const STAGE_MEMO: &str = "memo";
 
@@ -166,7 +163,7 @@ const POLL: Duration = Duration::from_secs(1);
 /// 使い方の 1 行。
 pub fn usage() -> String {
     format!(
-        "usage: {} lens --contract F --worktree D [--permission-mode M] [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage prelens|memo] [--print-version] < diff",
+        "usage: {} lens --contract F --worktree D [--permission-mode M] [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage memo] [--print-version] < diff",
         crate::name::NAME
     )
 }
@@ -226,15 +223,13 @@ fn unknown_arg(args: &[String]) -> Option<&str> {
     None
 }
 
-/// lens が model を読む rules 行（`--stage` の値で選ぶ・設計 pipeline.md §61）: 無ければ `lens.model`・[`STAGE_PRELENS`] は
-/// `pipe.precheck_lens_model`・[`STAGE_MEMO`] は `lens.model`。他の値は [`ArgsError::Unknown`]（字面 `--stage <値>`）・値の欠けは [`ArgsError::Missing`]＝
+/// lens が model を読む rules 行（`--stage` の値を裁く・設計 pipeline.md §61）: 無ければ `lens.model`・[`STAGE_MEMO`] も `lens.model`。他の値は [`ArgsError::Unknown`]（字面 `--stage <値>`）・値の欠けは [`ArgsError::Missing`]＝
 /// 未知の引数と同じ断り（[`refusal`]）で claude を呼ばない。
 fn model_row_id(args: &[String]) -> Result<&'static str, ArgsError> {
     let Some(at) = args.iter().position(|arg| arg == STAGE_FLAG) else {
         return Ok(ROW_LENS_MODEL);
     };
     match args.get(at + 1).map(String::as_str) {
-        Some(STAGE_PRELENS) => Ok(ROW_PRELENS_MODEL),
         Some(STAGE_MEMO) => Ok(ROW_LENS_MODEL),
         Some(value) if !value.starts_with("--") => Err(ArgsError::Unknown(format!("{STAGE_FLAG} {value}"))),
         _ => Err(ArgsError::Missing(STAGE_FLAG.to_owned())),

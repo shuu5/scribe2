@@ -220,11 +220,8 @@ pub fn need<'a>(args: &'a [String], name: &str) -> Result<&'a str, String> {
 /// runner が claude に毎回渡す model を持つ rules 行（設計 pipeline.md §6・`s2-07l.297`）。
 pub const ROW_MODEL: &str = "runner.model";
 
-/// `--stage` を持たない lens（契約の審査と gate の審査）の model を持つ rules 行（設計 pipeline.md §61）。
+/// lens（契約の審査・gate の審査・memo の審査）の model を持つ rules 行（設計 pipeline.md §61）。
 pub const ROW_LENS_MODEL: &str = "lens.model";
-
-/// `--stage prelens` の lens（事前審査の先撃ち）の model を持つ rules 行（設計 pipeline.md §61）。
-pub const ROW_PRELENS_MODEL: &str = "pipe.precheck_lens_model";
 
 /// 同じく effort を持つ rules 行（設計 pipeline.md §6・`s2-07l.322`）。
 pub const ROW_EFFORT: &str = "runner.effort";
@@ -281,7 +278,7 @@ pub fn rules_of(args: &[String]) -> Result<Manifest, String> {
     })
 }
 
-/// rules 行 `row` の model（**model の行の読み口はこの 1 本**・[`ROW_MODEL`] / [`ROW_LENS_MODEL`] / [`ROW_PRELENS_MODEL`]・
+/// rules 行 `row` の model（**model の行の読み口はこの 1 本**・[`ROW_MODEL`] / [`ROW_LENS_MODEL`]・
 /// 設計 pipeline.md §61）。行が無い / 不発効 / 文字列でない / 閉じた表（[`Model::parse`]）に無い周は理由つきで `Err`＝呼び手は
 /// claude を呼ばず rc 2（cap と同じ極性・版の既定へ黙って倒れない）。
 pub fn model_row(manifest: &Manifest, row: &str) -> Result<Model, String> {
