@@ -909,6 +909,18 @@ size = "S"
 growth = ["crates/scribe2/src/seat/cli.rs:30", "crates/scribe2-boundary/tests/e2e/seat/ruling.rs:180"]
 done = "(1) seat ruling bind は結ぶ前に repo の台帳の印を読み、Ok で返った周は自分の binary を fleet lifecycle write --state-dir <置き場> --repo <repo>（--bd を受けた周は同じ --bd）の子として入出力を捨てて 1 回起こし、待たず、起こすのは裁定 event を書いた後（e2e (a): 印の在る置き場の結びが rc 0・既存の歯と同じ stdout・stderr 0 byte で、期限 10 秒の内に close の後の --readonly list の撃ちが 1 回現れ list.rulings が 1） (2) seat ruling answer が Ok で返った周も同じ 1 本で子を起こす（e2e (b): list.hold を置いた印の在る置き場の答えが list.go の前に rc 0・裁定 id の 1 行・stderr 0 byte で wall 10 秒未満で返り、list.go の後に期限の内に list.ended が現れ list.rulings が 1） (3) Ok 以外で返った周と書く前の台帳の印を読めない周は起こさない（e2e (c): 印の在る置き場の閉じた問いの結び・空白だけの答え・close を 1 回落とした結びは期限まで待って list 0 で stderr は今の 1 行だけ、同じ歯の撃ち直しの結びは期限の内に list を撃ち、出力の fixture を置いた印の無い置き場の結びは rc 0 で期限まで待って lifecycle.stale に unreadable の印が無く、その後に同じ置き場で口を通さずに撃った fleet lifecycle write は理由 ledger の unreadable の印を 1 つ足す・既存の seat_ruling_bind_ と seat_ruling_answer_ は本文を変えずに緑） (4) 子を起こせなかった周は書く前の台帳の印を値にした ledger-gate の印を行 c の印を 1 つ足す関数で 1 つ足し、起こせた周は足さない（e2e (d): 出力の fixture を置いた印の在る置き場で argv[0] を在らない path にした結びは rc 0・(a) と同じ stdout・stderr 0 byte で、lifecycle.stale の ledger-gate の印の値が結ぶ前の read_ledger の値と等しく結んだ後の値と違い、期限まで待って list 0、同じ歯の本物の argv[0] の写しは期限の内に list を撃ち ledger-gate の印が無い） (5) 2 つの口の rc・stdout・stderr は起こした周も起こさない周も起こせなかった周も変えず、待ち時間に子の書き直しを足さない（(a)〜(d) の rc と stdout と stderr 0 byte と (b) の wall） (6) 新しい code は EventKind・Stage・WaitReason・Turn の変種と literal・RuleKind の変種を名指さず、印の種類は ledger-gate だけを名指し、verify の最終行の contracts check が便の木で findings 0 base は 2 つの口が子を起こさず印も足さないので (a)(b)(c) の期限の内の list と (d) の ledger-gate の印が無く RED（機能不在）"
 
+[[contract]]
+id = "l"
+title = "局面の出力の書き手の歯 lifecycle_writer_ties_commits_and_sources_onto_contracts_and_memos の発話と便の時刻を壁時計の今から組み、窓 72 時間の外へ出て落ちる時限を外す（§22・2026-10-03T00:00Z の main の赤）"
+req = ["FR90"]
+section = "22"
+write-set = ["crates/scribe2/src/fleet/lifecycle.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail lifecycle_writer_ties_commits_and_sources_onto_contracts_and_memos", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
+size = "S"
+growth = ["crates/scribe2/src/fleet/lifecycle.rs:8"]
+done = "(1) 歯 lifecycle_writer_ties_commits_and_sources_onto_contracts_and_memos の RunCreated の ts を壁時計の今（crate::seat::state::now_secs）の 7200 秒前、UtteranceReceived の ts（= UtteranceSorted の utterance の値）を 3600 秒前、UtteranceSorted の ts を 3599 秒前とし、どれも crate::fleet::cli::format_utc で組んだ字にし、memo の links.source の期待をその発話の字にする（窓 lifecycle.closed_window_h の内に常に入り、いつ撃っても緑）。ほかの assert の字と順・toy の組み立ては変えず、mod tests の外の行は 1 行も変えない。歯の本文だけを直す便なので、歯の区間の行頭に flip-check の札 // flip-check: retroactive <本契約の bead id> を 1 行置く (2) 書く file は crates/scribe2/src/fleet/lifecycle.rs の 1 本だけ"
+done-teeth = ["1:lifecycle_writer_ties_commits_and_sources_onto_contracts_and_memos", "2:!write-set"]
+
 <!-- contracts:end -->
 
 ## 18. 列の理由 reserved の links.on に行を予約した bead を載せる（契約表の行 h）
@@ -1078,3 +1090,20 @@ done = "(1) seat ruling bind は結ぶ前に repo の台帳の印を読み、Ok 
   - 起こせなかった周に `unreadable` の印を足す: 理由の閉じた 6 語に語を足す（§5 の跨版の語）。`ledger-gate` は「器が台帳を書いたのに書き直しが読んでいない」をそのまま表す。
   - 起こせなかった周に stderr の 1 行を足す: 口の stderr を変える（面が rc 0 の stderr を読まない保証が無い）。
   - 印を読めない repo でも起こす: 既存の歯（stderr 0 byte・読み 1 回）の置き場で子が台帳の無い dir に読めない印を足すだけになる。
+
+## 22. 局面の出力の書き手の歯が発話と便の時刻を壁時計の今から組む — 固定の日付の発話が窓（72 時間）の外へ出て main の歯が落ちた（契約表の行 l・2026-10-03T00:00Z）
+
+やさしく言うと: 局面の出力の書き手の歯の 1 本が、発話の時刻を「2026-09-30」の固定の字で置いていた。書き手は窓（rules 行 `lifecycle.closed_window_h` の 72 時間）より古い発話を memo の `links.source` に載せないので、2026-10-03T00:00Z を過ぎた時点でこの歯が落ち、main の nextest と全部の便の gate が赤になった。歯の時刻を「今から 1〜2 時間前」で組み、いつ撃っても窓の内に入るようにする。src は変えない。
+
+- 出所（orchestrator の実測 2026-10-03T00:5xZ・verified）: main 38cbb667 で `cargo nextest run -p scribe2 --lib --no-tests=fail lifecycle_writer_ties_commits_and_sources_onto_contracts_and_memos` が rc 100（assert「発話の ts が memo の links.source に載る」が左 `Some([])`・右 `Some(["2026-09-30T00:00:00Z"])`）。走行中の便 `s2-07l.742.5-20261002T223547Z` の end-gate の赤 2 回（00:13Z・00:37Z）も同じ歯。読むだけの監査（入れ子の写しと根の写しの全 workspace）でも、3,952 本のうち落ちるのはこの 1 本だけ。
+- 現物（main 38cbb667・verified）: `crates/scribe2/src/fleet/lifecycle.rs` の mod tests の歯 `lifecycle_writer_ties_commits_and_sources_onto_contracts_and_memos` は、RunCreated の ts を `2026-09-29T00:00:00Z`、UtteranceReceived の ts（= UtteranceSorted の utterance の値）を `2026-09-30T00:00:00Z`、UtteranceSorted の ts を `2026-09-30T00:00:01Z` の字で置く。書き手は rules 行 `lifecycle.closed_window_h` を秒に直した窓（`Conf` の `window_s`）で古い発話を外す。同じ file のほかの歯の固定の日付（`OLD` の 2020 年・印の歯の発話）は窓の判定に掛からない。
+- 形（番号は done と 1:1）:
+  1. 歯の 3 つの時刻を壁時計の今（`crate::seat::state::now_secs`）から組む: RunCreated の ts は 7200 秒前、UtteranceReceived の ts（= UtteranceSorted の utterance の値）は 3600 秒前、UtteranceSorted の ts は 3599 秒前で、どれも `crate::fleet::cli::format_utc` で組んだ字にする。memo の `links.source` の期待は、その発話の字にする。ほかの assert の字と順・toy の組み立ては変えない。歯の本文だけを直す便で base の src でも緑になるので、flip-check の入口は歯の区間の行頭に置く札 `// flip-check: retroactive <本契約の bead id>` の 1 行で受ける。
+  2. 書く file は `crates/scribe2/src/fleet/lifecycle.rs` の 1 本だけ。
+- base で RED の理由: base の歯は 2026-10-03T00:00Z 以後、窓の外の発話で落ちる（時限・既に RED）。直した歯は base の src でも緑なので、入口は形 1 の札で受ける。
+- 触らない: `lifecycle.rs` の mod tests の外の行（書き手の窓の扱い）・rules 行 `lifecycle.closed_window_h` の値・ほかの歯。
+- 却下:
+  - **固定の日付を未来（例 2030 年）へ移す**: 窓は「今より古い」側の判定なので通るが、書き手が未来の発話をどう扱うかは仕様に無く、`since` の導き方で別の時限を生みうる。
+  - **歯の写しの rules 行で窓を広げる**: toy に rules の写しを足す手間が増え、窓の判定そのものを測らない歯になる。
+  - **書き手に時刻を渡す口を足す**: src の変更で、main の赤の直しを遅らせる。壁時計から組む形は前例（2026-09-18 の選定の歯の時限の直し）と同じ。
+- 限界: 壁時計と比べる窓や期限に固定の日付を渡す歯は、ほかの file にも在りうる。今日の全 workspace の撃ちで落ちるのはこの 1 本だけで、近い日に窓を越える fixture の洗い出しは別の監査で行う。
