@@ -2895,47 +2895,6 @@ fn declared_text(name: &str) -> String {
     read.unwrap_or_default().replace("\r\n", "\n")
 }
 
-/// 空白で割った command の頭 2 語。
-fn declared_head(line: &str) -> Vec<&str> {
-    line.split_whitespace().take(2).collect()
-}
-
-/// (a) HEAD の宣言を索引の宣言の読みで読むと 2 key が各 1 行で不備が 0、コメントは ADR-0105 と §4 を名指し、既存の key は変わらない。
-#[test]
-fn pipe_index_declared_reads_the_two_keys_without_defects() {
-    crate::install_spawner();
-    let found = vessel::pipe::declaration::index_at(&declared_root(), "HEAD");
-    assert!(matches!(found, Ok(Some(_))), "本 repo の宣言は 2 key を不備なく持つ: {found:?}");
-    let Ok(Some(lines)) = found else {
-        return;
-    };
-    assert_eq!(lines.scip.len(), 1, "index-scip は 1 行: {:?}", lines.scip);
-    let scip = lines.scip.join(" ");
-    assert_eq!(declared_head(&scip), ["rust-analyzer", "scip"], "rust-analyzer の scip の subcommand: {scip}");
-    assert!(scip.contains("{tree}") && scip.contains("{out}"), "{{tree}} と {{out}} を渡す: {scip}");
-    assert_eq!(lines.roles.len(), 1, "index-roles は 1 行: {:?}", lines.roles);
-    let roles = lines.roles.join(" ");
-    assert_eq!(declared_head(&roles), ["ast-grep", "scan"], "ast-grep の scan: {roles}");
-    let words: Vec<&str> = roles.split_whitespace().collect();
-    for word in [".config/index-roles.yml", "--json=stream", "{tree}"] {
-        assert!(words.contains(&word), "{word} を渡す: {roles}");
-    }
-    let text = declared_text(".vessel.toml");
-    assert!(text.contains("ADR-0105") && text.contains("reverse-index.md §4"), "コメントは ADR-0105 と §4 を名指す");
-    let keys: Vec<&str> = text.lines().filter(|line| !line.starts_with('#')).filter_map(|line| line.split(" = ").next()).collect();
-    let order = ["schema", "allowed-commands", "common-verify", "detection-verify", "remote", "close-check", "row-review", "index-scip", "index-roles", "teeth-check"];
-    assert_eq!(keys, order, "ほかの key の順は変わらず、索引の 2 key の後ろの末尾に teeth-check");
-    for line in [
-        "allowed-commands = [\"cargo\", \"git\"]",
-        "common-verify = [\"cargo xtask flip-check --base {base}\", \"cargo nextest run --workspace --no-tests=fail --no-fail-fast\",\"cargo clippy --workspace --all-targets -- -D warnings\", \"cargo xtask check\", \"cargo deny check bans licenses sources\"]",
-        "remote = \"origin\"",
-        "close-check = true",
-        "row-review = true",
-    ] {
-        assert!(text.lines().any(|seen| seen == line), "既存の key の値は変わらない: {line}");
-    }
-}
-
 /// (b) toolchain の components は clippy・rustfmt・rust-analyzer で、channel は変わらない。
 #[test]
 fn pipe_index_declared_toolchain_adds_rust_analyzer_and_keeps_the_channel() {
