@@ -1198,17 +1198,19 @@ mod tests {
         assert_eq!(since(&toy.out(), "toy-m2"), Some(OLD.to_owned()), "前の出力の同じ (part, id, phase) から継ぐ");
     }
 
+    // flip-check: retroactive s2-07l.738.42.15
     /// 行 b1 の結びは契約の `links.commits` に、request の仕分けの発話の ts は memo の `links.source` に載る。
     #[test]
     fn lifecycle_writer_ties_commits_and_sources_onto_contracts_and_memos() {
         let toy = Toy::new("ties");
         let first = toy.head();
         toy.line(OLD, &first, false);
-        toy.log("{\"schema\":1,\"ts\":\"2026-09-29T00:00:00Z\",\"kind\":\"RunCreated\",\"run\":\"r1\",\"bead\":\"toy-c1\",\"host\":\"h\",\"actor\":\"machine\"}");
+        let now = crate::seat::state::now_secs();
+        let (created, utterance, at) = (format_utc(now.saturating_sub(7_200)), format_utc(now.saturating_sub(3_600)), format_utc(now.saturating_sub(3_599)));
+        toy.log(&format!("{{\"schema\":1,\"ts\":\"{created}\",\"kind\":\"RunCreated\",\"run\":\"r1\",\"bead\":\"toy-c1\",\"host\":\"h\",\"actor\":\"machine\"}}"));
         let trailer = format!("landed\n\n{RUN_TRAILER}r1\n{}docs/design/x.md#a\n", contract_key());
         let second = toy.commit("b.txt", "b", &trailer);
         toy.land(&second);
-        let (utterance, at) = ("2026-09-30T00:00:00Z", "2026-09-30T00:00:01Z");
         toy.log(&format!("{{\"schema\":1,\"ts\":\"{utterance}\",\"kind\":\"UtteranceReceived\",\"channel\":\"chat\",\"session\":\"s\",\"host\":\"h\",\"actor\":\"human\",\"detail\":\"x\"}}"));
         toy.log(&format!("{{\"schema\":1,\"ts\":\"{at}\",\"kind\":\"UtteranceSorted\",\"utterance\":\"{utterance}\",\"sorting\":\"request\",\"bead\":\"toy-m1\",\"host\":\"h\",\"actor\":\"machine\"}}"));
         let items = [bead("toy-c1", "open", ["", POINTER, "", ""]), memo("toy-m1")];
@@ -1220,7 +1222,7 @@ mod tests {
         assert!(!run.is_empty(), "便の部品が在る");
         assert_eq!(run.first().map(|part| part.links.commits.clone()), Some(vec![second.clone()]), "結びが便の links.commits に載る");
         let memos = find(&out, Kind::Memo, "toy-m1");
-        assert_eq!(memos.first().map(|part| part.links.source.clone()), Some(vec![utterance.to_owned()]), "発話の ts が memo の links.source に載る");
+        assert_eq!(memos.first().map(|part| part.links.source.clone()), Some(vec![utterance.clone()]), "発話の ts が memo の links.source に載る");
     }
 
     /// 印の消えの表（3 種 × {開始が印より前・印の後で同じ入力・印の後で新しい入力}）と、merge-gate は event log だけの進みでは消えない。
