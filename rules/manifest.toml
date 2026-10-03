@@ -516,6 +516,18 @@ enabled = true
 ruling = "user 2026-09-13T02:50Z"
 ruled_at = "2026-09-13"
 
+# 検出線を起こす間隔の下限（秒・設計 gate-cost.md §50・ADR-0111）。land の終端は、前に着地後の検出の口を起こしてから
+# この秒が過ぎた周だけ口を起こし、内の周は起こさず detail に detection:deferred を記す（日次の検出）。口は前に測り終えた
+# 着地から今の着地までに着地した便をまとめて 1 回撃つ。不発効にすると着地ごとに起こす今の形に戻る。
+
+[[rule]]
+id = "detection.daily_min_s"
+kind = "DetectionDailyMinS"
+value = 86400
+enabled = true
+ruling = "user 2026-10-03T01:49Z"
+ruled_at = "2026-10-03"
+
 # 着地の列（merge train・設計 pipeline.md §40・ADR-0039）。先頭を含めて最大この本数を候補の木 1 つに積み、
 # 検査を 1 回撃って列の順に着地する。赤なら列を解いて先頭だけが従来の経路へ進む。値 1 と行の不在は先頭だけ。
 

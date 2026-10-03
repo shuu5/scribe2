@@ -296,6 +296,9 @@ pub enum RuleKind {
     HostBlockedPerCore,
     /// land が着地待ちの列で自分の番を待つ上限（秒）。超えたら待たずに進む（縮退・止めない）。
     PipeLandWaitS,
+    /// 検出線を起こす間隔の下限（秒・設計 gate-cost.md §50）。land の終端は前に口を起こしてからこの秒が過ぎた周だけ
+    /// 着地後の検出の口を起こし、内の周は起こさず deferred を記す（日次の検出）。
+    DetectionDailyMinS,
     /// land の終端が CI の判定を待つ上限（秒・設計 contract-source.md §5）。超えた周は **close しない**
     /// （`unmeasurable` で止める・FailClosed）。
     PipeCiWaitS,
@@ -483,6 +486,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::HostRunnablePerCore,
     RuleKind::HostBlockedPerCore,
     RuleKind::PipeLandWaitS,
+    RuleKind::DetectionDailyMinS,
     RuleKind::PipeCiWaitS,
     RuleKind::PipeCiPollS,
     RuleKind::SeatDraftsStaleH,
@@ -572,7 +576,7 @@ impl RuleKind {
             Self::GateTmuxTestThreads => "GateTmuxTestThreads",
             Self::GateCpuWeight => "GateCpuWeight",
             Self::HostRunnablePerCore => "HostRunnablePerCore", Self::HostBlockedPerCore => "HostBlockedPerCore",
-            Self::PipeLandWaitS => "PipeLandWaitS",
+            Self::PipeLandWaitS => "PipeLandWaitS", Self::DetectionDailyMinS => "DetectionDailyMinS",
             Self::PipeCiWaitS => "PipeCiWaitS", Self::PipeCiPollS => "PipeCiPollS",
             Self::SeatDraftsStaleH => "SeatDraftsStaleH", Self::SeatDraftsCapMb => "SeatDraftsCapMb", Self::SeatDraftsBusyS => "SeatDraftsBusyS",
             Self::LedgerTimeoutS => "LedgerTimeoutS",
@@ -630,7 +634,7 @@ impl RuleKind {
             | Self::GateCpuWeight
             | Self::HostRunnablePerCore
             | Self::HostBlockedPerCore
-            | Self::PipeLandWaitS
+            | Self::PipeLandWaitS | Self::DetectionDailyMinS
             | Self::PipeCiWaitS | Self::PipeCiPollS | Self::SeatDraftsStaleH | Self::SeatDraftsCapMb | Self::SeatDraftsBusyS
             | Self::LedgerTimeoutS
             | Self::PipeSizeSLines
@@ -678,8 +682,8 @@ impl RuleKind {
             | Self::UsageFreshS | Self::GroupPressure5hPct | Self::GroupPressure7dPct | Self::GroupPressureModelPct
             | Self::FollowRetries | Self::RunnerEndGateRounds | Self::GateMutantsJobs | Self::GateJobMemoryMb
             | Self::HostReserveMemoryMb | Self::GateSlotWaitS | Self::GateTmuxTestThreads | Self::GateCpuWeight
-            | Self::HostRunnablePerCore | Self::HostBlockedPerCore | Self::PipeLandWaitS | Self::PipeCiWaitS
-            | Self::PipeCiPollS | Self::SeatDraftsStaleH | Self::LedgerTimeoutS | Self::RoleCapabilities
+            | Self::HostRunnablePerCore | Self::HostBlockedPerCore | Self::PipeLandWaitS | Self::DetectionDailyMinS
+            | Self::PipeCiWaitS | Self::PipeCiPollS | Self::SeatDraftsStaleH | Self::LedgerTimeoutS | Self::RoleCapabilities
             | Self::PipeSizeSLines | Self::PipeSizeMLines | Self::PipeSizeLLines | Self::RunnerModel | Self::RunnerEffort
             | Self::LensModel | Self::PipePrecheckLensModel | Self::RoleModel | Self::RoleEffort | Self::ReviewSameKindStop
             | Self::LandTrainMax | Self::PipeMaxLive | Self::FlipDocsOnlyFaces | Self::FlipMarksPerPr
