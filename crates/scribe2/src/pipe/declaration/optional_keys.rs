@@ -382,16 +382,6 @@ pub fn row_review_at(repo: &Path, rev: &str) -> Result<bool, Vec<DeclError>> {
     }
 }
 
-/// 名指した rev の tree の宣言の `teeth-check`（`git show <rev>:.vessel.toml`・作業ツリーは読まない）。宣言 file が無い周と key の無い宣言は
-/// false、在って読めない周は `Err`（key の行の不備を含む）。
-pub fn teeth_check_at(repo: &Path, rev: &str) -> Result<bool, Vec<DeclError>> {
-    let spec = format!("{rev}:{}", super::DECL_FILE);
-    match super::super::git_bytes(repo, &["show", &spec]) {
-        None => Ok(false),
-        Some(bytes) => Declared::parse(&String::from_utf8_lossy(&bytes)).map(|declared| declared.teeth_check == Some(true)),
-    }
-}
-
 /// 引用の見本の一覧（任意）。文字列の一覧だけを受ける（文字列・整数・真偽は key と行番号を名指す不備・要素の型違いは値の読みが積む）。
 pub(super) fn ruling_fixtures_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<Vec<String>> {
     let (_, value, line) = found.iter().find(|(seen, _, _)| seen == RULING_FIXTURES_KEY)?;
