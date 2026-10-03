@@ -481,6 +481,49 @@ mod tests {
         assert!(measured.violations.is_empty(), "n/a の周は違反を出さないはず: {:?}", measured.violations);
     }
 
+    /// 別の repo の subdir に置いた根は、根の下の追跡 file だけを母集団にして測る（`n/a` で黙らない）。
+    /// 下の dir の追跡 file のうち email の needle を持つ 1 本だけが違反になる。
+    #[test]
+    fn private_clean_measures_a_nested_root_by_its_own_tracked_files() {
+        use crate::check::Layout;
+        let outer = tmp_dir();
+        let nested = outer.join("nested");
+        fs::create_dir_all(&nested).expect("nested dir を作れる");
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&outer)
+                .args(args)
+                .output()
+                .is_ok_and(|out| out.status.success())
+        };
+        let inited = git(&["init", "-q"]);
+        fs::write(outer.join("outside.md"), email("o", "corp-example.co.jp"))
+            .expect("根の外の fixture を書ける");
+        fs::write(nested.join("clean.md"), "nothing private\n").expect("fixture を書ける");
+        fs::write(
+            nested.join("dirty.md"),
+            format!("first\ncontact: {}\n", email("a", "corp-example.co.jp")),
+        )
+        .expect("fixture を書ける");
+        let added = git(&["add", "-A"]);
+        let measured = measure(&Layout {
+            root: nested.clone(),
+            core_dir: nested.clone(),
+            member_dirs: Vec::new(),
+            name: "probe".to_owned(),
+        });
+        fs::remove_dir_all(&outer).ok();
+
+        assert!(inited && added, "fixture を git で追跡できるはず");
+        assert_eq!(measured.fact, "private-clean=2", "根の下の 2 本を走査したはず");
+        assert_eq!(
+            measured.violations,
+            vec!["private-clean: dirty.md:2 email".to_owned()],
+            "根の下の email の 1 件だけが違反のはず"
+        );
+    }
+
     /// 免除は paths-clean と**同じ 1 本**を通す: 免除 file のコメント行だけが免除され、同じ file の
     /// 非コメント行の email は違反として残る（免除を外す変異・全行に広げる変異はここで落ちる）。
     #[test]

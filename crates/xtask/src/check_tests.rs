@@ -320,7 +320,20 @@ const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> core-spawn=<v>/<v>
     rules-parity=<v>/<v> doc-only=<v> manifest-only=<v> population=<v>/<v> \
     decisions-index=<v>/<v> file-only=<v> index-only=<v> vocab-unresolved=<v> population=<v>/<v>/<v>";
 
-/// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。
+/// `root` が git の work tree の中か（`git rev-parse --is-inside-work-tree` が `true`）。
+///
+/// git を要する fact が数で出る周の判別子。測定対象と独立で、根が toplevel の木も、別の repo の
+/// subdir に置いた木（根に `.git` を持たない）も真になり、git の外の展開木だけが偽になる。
+pub(crate) fn inside_work_tree(root: &Path) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+        .is_ok_and(|out| out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true")
+}
+
+/// git を要する measure の fact（git の外の木では測れない形になり、副 field も出ない）。
 fn is_git_fact(token: &str) -> bool {
     ["paths-clean=", "private-clean=", "non-rust-exec=", "allow=", "prose-gate="]
         .iter()
@@ -390,7 +403,7 @@ fn check_summary_shape_pins_names_order_and_value_forms() {
     for (owner, head) in owners.iter().zip(IDS_OWNERS) {
         assert!(owner.starts_with(head), "ids= は {head} の直後: {line}");
     }
-    if root.join(".git").exists() {
+    if inside_work_tree(&root) {
         assert_eq!(without_wired_ids(&shape(&line)), SUMMARY_PIN, "判定行の現物: {line}");
     } else {
         let without_git = |shaped: &str| {
@@ -818,7 +831,7 @@ fn paths_clean_skip_exempts_only_comment_lines_of_beads_config() {
 fn check_paths_clean_scans_noncanonical_root() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     let line = summary(&root);
-    if root.join(".git").exists() {
+    if inside_work_tree(&root) {
         let scanned = paths_clean_scanned(&line)
             .unwrap_or_else(|| panic!("repo の中では走査本数が出るはず: {line}"));
         assert!(scanned >= 1, "走査した tracked file 数は 1 以上のはず: {line}");
@@ -866,6 +879,30 @@ fn entrance_paths_clean_is_unnumbered_outside_repo() {
     let _ = fs::remove_dir_all(&dir);
     assert!(paths_clean_unnumbered(&line), "非 repo root の値: {line}");
     assert_eq!(paths_clean_scanned(&line), None, "走査数は数えられない: {line}");
+}
+
+/// 別の repo の subdir に置いた根でも、判定行の git の事実が数で出る（設計 carry-prep.md §11 行 p）。
+///
+/// 一時 dir を `git init` し、その下の dir に健全な fixture を書いて追跡し、下の dir を根に撃つ。
+/// 根は toplevel でないので base は 3 つとも `n/a(not-a-repo-root)` になる。
+#[test]
+fn check_summary_numbers_git_facts_in_a_nested_root() {
+    let outer = make_tmp_dir();
+    assert!(git_fixture(&outer, &["init", "-q"]), "外側を git init できる");
+    let nested = outer.join("nested");
+    write_healthy(&nested);
+    assert!(git_fixture(&outer, &["add", "-A"]), "外側で git add -A できる");
+    let line = summary(&nested);
+    let _ = fs::remove_dir_all(&outer);
+    for fact in ["paths-clean=", "private-clean=", "non-rust-exec="] {
+        let value = line
+            .split_once(fact)
+            .map_or("", |(_, rest)| rest);
+        assert!(
+            value.starts_with(|c: char| c.is_ascii_digit()),
+            "入れ子の根でも {fact} は数で出るはず: {line}"
+        );
+    }
 }
 
 /// `rules-parity`（`s2-07l.164`・設計 rules-manifest.md §4）の fixture の憲法 HTML。§3 の行 3 つ
