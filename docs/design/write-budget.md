@@ -25,14 +25,14 @@
 
 - 現物（main f2d14990・verified）:
   - `crates/scribe2/src/seat/tick.rs` の run は判定の後に stamp_last（登録 row の在る target だけ・row の無い target は dir も作らない）・局面の出力の部分の書き直し・full_rewrite（event log と manifest を読めた周の枝だけ）を撃ち、返りを捨てる。判定行・rc・stderr はそれらに依らない。run が受ける manifest は tracked の面で、host の面は判定の中で `crates/scribe2/src/rules/mod.rs` の with_state_dir が合わせる。
-  - 周期の rules 行の id は同じ tick.rs の pub な const ROW_INTERVAL（`seat.tick_interval_s`・値 15）。tick の判定はこの行を読まない（読むのは tick status の健全と unit の導出）。
+  - 周期の rules 行の id は同じ tick.rs の pub な const ROW_INTERVAL（`seat.tick_interval_s`・値 15）。tick の判定（同じ file の Rows::of）はこの行を必須に読み、読めない周は判定が no-rule（rc 1・tick-last は `decision=error reason=no-rule` で終わる）になる。その周も stamp_last・部分の書き直し・full_rewrite（event log と manifest を読めた周の枝）は撃つ（既存の歯 seat_tick_status_no_rule_round_still_stamps）。
   - host の根は `crates/scribe2/src/seat/mod.rs` の私有の host_root（state dir の親の下の `<NAME>-host`・env を読まない）で、外へ開く口は host_slots_dir と host_groups_dir の 2 つ。
   - lock は `crates/scribe2/src/fleet/store.rs` の acquire（pub(crate)・取れた lock に自分の pid と起動時刻を書き、所有者の死んだ lock と古い lock を回収する・外すのは呼び手が lock file を消すこと）。待ち方 LockPolicy の 2 欄は from_rules が rules 行 `fleet.lock_retry_ms`（5000）と `fleet.lock_stale_ms`（30000）から組む。群の段の lock（`crates/scribe2/src/hook/group.rs` の Lock）は回収を持たない。
   - 登録 row の引き手は `crates/scribe2/src/seat/role.rs` の registration_of_target と fleet の replay。時刻の字は `crates/scribe2/src/fleet/cli.rs` の format_utc（UNIX 秒 → `YYYY-MM-DDTHH:MM:SSZ`）の 1 本、今の秒は `crates/scribe2/src/seat/state.rs` の now_secs。
 - 形（番号は行 a の done と 1:1）:
   1. **host の面の表**: §3 の表 `[[write-budget]]` を host の面の読み手が組み、合わせた manifest が宣言順の行（name・stat・見出しの行番号）を返す。
   2. **呼ぶ所**: run は full_rewrite の後（event log と manifest を読めた周の同じ枝）に、置き場・target・tracked の manifest・読んだ event の列を行 a の write-set の `+` の file（fleet の子 module）の標本の 1 本へ渡し、返りを捨てる。標本の 1 本は stdout と stderr に 1 byte も書かず、判定行・rc・stderr・tick-last の字は表の無い置き場の同じ周と同じである。
-  3. **測らない周**: target に登録 row が無い周（stamp_last と同じ門）・合わせた manifest を読めない周・表が 0 行の周は何もしない（host の根の下に dir を作らない）。周期の行（ROW_INTERVAL）か lock の 2 行のどれかを読めない周も記録を書かない（既定の値で埋めない・C5）。
+  3. **測らない周**: target に登録 row が無い周（stamp_last と同じ門）・合わせた manifest を読めない周・表が 0 行の周は何もしない（host の根の下に dir を作らない）。周期の行（ROW_INTERVAL）か lock の 2 行のどれかを読めない周も記録を書かない（既定の値で埋めない・C5）。周期の行を読めない周は判定が no-rule でも標本の 1 本は full_rewrite の枝で呼ばれるので、標本の 1 本が自分で行を読んで止まる。
   4. **置き場と独立**: 表の行ごとに host の根の `write-budget/<name>/` の dir（`crates/scribe2/src/seat/mod.rs` の host_groups_dir の隣に足す pub の関数 1 つが返す dir の下）を持ち、§4 の 2 file と lock file `open.lock` を置く。行ごとに独立に進め、和は取らない。
   5. **最初の読みと同じ日の足し**: 記録の無い周は今日を partial・written 0 で開く（0 時からを測っていない）。同じ UTC 日の読みが前の読み以上なら、差 × 512 byte を written に足す。
   6. **同じ日の再起動**: 同じ日の読みが前の読みより小さい周は再起動と読み、読み × 512 を足し、reboots を 1 増やし、state を partial にする（停止の前の最後の読みの後の書き込みが欠ける＝下限）。
@@ -60,7 +60,7 @@
     - (h) seat_tick_write_budget_names_an_unreadable_or_malformed_stat: 1 回撃った後、probed を 0 にして stat file を消して撃つ → probe=unreadable・probed が撃った時刻・ほかの 8 語が前と等しい。6 欄の stat と 7 欄目が `x` の stat → どちらも probe=malformed で数は前と等しい。記録の無い別の置き場で stat が無い → open も days.log も無い。stat を置いて撃つ → open が在る（対照）。〔形 10 の読み〕
     - (i) seat_tick_write_budget_refuses_a_changed_stat_path: 記録の stat が表の stat と違う open（ほかの語は (c) の形）で撃つ → probe=stat-mismatch・数は前と等しい。〔形 10 の装置の違い〕
     - (j) seat_tick_write_budget_leaves_the_record_while_the_lock_is_held_or_the_record_is_unreadable: `fleet.lock_retry_ms` を 200 にした写しで、`open.lock` に歯の process の pid の 1 語を書き（字を assert）、probed を 0 にして撃つ → open の bytes が等しい。lock file を消して撃つ → written が増える（対照）。open を dir にした置き場で撃つ → dir の中身が空のまま・days.log が無い。〔形 11〕
-    - (k) seat_tick_write_budget_writes_nothing_outside_a_registered_seat_with_a_table: 登録 row の無い target（tick_place の未登録の形）の置き場に表を書いて撃つ → host の根に `write-budget` の dir が無い。登録 row の在る置き場を、周期の行を欠く写し・`fleet.lock_retry_ms` を欠く写し・`fleet.lock_stale_ms` を欠く写し（どれも欠く行のほかは同じ写し）でこの順に撃つ → どの周も rc 0 で tick-last の `ts=` が撃つ前後の間（tick が判定した前提）・open が無い。同じ置き場を埋め込みの rules で撃つ → open が在る（対照）。〔形 3〕
+    - (k) seat_tick_write_budget_writes_nothing_outside_a_registered_seat_with_a_table: 登録 row の無い target（tick_place の未登録の形）の置き場に表を書いて撃つ → host の根に `write-budget` の dir が無い。登録 row の在る置き場を、周期の行を欠く写し・`fleet.lock_retry_ms` を欠く写し・`fleet.lock_stale_ms` を欠く写し（どれも欠く行のほかは同じ写し）でこの順に撃つ → どの周も tick-last の `ts=` が撃つ前後の間（tick が撃たれ full_rewrite の枝に届いた前提）で open が無い。rc と tick-last の終わりは、周期の行を欠く周が rc 1 と `decision=error reason=no-rule`（判定も周期の行を読む）、lock の行を欠く 2 周が rc 0 と `reason=no-rule` で終わらない打刻。同じ置き場を埋め込みの rules で撃つ → open が在る（対照）。〔形 3〕
   - e2e（`crates/scribe2-boundary/tests/e2e/rules/host.rs`・接頭辞 rules_host_write_budget_・0 件）: `rules validate --state-dir` の rc・stdout・stderr だけを測る。
     - (l) rules_host_write_budget_two_rows_validate_like_a_tableless_face: 表 2 行の面で validate が rc 0・stdout が表の無い面の 1 行と同じ字。〔形 1〕
     - (m) rules_host_write_budget_refuses_each_defect_once_with_its_line: 1 行の面を崩した 7 形（stat の欠け・未知の key・name `a/b`・name が空・相対の stat・空白を含む stat・name の重複）がそれぞれ rc 1・stdout 0 行・stderr がちょうど §3 の字の `rules: host.toml: <字> line=<n>` の 1 行で、崩す前の 1 行は rc 0。〔形 1〕
