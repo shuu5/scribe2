@@ -325,6 +325,18 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
   - 60（実測の p50 に近い値）: 31 以上の 11 本のうち 4 本（64・77・81 ほか）が残る。
 - flip-check の入口: 変える test file は rules の歯の file・headless の歯の file・headless/lens.rs の 3 本である。前の 2 本は直した歯が base（値 30）で RED になり、headless/lens.rs は retroactive の札で通す。
 
+## 23. R-C4-1 を 90000 に上げる（契約表の行 t）
+
+- 何が起きているか（main dc5d3bd0・verified）: 行の審査の確定の機械の検査 cap-headroom は、core の余地を 475 行と測った（上限 R-C4-1 = 82000）。[write-budget.md](./write-budget.md) の行 a の見込み 497 行が入らず、行の審査が FAIL になった。走行中の日次の検出（[gate-cost.md](./gate-cost.md) の行 au・見込み 469 行）が着地すると、余地はほぼ 0 になる。書き込みの検出線の 3 行の見込みは計約 850 行で、待ちの行（[contract-source.md](./contract-source.md) の行 bx の 46 行など）も core の余地を使う。user 裁定 2026-10-03T05:09Z（A2・閾値の変更・逐語は器の裁定の event に残る・台帳の問い s2-07l.752・裁定 id s2-07l.752:20261003T0509Z-1）で上限を 90000 に上げる（前回の §21 と同じ +8000）。
+- 約束（番号は done と 1:1）:
+  1. `rules/manifest.toml` の行 `R-C4-1` の `value` を 90000 に・`ruling` を `user 2026-10-03T05:09Z` に・`ruled_at` を `2026-10-03` に書き換える。行の id・kind・`enabled` は不変で、行は増やさない（C5）。上げた行を名指す歯 `rules_core_lines_82000_raised_by_ruling`（§21 の行 r が足した歯・名が前の値を持つ）を、同じ形の `rules_core_lines_90000_raised_by_ruling` に置き換える（値 90000・kind `CoreLines`・発効・`ruling` が `user 2026-10-03T05:09Z` で始まり・`ruled_at` が `2026-10-03`・整数の読み手が 90000 を返す）。
+  2. `rules get R-C4-1` の出力を pin する既存の歯 `rules_cli_get_returns_value` の値と、assert の文言の裁定 id を新しい値と id に直す。実測: repo 全体で値 82000 を持つのは、`crates/scribe2-boundary/tests/e2e/rules.rs` のこの 2 本と manifest と本 doc だけである。
+- 設計の線（歯を持たない・審査が読む）: §4.1 の表の `R-C4-1` の行の値と裁定を約束 1 と同じ内容に写し、前の値 82000 の裁定（user 2026-10-01T04:49Z・§21 行 r）を履歴として残す。xtask の閾値の読み手と歯は現物の manifest から値を読むので 1 字も変えない（§19〜§21 と同じ・write-set には `=` で置く）。
+- 触らない: `src` の全部・憲法 §3 の閾値セル（初期値を持つ・§19 と同じ）・他の行・§4 の切り方・過去の § が書いたその時点の実測値・§21 の行 r（着地済み。verify の `rules_core_lines_82000_` は置き換えの後に該当 0 本になるが、着地済みの行は撃ち直さない）。
+- 着地の後: 受付と席は埋め込み manifest を読むので、PATH の binary を入れ替えるまで受付の core の余地は 82000 で測る（運用の手順・本行の done の外）。隣の project の規則がこの行を値の正本に名指すので、着地を知らせる。
+- 却下: 83500（書き込みの検出線の 3 行と走行中の行だけを覆い、待ちの行と次の設計の分が入らない）／上げずに先に削る（削れる量が読めず、書き込みの検出線と待ちの行が受付で止まる）。
+- flip-check の入口: 変える test file は `tests/e2e/rules.rs` の 1 本で、直す歯と置き換えた歯のどちらも base（値 82000）で RED になる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -521,4 +533,14 @@ write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules/emb
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_turns_embedded_manifest_declares_the_row_with_its_ruling", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_turns_passes_the_row_value_in_every_stage", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail headless_lens_version_prints_one_line_without_contract_or_worktree_and_never_calls_claude"]
 size = "S"
 done = "(1) 埋め込み manifest の lens.max_turns は値 100・裁定 id user 2026-10-01T08:09Z・裁定日 2026-10-01 で、kind LensMaxTurns・発効・位置と行の数は変わらない〔直す既存の歯 lens_turns_embedded_manifest_declares_the_row_with_its_ruling の値・整数の読み手の値・裁定 id・裁定日の pin〕 (2) --rules を渡さない lens は、段に依らず argv に --max-turns 100 の対をちょうど 1 つ持つ〔直す既存の歯 lens_turns_passes_the_row_value_in_every_stage の埋め込みの値の定数〕 (3) --print-version の版の行は turns=100 を持ち、歯 headless_lens_version_prints_one_line_without_contract_or_worktree_and_never_calls_claude は turns の字面を 30 と書かず headless の歯の file の定数 LENS_MAX_TURNS から組んで比べる〔直す既存の歯・headless/lens.rs の歯の区間に札 // flip-check: retroactive s2-07l.751〕 base は値 30 なので (1)(2) の値の比べが RED で、(3) は base でも緑なので札で通す（変異の証明: 版の行が turn の値を固定の 30 で出すと (3) が RED）"
+[[contract]]
+id = "t"
+title = "R-C4-1（core の本体の上限）を 82000 → 90000 に上げる — 値と裁定 id と ruled_at だけを書き換え、値を pin する歯を直し、上げた行を名指す歯を新しい値の名に置き換える（裁定 user 2026-10-03T05:09Z・A2）"
+req = ["FR17"]
+section = "23"
+write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "=crates/xtask/src/limits.rs", "=crates/xtask/src/check_tests.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_cli_get_returns_value", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_core_lines_90000_"]
+size = "S"
+done = "(1) 埋め込み manifest の R-C4-1 が値 90000 と kind CoreLines と発効と裁定 id user 2026-10-03T05:09Z と ruled_at 2026-10-03 を持ち、整数の読み手が 90000 を返し、上げた行を名指す歯は rules_core_lines_90000_ で始まる名に置き換わって前の値の名の歯は残らない〔rules_core_lines_90000_raised_by_ruling〕 (2) rules get R-C4-1 が 90000 の 1 行を出し、assert の文言の裁定 id が user 2026-10-03T05:09Z〔直す既存の歯 rules_cli_get_returns_value〕 歯は base（値 82000）でどちらも RED（機能不在: base の manifest は 82000 と前の裁定を持つ）"
+done-teeth = ["1:rules_core_lines_90000_raised_by_ruling", "2:rules_cli_get_returns_value"]
 <!-- contracts:end -->
