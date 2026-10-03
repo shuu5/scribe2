@@ -1,5 +1,7 @@
 # scribe2
 
+> この repo は凍結した（この commit が main の最後の commit）。器の開発は別の repo の中へ移り、ここでは続けない。
+
 **codename `scribe2`** — 正式名は未定（user 裁定の手番）。
 
 scribe v1（先行する scribe plugin repo）の I1〜I7 要件を新しい器で満たすための repo。
