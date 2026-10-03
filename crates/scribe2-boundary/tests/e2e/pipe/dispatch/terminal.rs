@@ -656,3 +656,373 @@ fn pipe_dispatch_intake_refused_records_again_after_a_release() {
     assert!(released.is_some_and(|found| at.first() < Some(&found) && at.get(1) > Some(&found)), "release の行を挟む: {lines:?}");
     clean(&[&repo, &state]);
 }
+
+// ---- 上限の許可の見え方（接頭辞 `pipe_show_permit_word_` / `pipe_dispatch_ls_permit_`・limit-permit.md §21 行 e）----
+
+/// 許可の対象の rules 行（許可の読み手を持つ行）。
+const PERMIT_ROW: &str = "gate.token_cap";
+
+/// 許可の期限（未来・UTC の秒の形・時計は差し替えない）。
+const FUTURE: &str = "2099-01-01T00:00:00Z";
+
+/// 許可の期限（過去）。
+const PAST: &str = "2020-01-01T00:00:00Z";
+
+/// event log に 1 行（行 b の on-disk の形）を足す。`keys` は `"kind":…` から始まる key の列。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_event(state: &Path, keys: &str) {
+    let dir = state.join("fleet");
+    fs::create_dir_all(&dir).expect("fleet dir を作れる");
+    let line = format!("{{\"schema\":1,\"ts\":\"2026-10-03T00:00:00Z\",{keys},\"host\":\"h\",\"actor\":\"machine\"}}\n");
+    let mut file = fs::OpenOptions::new().create(true).append(true).open(dir.join("events.jsonl")).expect("event log を開ける");
+    std::io::Write::write_all(&mut file, line.as_bytes()).expect("行を書ける");
+}
+
+/// 便の `RunCreated`（段 Intake）。
+fn put_run(state: &Path, run: &str, bead: &str) {
+    put_event(state, &format!("\"kind\":\"RunCreated\",\"run\":\"{run}\",\"bead\":\"{bead}\",\"stage\":\"Intake\""));
+}
+
+/// 便の着地（段 Landed の `RunStage`）。
+fn put_landed(state: &Path, run: &str, bead: &str) {
+    put_event(state, &format!("\"kind\":\"RunStage\",\"run\":\"{run}\",\"bead\":\"{bead}\",\"stage\":\"Landed\""));
+}
+
+/// 許可の記帳の `detail` を字で足す（行 id が manifest に無い形など）。
+fn put_detail(state: &Path, bead: &str, detail: &str) {
+    put_event(state, &format!("\"kind\":\"LimitPermitted\",\"bead\":\"{bead}\",\"detail\":\"{detail}\""));
+}
+
+/// 許可の記帳（行は [`PERMIT_ROW`]・値・期限・裁定 id）。
+fn put_permit(state: &Path, bead: &str, value: u64, until: &str, ruling: &str) {
+    put_detail(state, bead, &format!("rule={PERMIT_ROW} value={value} until={until} ruling={ruling}"));
+}
+
+/// 取り消しの記帳。
+fn put_revoke(state: &Path, bead: &str, rule: &str) {
+    put_event(state, &format!("\"kind\":\"LimitPermitted\",\"bead\":\"{bead}\",\"detail\":\"rule={rule} revoked\""));
+}
+
+/// 埋め込みの manifest の `gate.token_cap`（`pipe show` の manifest の値 D）。
+fn declared_d() -> u64 {
+    super::super::embedded_int(PERMIT_ROW)
+}
+
+/// `pipe show --run` の stdout の行（`rules` は `--rules` の写し）。
+fn show_of(repo: &Path, state: &Path, run: &str, rules: Option<&str>) -> Vec<String> {
+    let mut args = vec!["show", "--run", run];
+    let (repo, state) = (repo.display().to_string(), state.display().to_string());
+    args.extend(["--repo", &repo, "--state-dir", &state]);
+    if let Some(path) = rules {
+        args.extend(["--rules", path]);
+    }
+    stdout_of(&run_pipe(&args)).lines().map(str::to_owned).collect()
+}
+
+/// `permit:` で始まる行だけ。
+fn permit_rows(lines: &[String]) -> Vec<String> {
+    lines.iter().filter(|line| line.starts_with("permit:")).cloned().collect()
+}
+
+/// `permit:` の 1 行の完全な字（`declared` は manifest の値）。
+fn permit_row(value: u64, declared: u64, until: &str, ruling: &str, word: &str) -> String {
+    format!("permit: rule={PERMIT_ROW} value={value} declared={declared} until={until} ruling={ruling} state={word}")
+}
+
+/// 便 1 本の `pipe show` の `permit:` の行（既定の manifest）。
+fn permits_of(repo: &Path, state: &Path, run: &str) -> Vec<String> {
+    permit_rows(&show_of(repo, state, run, None))
+}
+
+/// (a) active — 値 D+1・期限は未来の許可が 1 行で最後の行に出て、1 行目は今の形のまま。許可を持たない bead の便には行が無く、ほかの bead の許可も出ない。
+#[test]
+fn pipe_show_permit_word_active_is_one_last_line_and_other_beads_show_none() {
+    let (repo, state) = repo_with_state();
+    let d = declared_d();
+    put_run(&state, "r-a1", "s2-pm.a1");
+    put_run(&state, "r-a2", "s2-pm.a2");
+    put_permit(&state, "s2-pm.a1", d + 1, FUTURE, "q-1");
+    let shown = show_of(&repo, &state, "r-a1", None);
+    let first = shown.first().map(String::as_str).unwrap_or_default();
+    assert!(first.starts_with("run=r-a1 bead=s2-pm.a1 stage=Intake approved="), "1 行目は今の形: {shown:?}");
+    assert_eq!(shown.last(), Some(&permit_row(d + 1, d, FUTURE, "q-1", "active")), "最後の行: {shown:?}");
+    assert_eq!(permit_rows(&shown).len(), 1, "許可の行は 1 行: {shown:?}");
+    let other = show_of(&repo, &state, "r-a2", None);
+    assert!(permit_rows(&other).is_empty(), "許可を持たない bead の便に行は無い: {other:?}");
+    assert_eq!(other.len(), 1, "出力は 1 行目だけ: {other:?}");
+    clean(&[&repo, &state]);
+}
+
+/// (b) landed — 同じ許可が bead の便の着地の前は active・後は landed。
+#[test]
+fn pipe_show_permit_word_landed_follows_the_landing() {
+    let (repo, state) = repo_with_state();
+    let d = declared_d();
+    put_run(&state, "r-b", "s2-pm.b");
+    put_permit(&state, "s2-pm.b", d + 1, FUTURE, "q-1");
+    assert_eq!(permits_of(&repo, &state, "r-b"), [permit_row(d + 1, d, FUTURE, "q-1", "active")], "着地の前");
+    put_landed(&state, "r-b", "s2-pm.b");
+    assert_eq!(permits_of(&repo, &state, "r-b"), [permit_row(d + 1, d, FUTURE, "q-1", "landed")], "着地の後");
+    clean(&[&repo, &state]);
+}
+
+/// (c) revoked — 取り消しの前は active・後は revoked で、`permit:` の行はどちらもちょうど 1 行（取り消しを単独の行にしない）。
+#[test]
+fn pipe_show_permit_word_revoked_follows_the_revocation_in_one_line() {
+    let (repo, state) = repo_with_state();
+    let d = declared_d();
+    put_run(&state, "r-c", "s2-pm.c");
+    put_permit(&state, "s2-pm.c", d + 1, FUTURE, "q-1");
+    assert_eq!(permits_of(&repo, &state, "r-c"), [permit_row(d + 1, d, FUTURE, "q-1", "active")], "取り消しの前");
+    put_revoke(&state, "s2-pm.c", PERMIT_ROW);
+    assert_eq!(permits_of(&repo, &state, "r-c"), [permit_row(d + 1, d, FUTURE, "q-1", "revoked")], "取り消しの後");
+    clean(&[&repo, &state]);
+}
+
+/// (d) superseded — 2 つ目の許可の前は 1 つ目が active・後は 1 つ目が superseded で 2 つ目が active（記帳の順に 2 行）。
+#[test]
+fn pipe_show_permit_word_superseded_follows_the_newer_permit() {
+    let (repo, state) = repo_with_state();
+    let d = declared_d();
+    put_run(&state, "r-d", "s2-pm.d");
+    put_permit(&state, "s2-pm.d", d + 1, FUTURE, "q-1");
+    assert_eq!(permits_of(&repo, &state, "r-d"), [permit_row(d + 1, d, FUTURE, "q-1", "active")], "2 つ目の前");
+    put_permit(&state, "s2-pm.d", d + 2, FUTURE, "q-2");
+    let both = [permit_row(d + 1, d, FUTURE, "q-1", "superseded"), permit_row(d + 2, d, FUTURE, "q-2", "active")];
+    assert_eq!(permits_of(&repo, &state, "r-d"), both, "2 つ目の後");
+    clean(&[&repo, &state]);
+}
+
+/// (e) expired — 期限が過去の許可は expired・同じ値で期限が未来の許可（別の bead）は active。
+#[test]
+fn pipe_show_permit_word_expired_follows_the_deadline() {
+    let (repo, state) = repo_with_state();
+    let d = declared_d();
+    put_run(&state, "r-e1", "s2-pm.e1");
+    put_run(&state, "r-e2", "s2-pm.e2");
+    put_permit(&state, "s2-pm.e1", d + 1, PAST, "q-1");
+    put_permit(&state, "s2-pm.e2", d + 1, FUTURE, "q-2");
+    assert_eq!(permits_of(&repo, &state, "r-e1"), [permit_row(d + 1, d, PAST, "q-1", "expired")], "過去");
+    assert_eq!(permits_of(&repo, &state, "r-e2"), [permit_row(d + 1, d, FUTURE, "q-2", "active")], "未来");
+    clean(&[&repo, &state]);
+}
+
+/// (f) overtaken — 値 D は overtaken・D+1 は active、同じ歯で `--rules` の写し（値 D+10）を渡すと値 D+1 の許可も overtaken。
+#[test]
+fn pipe_show_permit_word_overtaken_follows_the_manifest_value() {
+    let (repo, state) = repo_with_state();
+    let d = declared_d();
+    put_run(&state, "r-f1", "s2-pm.f1");
+    put_run(&state, "r-f2", "s2-pm.f2");
+    put_permit(&state, "s2-pm.f1", d, FUTURE, "q-1");
+    put_permit(&state, "s2-pm.f2", d + 1, FUTURE, "q-2");
+    assert_eq!(permits_of(&repo, &state, "r-f1"), [permit_row(d, d, FUTURE, "q-1", "overtaken")], "値 D");
+    assert_eq!(permits_of(&repo, &state, "r-f2"), [permit_row(d + 1, d, FUTURE, "q-2", "active")], "値 D+1");
+    let raised = super::super::write_rules(&state, "rules-raised.toml", 1, d + 10).display().to_string();
+    let shown = permit_rows(&show_of(&repo, &state, "r-f2", Some(&raised)));
+    assert_eq!(shown, [permit_row(d + 1, d + 10, FUTURE, "q-2", "overtaken")], "写しで D+10 に上げた周");
+    clean(&[&repo, &state]);
+}
+
+/// (g) landed と revoked — 取り消しの後は revoked、さらに着地の後は landed。
+#[test]
+fn pipe_show_permit_word_landed_wins_over_revoked() {
+    let (repo, state) = repo_with_state();
+    let d = declared_d();
+    put_run(&state, "r-g", "s2-pm.g");
+    put_permit(&state, "s2-pm.g", d + 1, FUTURE, "q-1");
+    put_revoke(&state, "s2-pm.g", PERMIT_ROW);
+    assert_eq!(permits_of(&repo, &state, "r-g"), [permit_row(d + 1, d, FUTURE, "q-1", "revoked")], "取り消しの後");
+    put_landed(&state, "r-g", "s2-pm.g");
+    assert_eq!(permits_of(&repo, &state, "r-g"), [permit_row(d + 1, d, FUTURE, "q-1", "landed")], "着地の後");
+    clean(&[&repo, &state]);
+}
+
+/// (h) landed と superseded — 新しい許可の後は 1 つ目が superseded、着地の後は 2 行とも landed。
+#[test]
+fn pipe_show_permit_word_landed_wins_over_superseded() {
+    let (repo, state) = repo_with_state();
+    let d = declared_d();
+    put_run(&state, "r-h", "s2-pm.h");
+    put_permit(&state, "s2-pm.h", d + 1, FUTURE, "q-1");
+    put_permit(&state, "s2-pm.h", d + 2, FUTURE, "q-2");
+    let before = [permit_row(d + 1, d, FUTURE, "q-1", "superseded"), permit_row(d + 2, d, FUTURE, "q-2", "active")];
+    assert_eq!(permits_of(&repo, &state, "r-h"), before, "新しい許可の後");
+    put_landed(&state, "r-h", "s2-pm.h");
+    let after = [permit_row(d + 1, d, FUTURE, "q-1", "landed"), permit_row(d + 2, d, FUTURE, "q-2", "landed")];
+    assert_eq!(permits_of(&repo, &state, "r-h"), after, "着地の後");
+    clean(&[&repo, &state]);
+}
+
+/// (i) revoked と expired — 期限が過去の許可は expired、取り消しの後は revoked。
+#[test]
+fn pipe_show_permit_word_revoked_wins_over_expired() {
+    let (repo, state) = repo_with_state();
+    let d = declared_d();
+    put_run(&state, "r-i", "s2-pm.i");
+    put_permit(&state, "s2-pm.i", d + 1, PAST, "q-1");
+    assert_eq!(permits_of(&repo, &state, "r-i"), [permit_row(d + 1, d, PAST, "q-1", "expired")], "取り消しの前");
+    put_revoke(&state, "s2-pm.i", PERMIT_ROW);
+    assert_eq!(permits_of(&repo, &state, "r-i"), [permit_row(d + 1, d, PAST, "q-1", "revoked")], "取り消しの後");
+    clean(&[&repo, &state]);
+}
+
+/// (j) superseded と expired — 期限が過去の 1 つ目は expired、2 つ目の許可の後は superseded。
+#[test]
+fn pipe_show_permit_word_superseded_wins_over_expired() {
+    let (repo, state) = repo_with_state();
+    let d = declared_d();
+    put_run(&state, "r-j", "s2-pm.j");
+    put_permit(&state, "s2-pm.j", d + 1, PAST, "q-1");
+    assert_eq!(permits_of(&repo, &state, "r-j"), [permit_row(d + 1, d, PAST, "q-1", "expired")], "2 つ目の前");
+    put_permit(&state, "s2-pm.j", d + 1, FUTURE, "q-2");
+    let both = [permit_row(d + 1, d, PAST, "q-1", "superseded"), permit_row(d + 1, d, FUTURE, "q-2", "active")];
+    assert_eq!(permits_of(&repo, &state, "r-j"), both, "2 つ目の後");
+    clean(&[&repo, &state]);
+}
+
+/// (k) expired と overtaken — 値 D・期限が未来は overtaken、値 D・期限が過去（別の bead）は expired。
+#[test]
+fn pipe_show_permit_word_expired_wins_over_overtaken() {
+    let (repo, state) = repo_with_state();
+    let d = declared_d();
+    put_run(&state, "r-k1", "s2-pm.k1");
+    put_run(&state, "r-k2", "s2-pm.k2");
+    put_permit(&state, "s2-pm.k1", d, FUTURE, "q-1");
+    put_permit(&state, "s2-pm.k2", d, PAST, "q-2");
+    assert_eq!(permits_of(&repo, &state, "r-k1"), [permit_row(d, d, FUTURE, "q-1", "overtaken")], "未来");
+    assert_eq!(permits_of(&repo, &state, "r-k2"), [permit_row(d, d, PAST, "q-2", "expired")], "過去");
+    clean(&[&repo, &state]);
+}
+
+/// (l) manifest に無い行 id の許可は `permit: unmeasured rule=<行 id> records=1` で `state=` を含む行が無く、同じ bead の `gate.token_cap` の許可は語の行を持つ。
+#[test]
+fn pipe_show_permit_word_unreadable_rule_is_unmeasured_without_a_word() {
+    let (repo, state) = repo_with_state();
+    let d = declared_d();
+    put_run(&state, "r-l", "s2-pm.l");
+    put_detail(&state, "s2-pm.l", &format!("rule=gate.absent_row value=5 until={FUTURE} ruling=q-1"));
+    put_permit(&state, "s2-pm.l", d + 1, FUTURE, "q-2");
+    let shown = permits_of(&repo, &state, "r-l");
+    let want = ["permit: unmeasured rule=gate.absent_row records=1".to_owned(), permit_row(d + 1, d, FUTURE, "q-2", "active")];
+    assert_eq!(shown, want, "行 id の字の順");
+    assert!(!shown.iter().any(|line| line.contains("rule=gate.absent_row") && line.contains("state=")), "語を出さない: {shown:?}");
+    clean(&[&repo, &state]);
+}
+
+/// 列の写し（`dispatch_rules`）の `gate.token_cap` の値（`pipe dispatch ls` の manifest の値）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn ls_declared(state: &Path) -> u64 {
+    let rules = dispatch_rules(state);
+    let manifest = vessel::rules::manifest::Manifest::load(Path::new(&rules)).expect("列の写しを読める");
+    vessel::rules::int_row(&manifest, PERMIT_ROW).expect("写しに gate.token_cap が在る")
+}
+
+/// `dispatch ls` の stdout の行。
+fn ls_lines(repo: &Path, state: &Path, bd: &str) -> Vec<String> {
+    stdout_of(&ls(repo, state, bd)).lines().map(str::to_owned).collect()
+}
+
+/// 行の `<name>` で始まる語の値。
+fn word_of(line: &str, name: &str) -> String {
+    line.split(' ').find_map(|word| word.strip_prefix(name)).unwrap_or_default().to_owned()
+}
+
+/// (m) 効いている 2 つ・取り消し・期限切れ・着地・manifest の値以下・新しい許可に替わった 1 つの bead で、`[DISPATCH-PERMIT]` の行は
+/// 効いている許可だけが bead の字の順に出て 1 行目は `[DISPATCH-NONE]` のまま。同じ写しの各便の `pipe show` の `state=active` の行の集合と等しい。
+#[test]
+fn pipe_dispatch_ls_permit_lists_only_effective_permits_in_bead_order() {
+    let (repo, state) = repo_with_state();
+    let bd = fake_bd(&state, &[]);
+    let d = ls_declared(&state);
+    let rules = dispatch_rules(&state);
+    let beads = ["s2-p.9", "s2-p.10", "s2-p.11", "s2-p.12", "s2-p.13", "s2-p.14", "s2-p.15"];
+    for (at, bead) in beads.iter().enumerate() {
+        put_run(&state, &format!("r-m{at}"), bead);
+    }
+    put_permit(&state, "s2-p.9", d + 1, FUTURE, "q-9");
+    put_permit(&state, "s2-p.10", d + 2, FUTURE, "q-10");
+    put_permit(&state, "s2-p.11", d + 1, FUTURE, "q-11");
+    put_revoke(&state, "s2-p.11", PERMIT_ROW);
+    put_permit(&state, "s2-p.12", d + 1, PAST, "q-12");
+    put_permit(&state, "s2-p.13", d + 1, FUTURE, "q-13");
+    put_landed(&state, "r-m4", "s2-p.13");
+    put_permit(&state, "s2-p.14", d, FUTURE, "q-14");
+    put_permit(&state, "s2-p.15", d + 1, FUTURE, "q-15a");
+    put_permit(&state, "s2-p.15", d + 3, FUTURE, "q-15b");
+    let lines = ls_lines(&repo, &state, &bd);
+    assert_eq!(lines.first().map(String::as_str), Some("[DISPATCH-NONE]"), "1 行目は今のまま: {lines:?}");
+    let listed: Vec<String> = lines.iter().filter(|line| line.starts_with("[DISPATCH-PERMIT]")).cloned().collect();
+    let want = [
+        format!("[DISPATCH-PERMIT] bead=s2-p.10 rule={PERMIT_ROW} value={} declared={d} until={FUTURE} ruling=q-10", d + 2),
+        format!("[DISPATCH-PERMIT] bead=s2-p.15 rule={PERMIT_ROW} value={} declared={d} until={FUTURE} ruling=q-15b", d + 3),
+        format!("[DISPATCH-PERMIT] bead=s2-p.9 rule={PERMIT_ROW} value={} declared={d} until={FUTURE} ruling=q-9", d + 1),
+    ];
+    assert_eq!(listed, want, "効いている許可だけが bead の字の順: {lines:?}");
+    let mut words = std::collections::BTreeSet::new();
+    let mut active = std::collections::BTreeSet::new();
+    for (at, bead) in beads.iter().enumerate() {
+        for row in permit_rows(&show_of(&repo, &state, &format!("r-m{at}"), Some(&rules))) {
+            words.insert(word_of(&row, "state="));
+            if word_of(&row, "state=") == "active" {
+                active.insert(((*bead).to_owned(), word_of(&row, "value="), word_of(&row, "ruling=")));
+            }
+        }
+    }
+    let all: Vec<&str> = words.iter().map(String::as_str).collect();
+    assert_eq!(all, ["active", "expired", "landed", "overtaken", "revoked", "superseded"], "6 語が全部出る");
+    let listed_set: std::collections::BTreeSet<(String, String, String)> =
+        listed.iter().map(|line| (word_of(line, "bead="), word_of(line, "value="), word_of(line, "ruling="))).collect();
+    assert_eq!(active, listed_set, "state=active の集合と [DISPATCH-PERMIT] の集合が等しい");
+    clean(&[&repo, &state]);
+}
+
+/// (n) event log の位置に dir を置いた周は `[DISPATCH-PERMIT-UNMEASURED reason=events]` が最後の行で、同じ歯の読める event log（許可の記帳 0 件）の周は
+/// `[DISPATCH-PERMIT` で始まる行が無く、同じ歯の偽の bd が rc 1 の周は許可の記帳が在っても `[DISPATCH-UNMEASURED reason=…]` の 1 行だけ。
+#[test]
+fn pipe_dispatch_ls_permit_names_an_unreadable_event_log_and_stays_silent_otherwise() {
+    let (repo, state) = repo_with_state();
+    let d = ls_declared(&state);
+    put_run(&state, "r-n", "s2-pn.1");
+    put_permit(&state, "s2-pn.1", d + 1, FUTURE, "q-1");
+    let broken = script(&state.join("bd-broken"), "exit 1\n");
+    let measured = ls_lines(&repo, &state, &broken);
+    assert_eq!(measured, ["[DISPATCH-UNMEASURED reason=ledger]"], "台帳を読めない周は 1 行だけ");
+    let bd = fake_bd(&state, &[]);
+    let readable = ls_lines(&repo, &state, &bd);
+    assert!(readable.iter().any(|line| line.starts_with("[DISPATCH-PERMIT] bead=s2-pn.1 ")), "読める周は許可を出す: {readable:?}");
+    let log = state.join("fleet").join("events.jsonl");
+    fs::remove_file(&log).expect("log を消せる");
+    fs::create_dir(&log).expect("log の位置に dir を置ける");
+    let lines = ls_lines(&repo, &state, &bd);
+    assert_eq!(lines.last().map(String::as_str), Some("[DISPATCH-PERMIT-UNMEASURED reason=events]"), "最後の行: {lines:?}");
+    let (repo_b, state_b) = repo_with_state();
+    let bd_b = fake_bd(&state_b, &[]);
+    put_run(&state_b, "r-n2", "s2-pn.2");
+    let quiet = ls_lines(&repo_b, &state_b, &bd_b);
+    assert!(!quiet.iter().any(|line| line.starts_with("[DISPATCH-PERMIT")), "許可の記帳 0 件の周は行を足さない: {quiet:?}");
+    clean(&[&repo, &state, &repo_b, &state_b]);
+}
+
+/// (o) 写しに無い行 id の許可は `[DISPATCH-PERMIT-UNMEASURED reason=rules rule=<行 id>]` を出し、同じ置き場の `gate.token_cap` の効いている許可は
+/// `[DISPATCH-PERMIT]` の行で出る。
+#[test]
+fn pipe_dispatch_ls_permit_names_a_rule_the_copy_cannot_read() {
+    let (repo, state) = repo_with_state();
+    let bd = fake_bd(&state, &[]);
+    let d = ls_declared(&state);
+    put_detail(&state, "s2-po.1", &format!("rule=gate.absent_row value=5 until={FUTURE} ruling=q-1"));
+    put_permit(&state, "s2-po.2", d + 1, FUTURE, "q-2");
+    let lines = ls_lines(&repo, &state, &bd);
+    let unread = "[DISPATCH-PERMIT-UNMEASURED reason=rules rule=gate.absent_row]".to_owned();
+    let shown = format!("[DISPATCH-PERMIT] bead=s2-po.2 rule={PERMIT_ROW} value={} declared={d} until={FUTURE} ruling=q-2", d + 1);
+    assert!(lines.contains(&unread), "読めない行 id を名乗る: {lines:?}");
+    assert!(lines.contains(&shown), "効いている許可は出る: {lines:?}");
+    clean(&[&repo, &state]);
+}

@@ -8,8 +8,11 @@ use super::{int_row, manifest_of, need, refused, state_dir_of};
 use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::store::{self, StoreError};
 use crate::fleet::{replay, Cost, Event, EventKind};
+use crate::pipe::dispatch::permits;
 use crate::pipe::gate::{detection_copies, DetectionCopy};
 use crate::pipe::{run_dir, worktree_path};
+use crate::seat::state::now_secs;
+use std::cell::OnceCell;
 use std::path::{Path, PathBuf};
 
 /// `pipe show`。1 行目は便の段、2 行目以降は gate の検出線の判定行（[`detection_lines`]・在る周だけ）。
@@ -42,7 +45,19 @@ pub(super) fn show(args: &[String]) -> Outcome {
     lines.extend(detection_lines(&run_dir(&state_dir, &id)));
     lines.extend(cost_lines(&events, &id));
     lines.extend(ceiling_of(args, &events, &id));
+    lines.extend(permit_lines(args, &events, &run.bead));
     Outcome::ok(lines)
+}
+
+/// 便の bead の上限の許可の行（設計 limit-permit.md §21 形 2）: manifest は [`ceiling_of`] と同じ読み（`--rules` か埋め込み）で、
+/// 許可の記帳を持たない bead の周は manifest を読まず 1 行も足さない。
+fn permit_lines(args: &[String], events: &[Event], bead: &str) -> Vec<String> {
+    let manifest = OnceCell::new();
+    let declared = |rule: &str| match manifest.get_or_init(|| manifest_of(args)) {
+        Ok(found) => int_row(found, rule),
+        Err(err) => Err(err.clone()),
+    };
+    permits::show_lines(bead, events, now_secs(), &declared)
 }
 
 /// 便ごとの token 消費の検出線を持つ rules 行の id（憲法 C6.2 の R-C6-1・設計 gate-cost.md §43 形 3）。
