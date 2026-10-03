@@ -1100,8 +1100,20 @@ terms:
   - canonical: 着地後の検出
     domain: consumer
     aliases: [post-landing detection]
-    definition: 便が Landed に達した後に、 器が land から切り離した子 process で vessel 宣言の検出線の行 (detection-verify) を 1 回撃つこと (ADR-0060・proposed)。 着地した commit を tmp worktree に出して base はその親とし、 撃つ前に今の検出線の行と同じ受付札 (並列の枠) を取って封じ込めの箱と器の健康の遮断器を通る。 結果は verify-main.jsonl の kind=detection の record と RunDone stage=Landed の detail に残し、 着地は戻さず台帳には写さない (C12.4・C15)。
-    relationships: [検出線, 変異検出線, 臨界路, land, 並列の枠, 封じ込めの箱, 器の健康の遮断器, 同じ木の主実測]
+    definition: 便が Landed に達した後に、 器が land から切り離した子 process で vessel 宣言の検出線の行 (detection-verify) を 1 回撃つこと (ADR-0060・proposed)。 着地した commit を tmp worktree に出して base はその親とし、 撃つ前に今の検出線の行と同じ受付札 (並列の枠) を取って封じ込めの箱と器の健康の遮断器を通る。 結果は verify-main.jsonl の kind=detection の record と RunDone stage=Landed の detail に残し、 着地は戻さず台帳には写さない (C12.4・C15)。 ADR-0111 の後は日次の検出の形で起こし、 下限の内の便は口を起こさず、 base は検出の起点から取る。
+    relationships: [検出線, 変異検出線, 臨界路, land, 並列の枠, 封じ込めの箱, 器の健康の遮断器, 同じ木の主実測, 日次の検出, 検出の起点]
+  - canonical: 日次の検出
+    domain: consumer
+    aliases: [daily detection, detection.daily_min_s]
+    definition: 着地後の検出を、 land の終端が口を起こす 1 か所のまま、 rules 行 detection.daily_min_s の下限を空けて起こす形 (ADR-0111・設計 docs/design/gate-cost.md §50)。 下限の内に着地した便は口を起こさず RunDone stage=Landed の detail に detection:deferred を記し、 撃たなかった周と同じ形で理由の語 deferred を写しの置き場に置く。 起こした便は検出の起点の measured から着地した sha までの差分を、 その間に着地した便の契約の歯の名の和で 1 回測る。
+    relationships: [着地後の検出, 検出の起点, 検出線, 変異検出線, rules 行, land]
+    flagged_ambiguities: [日次の検出 (land の終端が口を起こす回数を下限で間引く形・ADR-0111) と、 R-C12-1 の値の週次記録 (変異の生存の線の極性の行) と、 GitHub の週次の変異検査の workflow は別]
+  - canonical: 検出の起点
+    domain: consumer
+    aliases: [detection origin]
+    definition: state dir の pipe の置き場の直下の 1 file で、 日次の検出が前に測った main の sha (measured・無い周は -) と前に口を起こした時刻 (fired・epoch 秒) を 1 行に持つ (ADR-0111)。 一時 file から rename で書き、 読み書きは store の lock の内で行う。 測った周と面の外の周だけ measured が着地した sha へ進み、 測れなかった周は動かない。 file の無い周は、 最も新しい測った便の着地した sha を種にする。
+    relationships: [日次の検出, 着地後の検出, state dir]
+    flagged_ambiguities: [検出の起点 (日次の検出の base の出所・ADR-0111) と、 検出線の行の穴 base (道具に渡す比べる元の sha) と、 gate の base (便の差分の比べる元) は別]
   - canonical: 臨界路
     domain: consumer
     aliases: [critical path]
