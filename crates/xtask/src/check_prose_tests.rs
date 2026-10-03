@@ -17,7 +17,9 @@ fn prose_gate_fact_is_in_summary() {
 
 /// fact は `prose-gate=<違反数>/<母集団>` の形で、現物の `docs/design` は違反 0（母集団は空でない）。
 ///
-/// 分岐は `.git` の有無（flip-check の展開木では git を要する他の fact と同じく測れない形）。
+/// 分岐は git の work tree の中か（flip-check の展開木では git を要する他の fact と同じく測れない形）。
+// flip-check: retroactive s2-07l.738.42.17
+// 判別子を `.git` の有無から `inside_work_tree` へ替えただけの既存の歯の本文の変更で、base でも緑になる。
 #[test]
 fn prose_gate_fact_counts_zero_violations_on_workspace() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
@@ -26,7 +28,7 @@ fn prose_gate_fact_counts_zero_violations_on_workspace() {
         .split(' ')
         .find_map(|token| token.strip_prefix("prose-gate="))
         .unwrap_or_default();
-    if root.join(".git").exists() {
+    if inside_work_tree(&root) {
         let counts: Vec<usize> = value.split('/').filter_map(|part| part.parse().ok()).collect();
         assert_eq!(counts.len(), 2, "<n>/<m> の形のはず: {line}");
         assert_eq!(counts.first(), Some(&0), "現物の設計 doc は違反 0 のはず: {line}");

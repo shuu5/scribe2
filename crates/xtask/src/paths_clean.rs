@@ -112,14 +112,25 @@ fn parse_ls_entry(part: &str) -> Option<TrackedFile> {
 }
 
 /// paths-clean の母集団を data 化して固定する（cwd を直読みしない）。
+///
+/// 根が toplevel でない周（別の repo の subdir に置いた木）も `git -C <根> ls-files -s -z` で
+/// **根の下の追跡 file**（根からの相対 path）を母集団にする。根の下に 1 本も無い周だけが
+/// [`Tracked::NotRepoRoot`]（flip-check の base 木・追跡 file の無い dir）である。
 pub(crate) fn tracked_files(root: &Path) -> Tracked {
-    match root_is_repo_root(root) {
-        Err(reason) => Tracked::Unmeasurable(reason),
-        Ok(false) => Tracked::NotRepoRoot,
-        Ok(true) => match git_stdout(root, &["ls-files", "-s", "-z"]) {
-            Err(reason) => Tracked::Unmeasurable(format!("tracked file を列挙できない: {reason}")),
-            Ok(raw) => listed_from(&split_nul(&raw)),
-        },
+    let at_toplevel = match root_is_repo_root(root) {
+        Err(reason) => return Tracked::Unmeasurable(reason),
+        Ok(at_toplevel) => at_toplevel,
+    };
+    match git_stdout(root, &["ls-files", "-s", "-z"]) {
+        Err(reason) => Tracked::Unmeasurable(format!("tracked file を列挙できない: {reason}")),
+        Ok(raw) => {
+            let parts = split_nul(&raw);
+            if !at_toplevel && parts.is_empty() {
+                Tracked::NotRepoRoot
+            } else {
+                listed_from(&parts)
+            }
+        }
     }
 }
 
@@ -594,6 +605,65 @@ mod tests {
             measured.violations.is_empty(),
             "n/a の周は違反を出さないはず: {:?}",
             measured.violations
+        );
+    }
+
+    /// 別の repo の subdir に置いた根は、根の下の追跡 file だけを母集団にして測る（`n/a` で黙らない）。
+    ///
+    /// 下の dir の追跡 file 2 本のうち 1 本だけに private path 形を持たせる。外側の repo に
+    /// 在る根の外の file は母集団に入らない。needle の字面は [`PRIVATE_PATH_MARKS`] から取る。
+    #[test]
+    fn paths_clean_measures_a_nested_root_by_its_own_tracked_files() {
+        let Some(mark) = PRIVATE_PATH_MARKS.first() else {
+            panic!("private path 形は 1 形以上あるはず");
+        };
+        let outer = tmp_dir();
+        let nested = outer.join("nested");
+        fs::create_dir_all(&nested).expect("fixture の dir を作れる");
+        assert!(git_init(&outer), "fixture を git repo にできるはず");
+        fs::write(outer.join("outside.md"), format!("state = {mark}x\n"))
+            .expect("根の外の fixture を書ける");
+        fs::write(nested.join("clean.md"), b"nothing private here\n")
+            .expect("needle の無い fixture を書ける");
+        fs::write(nested.join("dirty.md"), format!("first\nstate = {mark}x\n"))
+            .expect("needle の在る fixture を書ける");
+        let added = Command::new("git")
+            .arg("-C")
+            .arg(&outer)
+            .args(["add", "-A"])
+            .output()
+            .is_ok_and(|out| out.status.success());
+        let measured = measure(&Layout {
+            root: nested.clone(),
+            core_dir: nested.clone(),
+            member_dirs: Vec::new(),
+            name: "probe".to_owned(),
+        });
+        fs::remove_dir_all(&outer).ok();
+
+        assert!(added, "fixture を追跡できるはず");
+        assert_eq!(
+            measured.fact, "paths-clean=2",
+            "根の下の追跡 file 2 本を走査したはず"
+        );
+        assert_eq!(
+            measured.violations.len(),
+            1,
+            "違反は 1 件だけのはず: {:?}",
+            measured.violations
+        );
+        let head = measured
+            .violations
+            .first()
+            .map(String::as_str)
+            .unwrap_or_default();
+        assert!(
+            head.contains("dirty.md:2"),
+            "private path 形を持つ file を名指すはず: {head}"
+        );
+        assert!(
+            !head.contains("outside.md"),
+            "根の外の file は母集団に入らないはず: {head}"
         );
     }
 

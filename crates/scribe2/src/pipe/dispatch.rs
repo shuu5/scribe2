@@ -59,6 +59,9 @@ pub mod reserve;
 /// memo の引き金の満ちを判じる行と審査の置き場の形・読み（設計 §40・契約表の行 ao）。
 pub mod memo;
 
+/// 上限の許可の見え方（状態の語と `dispatch ls` の効いている許可の行・設計 limit-permit.md §21・契約表の行 e）。
+pub(in crate::pipe) mod permits;
+
 /// 起こす便が 0 の周に、引き金の満ちない memo を間隔と本数の内で裏の審査へ渡す選びと撃ち（設計 §42・契約表の行 aq）。
 mod memo_triage;
 
@@ -844,7 +847,8 @@ pub fn listing(input: &Input<'_>, turn: &Turn) -> Outcome {
 pub fn observe(input: &Input<'_>) -> Outcome {
     let (turn, read) = measure(input);
     let mut outcome = listing(input, &turn);
-    outcome.out.extend(read.iter().flat_map(|found| memo::lines(input, found, crate::seat::state::now_secs())));
+    let now = crate::seat::state::now_secs();
+    outcome.out.extend(read.iter().flat_map(|found| memo::lines(input, found, now).into_iter().chain(permits::lines(input, found, now))));
     outcome
 }
 

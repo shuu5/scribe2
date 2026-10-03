@@ -318,6 +318,28 @@ SRS 0.33 の round（FR107〜FR109 を足し、FR47・FR48・FR55 の字を直�
   - 変わらない既存の歯: pipe_review_outside_ の残りの lib の歯（data file・依存の表・親 module・切り詰め・名指しなし）と、bodies・linked の残りの歯。
 - 限界: lens が読みの道具で木を開けない周（道具を渡さない古い lens の cmd）は、外の型の本文を材料から失う。行 g は pipeline.md の行 bg の着地の後に起こす。
 
+## 17. 役の規則の file を外の道具の今の版が受ける形にする — 名を捕える rule に AST の kind の集合を足し、match の arm の path を落とす field の制約を外す（契約表の行 h・FR107 / FR48）
+
+やさしく言うと: 索引の役の規則（`.config/index-roles.yml`）は、外の道具 ast-grep 0.45.3 に渡すと「どの構文の種類に当てるかを名指せ」と断られ、索引が 1 度も組めていなかった。そのため touches を持つ行は、受付で `index-building` の理由のまま止まり続けた。名を捕える rule に構文の種類の集合を足して、道具が受ける形にする。あわせて、match の arm の unit の変種の path（E::C => の形）を落としていた制約を外す。
+
+- 何が起きているか（main bd94fe24・verified）:
+  - `scribe2 pipe index build` の記録は `failed=rc` で、stderr は `ast-grep scan --rule .config/index-roles.yml --json=stream {tree}: rc 8 … Rule must specify a set of AST kinds to match. Try adding kind rule.` である。
+  - 断られるのは、`pattern: $NAME`（どの種類の node にも当たる meta 変数だけの pattern）に `inside` だけを添えた mapping である（literal・pattern の 1 項目と 2 項目・call の 2 項目）。use・reexport・test・doclink・capture・vis は `kind` か `any` の種類を持つので断られない。
+  - 受付は索引が無い周の touches の行を `index-building` で断り（`crates/scribe2/src/pipe/cli/intake.rs` の `exclude_unindexed`）、列は待たせ続ける。
+  - pattern の 3 項目（`kind: scoped_identifier` を `match_pattern` の `field: pattern` の内に限る）は、0.45.3 の Rust の文法の `match_pattern` が pattern を field で持たないので、どの arm にも当たらない（試しの file で E::C => の arm が 0 件・制約を外すと 1 件）。
+- 形（番号は行 h の done と 1:1）:
+  1. **名を捕える mapping に種類の集合を足す**: `pattern: $NAME` を持つ mapping（rule の直下か `any` の項）のうち `kind` も `any` も持たないものに、`any` の種類の列を足す。literal は identifier・type_identifier・scoped_identifier・scoped_type_identifier・generic_type・generic_type_with_turbofish・field_identifier・self の 8 つ、pattern の 1・2 項目と call の 2 項目はこの 8 つに generic_function を足した 9 つ。`inside` の制約（親の種類・field・stopBy）は変えない。親が field で名指すので、種類を広く取っても当たる node は field の位置の 1 つに限られる。
+  2. **match の arm の制約を直す**: pattern の 3 項目の `inside`（`kind: match_pattern`）から `field: pattern` を外す（`stopBy: neighbor` は残す＝直下の path だけ）。
+  3. **変えないもの**: rule の id（役の 9 語）・言語 Rust・`$NAME` の meta 変数・message・severity・宣言の 2 key・器の索引の読み手。
+- 実測（試しの写し・ast-grep 0.45.3・verified）: 形 1・2 を当てた file で `ast-grep scan --rule … --json=stream` が rc 0、9 役がどれも 1 件以上（repo の木で doclink 4000・vis 3510・call 103483・pattern 7154・use 12126・capture 12102・test 4521・literal 2339・reexport 304）。`scribe2 pipe index build` が別の置き場で `built`（rows 170902・files 310・42 秒）。
+- 歯（e2e・既存の `crates/scribe2-boundary/tests/e2e/pipe.rs`・宣言の歯 (c) の隣・接頭辞 pipe_index_declared_roles_）: 外の道具は CI に無いので、file の字の形で測る（§14・道具の受けは着地の後の実測）。
+  - (a) `pipe_index_declared_roles_name_captures_carry_a_kind_set`: 役の規則の file の `pattern: $NAME` の行ごとに、同じ mapping（その行と同じ字下げで続く key の並び・`- ` で始まる項ならその項の中）に `kind:` か `any:` の key が在る。base の literal の rule で落ちる。
+  - (b) `pipe_index_declared_roles_match_arm_paths_are_not_held_to_a_field`: `kind: match_pattern` の行を持つ mapping に `field:` の key が無い。base で落ちる。
+  - 変わらない既存の歯: (c) `pipe_index_declared_roles_file_has_one_rust_rule_per_role`。
+- 着地の後: orchestrator が本 repo の main で `pipe index build` を撃ち、`built` と rows・files を bead の notes に残す（歯ではない・§10 の行 b の後の実測と同じ）。touches を持つ待ちの行は、次の列の周で受付を通る。
+- 限界: or の pattern の arm（E::C | E::D の形）の path は、親が `match_pattern` でなく or の node なので当たらない。必要になったら、親の種類を足す行で扱う。
+- 却下: touches を持つ行から touches を外して索引を待たずに通す（閉包の測りを失う・行ごとの場当たり）。外の道具の版を下げる（試しの版を 0.45.3 と決めた §10 の裁定の外）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -416,4 +438,16 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "S"
 growth = ["crates/scribe2/src/pipe/review/base.rs:1"]
 done = "(1) outside.txt は write-set の外の .rs の item の塊と名指された .rs の要約の塊を、契約の本文の名指しからも linked.rs の (i) の束ねた § の本文の 1 段の名指しからも持たず（(i) は data file の鍵の塊だけを足す）、それだけを使う私有の関数 item_chunk と rs_chunks は消える（名指しに依らない depends・依存の表・親 module の塊は残る）〔pipe_review_outside_trimmed_ の e2e (a) と lib (b) の item の脚と要約の脚〕 (2) depends の相手の行・crate の依存の表・親 module の宣言・data file の鍵の塊は同じ順と字で残り、その後ろの write-set の中の item の本文と別の設計の § の塊も変わらない〔lib (b)・書き換える既存の歯 3 本・変わらない既存の歯 pipe_review_outside_ の残りと named_item_body_ の残りと linked_section_material_ の残り〕 (3) 見出しの下の説明の 1 文から .rs の item と要約の句（要約の行数の「幅で畳んだ数」の句を含む）が外れ、.rs の item の本文は読みの道具で開け、名の使われ方は index.txt が渡す、の 1 句が在り、data file の行数の「生の行（wc -l と同じ）」の句は残る〔lib (b) の説明の字・書き換える base.rs の歯 review_base_lines_folded_count_names_the_raw_lines_only_when_they_differ〕 (4) 材料の file の名と置き方・outside の穴と cap の収め方・名指しの読み手・base.txt は変わらない〔lens.rs は変えない・変わらない既存の歯 pipe_review_outside_ の cap の歯〕 歯: e2e の pipe_review_outside_trimmed_（review.rs・(a) § が backtick の外で write-set の外の struct を名指し同じ § がその struct の .rs の file の path も名指す契約の outside.txt が、struct の塊（頭 - <struct の名>:）も file の要約の塊（頭 - <その path>:）も持たず〔親 module の塊は残るので outside.txt の有無は測らない〕、同じ § に data file の名指しを足した契約の outside.txt が data file の鍵の塊を持つ・既存の歯 pipe_review_outside_material_carries_the_named_outside_struct をこの歯へ置き換える）、lib の pipe_review_outside_trimmed_（outside.rs の既存の test 区間・(b) 既存の歯 pipe_review_outside_names_an_outside_struct_with_its_fields を置き換え、同じ fixture〔行 g・write-set は inner.rs・行 g は depends を持たない〕の本文に外の .rs の path〔shape.rs〕の名指しを足した本文で、item の塊〔ZqShape と ZqTwin〕と shape.rs の要約の塊が無く、依存の表 → 親 module → data file 3 本の塊の見出しがこの順で在り、説明の 1 文が新しい句を持ち古い句を持たない。item の塊だけを外して要約の塊を残す実装は要約の脚で落ちる）、書き換える既存の歯 4 本（名は変えない）: base.rs の既存の test 区間の review_base_lines_folded_count_names_the_raw_lines_only_when_they_differ の外の材料の説明の 1 文の assert を「生の行（wc -l と同じ）」を持ち「幅で畳んだ数」を持たない形に替え（base の説明の 1 文の assert は変えない）、outside.rs の既存の test 区間の pipe_review_outside_depends_rows_title_and_plus_items_presence の並びを depends → 依存の表 → 親 module → data file にして ZqShape の塊が無いことを足す・named_item_body_three_forms_bundle_declarations_in_named_order の ZqShape の位置を塊が無いことに替え data file → bodies の並びは残す・linked_section_material_names_in_bundled_sections_go_one_level_deep を § の塊が在り ZqShape と ZqTwin の塊が無く 2 段目（o.md §2 と zq_area）も無いことに替える、base は塊と句が在るので (a)(b) と書き換える 4 本が RED（retroactive の札は要らない）"
+[[contract]]
+id = "h"
+title = "役の規則の file を ast-grep 0.45.3 が受ける形にする — 名を捕える mapping に AST の kind の集合を足し、match の arm の path を落とす field の制約を外す（索引が組めず touches の行が index-building で止まる・§17）"
+req = ["FR107", "FR48"]
+section = "17"
+write-set = [".config/index-roles.yml", "crates/scribe2-boundary/tests/e2e/pipe.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_index_declared_roles_name_captures_carry_a_kind_set", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_index_declared_roles_match_arm_paths_are_not_held_to_a_field", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_index_declared_roles_file_has_one_rust_rule_per_role"]
+size = "S"
+growth = ["crates/scribe2-boundary/tests/e2e/pipe.rs:60"]
+done = "(1) 役の規則の file の pattern: $NAME の行ごとに同じ mapping に kind: か any: の key が在り、足した種類の列は literal が identifier・type_identifier・scoped_identifier・scoped_type_identifier・generic_type・generic_type_with_turbofish・field_identifier・self の 8 つ、pattern の 1・2 項目と call の 2 項目がその 8 つと generic_function で、inside の制約は変えない (2) kind: match_pattern を持つ mapping は field: の key を持たず stopBy: neighbor は残る (3) rule の id（役の 9 語）・言語 Rust・$NAME の meta 変数・message・severity は変わらない"
+done-teeth = ["1:pipe_index_declared_roles_name_captures_carry_a_kind_set", "2:pipe_index_declared_roles_match_arm_paths_are_not_held_to_a_field", "3:=pipe_index_declared_roles_file_has_one_rust_rule_per_role"]
+
 <!-- contracts:end -->
